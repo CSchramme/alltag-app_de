@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Alltag</title>
+<meta name="description" content="Schule und Privates an einem Ort: Stundenplan, Vertretungen, Termine, Erinnerungen, Notizen und Noten">
+<meta name="theme-color" content="#EEF1F8">
+<meta name="color-scheme" content="light">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Alltag">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<div class="wallpaper" aria-hidden="true"></div>
+
+<div id="app" hidden>
+  <header id="topbar">
+    <div class="edge" aria-hidden="true"></div>
+    <span id="compact-title" aria-hidden="true"></span>
+    <button id="add" class="glass circle pressable" aria-label="Neu">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <button id="me" class="glass circle pressable" aria-label="Profil und Einstellungen"></button>
+  </header>
+
+  <main>
+    <section class="view" id="view-heute" data-title="Heute" aria-label="Heute"></section>
+    <section class="view" id="view-kalender" data-title="Kalender" aria-label="Kalender" hidden></section>
+    <section class="view" id="view-aufgaben" data-title="Aufgaben" aria-label="Aufgaben" hidden></section>
+    <section class="view" id="view-notizen" data-title="Notizen" aria-label="Notizen" hidden></section>
+    <section class="view" id="view-schule" data-title="Schule" aria-label="Schule" hidden></section>
+  </main>
+
+  <nav id="tabbar" class="glass" role="tablist" aria-label="Bereiche">
+    <div class="lens" aria-hidden="true"><i></i></div>
+    <button role="tab" data-tab="heute" aria-selected="true">
+      <svg viewBox="0 0 28 28"><circle cx="14" cy="14" r="4.25"/><path d="M14 3.5v2.5M14 22v2.5M3.5 14H6M22 14h2.5M6.6 6.6l1.75 1.75M19.65 19.65l1.75 1.75M6.6 21.4l1.75-1.75M19.65 8.35l1.75-1.75"/></svg>
+      <span>Heute</span><b class="badge" hidden></b>
+    </button>
+    <button role="tab" data-tab="kalender" aria-selected="false">
+      <svg viewBox="0 0 28 28"><rect x="4.5" y="6" width="19" height="17.5" rx="4.5"/><path d="M4.5 11.5h19M9.5 3.5v4M18.5 3.5v4"/><circle cx="10" cy="16" r="1.2" class="fill"/><circle cx="14" cy="16" r="1.2" class="fill"/><circle cx="18" cy="16" r="1.2" class="fill"/><circle cx="10" cy="19.6" r="1.2" class="fill"/><circle cx="14" cy="19.6" r="1.2" class="fill"/></svg>
+      <span>Kalender</span><b class="badge orange" hidden></b>
+    </button>
+    <button role="tab" data-tab="aufgaben" aria-selected="false">
+      <svg viewBox="0 0 28 28"><path d="M5 8.5l2 2 3.5-4M5 18.5l2 2 3.5-4M14 8.5h9M14 18.5h9"/></svg>
+      <span>Aufgaben</span><b class="badge" hidden></b>
+    </button>
+    <button role="tab" data-tab="notizen" aria-selected="false">
+      <svg viewBox="0 0 28 28"><path d="M8 4.5h8.5l5 5v12.5a2 2 0 01-2 2H8a2 2 0 01-2-2V6.5a2 2 0 012-2z"/><path d="M16.5 4.5v5h5M10 15h8M10 19h5.5"/></svg>
+      <span>Notizen</span><b class="badge" hidden></b>
+    </button>
+    <button role="tab" data-tab="schule" aria-selected="false">
+      <svg viewBox="0 0 28 28"><path d="M3.5 11L14 6l10.5 5L14 16z"/><path d="M8 13.5v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5M24.5 11v6"/></svg>
+      <span>Schule</span><b class="badge" hidden></b>
+    </button>
+  </nav>
+</div>
+
+<div id="scrim" hidden></div>
+<section id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden>
+  <header class="sheet-head">
+    <div class="grabber" aria-hidden="true"></div>
+    <h2 id="sheet-title"></h2>
+    <button class="glass circle pressable sheet-close" aria-label="Schließen">
+      <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>
+    </button>
+  </header>
+  <div class="sheet-body"></div>
+</section>
+
+<div id="login" hidden>
+  <form class="login-card glass" autocomplete="on">
+    <img src="/apple-touch-icon.png" alt="" class="app-icon" width="84" height="84">
+    <h1>Alltag</h1>
+    <p>Schule und Privates an einem Ort.</p>
+    <input type="text" name="username" autocomplete="username" value="alltag" hidden>
+    <input type="password" name="password" autocomplete="current-password" placeholder="App-Passwort" aria-label="App-Passwort" required>
+    <p class="login-error" role="alert"></p>
+    <button class="btn-primary pressable" type="submit">Anmelden</button>
+  </form>
+</div>
+
+<div id="boot" aria-live="polite"><div class="spinner" aria-hidden="true"></div><p></p></div>
+<datalist id="subjects"></datalist>
+<label class="haptic" aria-hidden="true"><input type="checkbox" switch tabindex="-1"></label>
+</body>
+</html>
