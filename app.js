@@ -7,7 +7,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const webpush = require('web-push');
+const { generateVapidKeys, sendPush } = require('./push');
 const { Edupage, EduError, snapshot, isoDay, addDays } = require('./edupage');
 const demo = require('./demo');
 
@@ -35,8 +35,7 @@ const token = () => crypto.randomBytes(24).toString('base64url');
 
 const SECRET = once('secret.json', () => crypto.randomBytes(32).toString('hex'));
 const TOKENS = once('tokens.json', () => ({ widget: token(), cron: token() }));
-const VAPID = once('vapid.json', () => webpush.generateVAPIDKeys());
-webpush.setVapidDetails('mailto:alltag@example.com', VAPID.publicKey, VAPID.privateKey);
+const VAPID = once('vapid.json', generateVapidKeys);
 if (DEMO && !load('db.json', null)) save('db.json', demo.db());
 
 const state = () => ({ seen: [], subs: [], done: {}, eduSeeded: false, ...load('state.json', {}) });
@@ -100,8 +99,8 @@ async function push(payload) {
   const subs = state().subs;
   let sent = 0; const dead = [];
   for (const s of subs) {
-    try { await webpush.sendNotification(s, JSON.stringify(payload), { TTL: 12 * 3600 }); sent++; }
-    catch (e) { if (e.statusCode === 404 || e.statusCode === 410) dead.push(s.endpoint); else console.warn('Push fehlgeschlagen:', e.statusCode, e.body || e.message); }
+    try { await sendPush(s, JSON.stringify(payload), VAPID); sent++; }
+    catch (e) { if (e.statusCode === 404 || e.statusCode === 410) dead.push(s.endpoint); else console.warn('Push fehlgeschlagen:', e.message); }
   }
   if (dead.length) { const st = state(); st.subs = st.subs.filter((s) => !dead.includes(s.endpoint)); save('state.json', st); }
   return sent;

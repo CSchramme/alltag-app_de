@@ -9,8 +9,9 @@ Schule und Privates an einem Ort, als Web-App im Stil von iOS Liquid Glass für 
 - **Widget** für Home- und Sperrbildschirm über die kostenlose App Scriptable
 
 ```
-app.js        Server und Startdatei für Plesk (Node.js ≥ 20)
+app.js        Server und Startdatei für Plesk (Node.js ≥ 20, keine npm-Pakete nötig)
 edupage.js    EduPage-Zugriff (übertragen aus der Python-Bibliothek edupage-api 0.13.3)
+push.js       Web-Push (RFC 8291/8292) mit Node-Bordmitteln
 demo.js       Beispieldaten
 public/       die Web-App (Dokumentenstamm), dazu widget.js für Scriptable
 data/         wird beim Start angelegt: Schlüssel, EduPage-Zugang, deine Einträge – geheim, nie veröffentlichen
@@ -20,7 +21,6 @@ main.py       das ursprüngliche Python-Skript (wird von der App nicht gebraucht
 ## Lokal ausprobieren
 
 ```powershell
-npm install
 npm run demo
 ```
 
@@ -29,22 +29,21 @@ Danach http://localhost:3000 öffnen. Das Passwort ist `demo`, angezeigt werden 
 ## Auf Plesk einrichten
 
 1. **Domain:** Lege eine Domain oder Subdomain an, zum Beispiel `alltag.deine-domain.de`, und aktiviere unter *SSL/TLS-Zertifikate* Let's Encrypt. Ohne HTTPS gibt es keine Mitteilungen.
-2. **Code:** Unter *Git* das Repository `https://github.com/CSchramme/private.git` mit dem Zweig `main` nach `/httpdocs` holen. Bei einem privaten Repository den Zugang mit Token oder Deploy-Key einrichten.
+2. **Code:** Unter *Git* das Repository `https://github.com/CSchramme/private.git` mit dem Zweig `main` in den Ordner der Domain holen (bei dir `/prvt.chrdev.eu`). Bei einem privaten Repository den Zugang mit Token oder Deploy-Key einrichten.
 3. **Node.js** (unter *Websites & Domains* → Domain → *Node.js*):
    - Node.js-Version: 20 oder neuer
-   - Anwendungsstamm: `/httpdocs`
-   - Dokumentenstamm: `/httpdocs/public`
+   - Anwendungsstamm: der Ordner mit `app.js` (bei dir `/prvt.chrdev.eu`)
+   - Dokumentenstamm: dessen Unterordner `public` (`/prvt.chrdev.eu/public`) – niemals der Hauptordner
    - Anwendungsstartdatei: `app.js`
    - Anwendungsmodus: `production`
-4. Auf **NPM install** klicken.
-5. Unter **Benutzerdefinierte Umgebungsvariablen** `APP_PASSWORD` auf dein Passwort für die App setzen.
-6. **Node.js aktivieren** bzw. **App neu starten**.
-7. Die Domain öffnen und dich anmelden. Unter **Profil (oben rechts) → EduPage** Schul-Adresse, Benutzername und Passwort eintragen und auf **Verbinden** tippen.
-8. **Regelmäßiger Abgleich:** Plesk startet die App nur bei Bedarf. Kopiere unter **Profil → Plesk · geplante Aufgabe** die Adresse. Lege dann in Plesk unter *Geplante Aufgaben* → *Aufgabe hinzufügen* → **URL abrufen** eine Aufgabe mit dieser Adresse an, die **alle 15 Minuten** läuft (`*/15 * * * *`).
+4. Unter **Benutzerdefinierte Umgebungsvariablen** `APP_PASSWORD` auf dein Passwort für die App setzen.
+5. **Node.js aktivieren** bzw. **App neu starten**.
+6. Die Domain öffnen und dich anmelden. Unter **Profil (oben rechts) → EduPage** Schul-Adresse, Benutzername und Passwort eintragen und auf **Verbinden** tippen.
+7. **Regelmäßiger Abgleich:** Plesk startet die App nur bei Bedarf. Kopiere unter **Profil → Plesk · geplante Aufgabe** die Adresse. Lege dann in Plesk unter *Geplante Aufgaben* → *Aufgabe hinzufügen* → **URL abrufen** eine Aufgabe mit dieser Adresse an, die **alle 15 Minuten** läuft (`*/15 * * * *`).
 
 Wichtig: `data/` liegt außerhalb des Dokumentenstamms und darf nie in `public/` landen. Dort stehen dein EduPage-Passwort und deine Einträge, also gehört der Ordner in deine Datensicherung.
 
-**Aktualisieren:** In Plesk unter *Git* auf „Pull“, danach *NPM install* und *App neu starten*.
+**Aktualisieren:** In Plesk unter *Git* auf „Pull“ und danach auf *App neu starten* klicken. Ein `npm install` ist nicht nötig, weil die App keine Pakete braucht.
 
 ## Aufs iPhone
 
