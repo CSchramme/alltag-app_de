@@ -1,5 +1,5 @@
-// Alltag – Widget für Scriptable (iOS, kostenlos im App Store).
-// Startbildschirm: klein, mittel, groß · Sperrbildschirm: rechteckig, inline.
+// Alltag – Tagesplan-Widget für Scriptable (iOS, kostenlos im App Store).
+// Startbildschirm: klein, mittel, groß · Sperrbildschirm: rechteckig, rund, Zeile. Hell/Dunkel wie das iPhone.
 // Einrichten: in Alltag → Profil → „Widget-Skript kopieren“ → in Scriptable einfügen.
 const SERVER = '__SERVER__';
 const TOKEN = '__TOKEN__';
@@ -22,151 +22,191 @@ async function load() {
   }
 }
 
+/* ---------------------------------------------------------------- Zeit */
 const pad = (n) => String(n).padStart(2, '0');
 const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const day = (s) => new Date(`${s}T12:00:00`);
+const addDays = (s, n) => { const d = day(s); d.setDate(d.getDate() + n); return iso(d); };
 const min = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
 const now = new Date(), today = iso(now), nm = now.getHours() * 60 + now.getMinutes();
-const tomorrow = iso(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
-const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
-function dayLabel(s) {
-  const [y, m, d] = s.split('-').map(Number), dt = new Date(y, m - 1, d);
-  const n = Math.round((dt - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 864e5);
-  return n === 0 ? 'Heute' : n === 1 ? 'Morgen' : `${WD[dt.getDay()]}, ${d}.${m}.`;
+const WD = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+const MON = ['Jan.', 'Feb.', 'März', 'Apr.', 'Mai', 'Juni', 'Juli', 'Aug.', 'Sep.', 'Okt.', 'Nov.', 'Dez.'];
+
+// Wiederholung wie in der App (public/recur.js)
+function occursOn(item, date) {
+  const start = item.date || item.due;
+  if (!start || date < start || (item.until && date > item.until)) return false;
+  if (date === start) return true;
+  const a = day(start), b = day(date), diff = Math.round((b - a) / 864e5);
+  return { daily: true, weekdays: b.getDay() % 6 !== 0, weekly: diff % 7 === 0, biweekly: diff % 14 === 0, monthly: b.getDate() === a.getDate() }[item.repeat] || false;
 }
-const COLORS = ['#007AFF', '#5856D6', '#AF52DE', '#FF2D55', '#FF3B30', '#FF9500', '#34C759', '#00C7BE', '#30B0C7', '#32ADE6', '#A2845E'];
-const colorOf = (s) => { let h = 7; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) >>> 0; return new Color(COLORS[h % COLORS.length]); };
-// hell/dunkel automatisch wie das iPhone
+
+/* ---------------------------------------------------------------- Farben (hell/dunkel automatisch) */
 const dyn = (light, dark) => Color.dynamic(new Color(light[0], light[1] ?? 1), new Color(dark[0], dark[1] ?? 1));
-const LABEL = dyn(['#000000', 0.9], ['#FFFFFF', 0.94]), LABEL2 = dyn(['#3C3C43', 0.64], ['#EBEBF5', 0.62]);
-const ORANGE = dyn(['#FF9500'], ['#FF9F0A']), BLUE = dyn(['#007AFF'], ['#0A84FF']), PURPLE = dyn(['#AF52DE'], ['#BF5AF2']), RED = dyn(['#FF3B30'], ['#FF453A']);
+const LABEL = dyn(['#000000', 0.9], ['#FFFFFF', 0.94]), LABEL2 = dyn(['#3C3C43', 0.6], ['#EBEBF5', 0.6]), LABEL3 = dyn(['#3C3C43', 0.3], ['#EBEBF5', 0.3]);
+const RED = dyn(['#FF3B30'], ['#FF453A']), ORANGE = dyn(['#FF9500'], ['#FF9F0A']), BLUE = dyn(['#007AFF'], ['#0A84FF']), PURPLE = dyn(['#AF52DE'], ['#BF5AF2']);
+const PALETTE = [['#007AFF', '#0A84FF'], ['#5856D6', '#5E5CE6'], ['#AF52DE', '#BF5AF2'], ['#FF2D55', '#FF375F'], ['#FF3B30', '#FF453A'], ['#FF9500', '#FF9F0A'],
+  ['#34C759', '#30D158'], ['#00C7BE', '#63E6E2'], ['#30B0C7', '#40C8E0'], ['#32ADE6', '#64D2FF'], ['#A2845E', '#AC8E68']];
+const colorOf = (s) => { let h = 7; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) >>> 0; const [l, d] = PALETTE[h % PALETTE.length]; return dyn([l], [d]); };
 
-// Tagesablauf: Stunden + eigene Termine mit Uhrzeit
-function agenda(D, date) {
-  const lessons = (D.snap?.days.find((d) => d.date === date)?.lessons || []).filter((l) => l.start && !l.cancelled)
-    .map((l) => ({ title: l.subject, start: l.start, end: l.end, sub: [l.rooms.join(', '), l.teachers.join(', ')].filter(Boolean).join(' · '), color: colorOf(l.subject), alert: l.changes.join(' · ') }));
-  const events = D.db.events.filter((e) => e.date === date && e.start)
-    .map((e) => ({ title: e.title, start: e.start, end: e.end || '', sub: e.location, color: PURPLE, alert: '' }));
-  return [...lessons, ...events].sort((a, b) => a.start.localeCompare(b.start));
-}
-const endOf = (a) => (a.end ? min(a.end) : min(a.start) + 60);
-
-function focus(D) {
-  const items = agenda(D, today);
-  const cur = items.find((a) => min(a.start) <= nm && nm < endOf(a));
-  if (cur) return { kicker: `Jetzt · bis ${cur.end || ''}`.trim(), a: cur };
-  const next = items.find((a) => min(a.start) > nm);
-  if (next) { const m = min(next.start) - nm; return { kicker: m <= 90 ? `In ${m} Min.` : `Ab ${next.start}`, a: next }; }
-  for (let i = 1; i < 7; i++) {
-    const d = iso(new Date(now.getFullYear(), now.getMonth(), now.getDate() + i)), a = agenda(D, d)[0];
-    if (a) return { kicker: `${dayLabel(d)} ab ${a.start}`, a };
+/* ---------------------------------------------------------------- Tagesplan */
+// Stunden + eigene Termine eines Tages; Ganztägiges (Feiertag, Ferientag) separat
+function plan(D, date) {
+  const lessons = D.snap?.days.find((d) => d.date === date)?.lessons || [];
+  const allday = lessons.filter((l) => l.allday).map((l) => l.subject);
+  const items = lessons.filter((l) => !l.allday && l.start).map((l) => ({
+    start: l.start, end: l.end, title: l.subject, color: colorOf(l.subject), cancelled: l.cancelled,
+    sub: l.cancelled ? 'Entfällt' : l.changes?.length ? l.changes.join(' · ') : [l.rooms.join(', '), l.teachers[0]].filter(Boolean).join(' · '),
+    changed: !l.cancelled && l.changes?.length > 0,
+  }));
+  for (const e of D.db.events.filter((x) => occursOn(x, date))) {
+    if (!e.start) allday.push(e.title);
+    else items.push({ start: e.start, end: e.end || '', title: e.title, color: PURPLE, sub: e.location || '', cancelled: false, changed: false });
   }
-  return null;
+  return { allday, items: items.sort((a, b) => a.start.localeCompare(b.start)) };
 }
-const changes = (D) => (D.snap?.days || []).filter((d) => d.date >= today).flatMap((d) => d.changes.map((c) => ({ ...c, date: d.date })));
-const due = (D) => [
-  ...(D.snap?.tasks || []).filter((t) => t.kind !== 'event' && !t.done && t.due && t.due <= tomorrow).map((t) => ({ title: t.subject || t.label, meta: t.title, exam: t.kind === 'exam', due: t.due })),
-  ...D.db.reminders.filter((r) => !r.done && r.due && r.due <= tomorrow).map((r) => ({ title: r.title, meta: r.time || dayLabel(r.due), exam: false, due: r.due, own: true })),
-].sort((a, b) => a.due.localeCompare(b.due));
+const endOf = (i) => (i.end ? min(i.end) : min(i.start) + 60);
 
-function text(stack, str, size, { weight = 'regular', color = LABEL, lines = 1 } = {}) {
-  const t = stack.addText(str);
+// Heute, solange noch etwas kommt – sonst der nächste Tag mit Einträgen
+function pickDay(D) {
+  const t = plan(D, today), rest = t.items.filter((i) => endOf(i) > nm);
+  if (rest.length) return { date: today, allday: t.allday, items: rest, isToday: true };
+  for (let n = 1; n <= 7; n++) {
+    const d = addDays(today, n), p = plan(D, d);
+    if (p.items.length || p.allday.length) return { date: d, ...p, isToday: false };
+  }
+  return { date: today, allday: t.allday, items: [], isToday: true };
+}
+const dayTitle = (d) => (d === today ? 'Heute' : d === addDays(today, 1) ? 'Morgen' : WD[day(d).getDay()]);
+
+function countdown(D) {
+  const list = D.holidays || [], off = (d) => list.some((h) => h.start <= d && d <= h.end);
+  if (list.some((h) => h.start <= today && today <= h.end)) return 'Ferien';
+  const next = list.find((h) => h.start > today && (day(h.end) - day(h.start)) / 864e5 >= 2);
+  if (!next) return '';
+  let n = 0;
+  for (let d = today; d < next.start; d = addDays(d, 1)) if (day(d).getDay() % 6 && !off(d)) n++;
+  return `${n} Schultage bis ${next.name}`;
+}
+
+/* ---------------------------------------------------------------- Bausteine */
+function text(stack, str, size, { weight = 'regular', color = LABEL, lines = 1, opacity = 1 } = {}) {
+  const t = stack.addText(String(str));
   t.font = weight === 'bold' ? Font.boldSystemFont(size) : weight === 'semibold' ? Font.semiboldSystemFont(size) : Font.systemFont(size);
   t.textColor = color;
+  t.textOpacity = opacity;
   t.lineLimit = lines;
-  t.minimumScaleFactor = 0.8;
+  t.minimumScaleFactor = 0.75;
   return t;
 }
 
-function focusBlock(stack, D, big) {
-  const f = focus(D);
-  if (!f) { text(stack, 'Nichts geplant', big ? 18 : 15, { weight: 'semibold', lines: 2 }); return; }
-  text(stack, f.kicker.toUpperCase(), 11, { weight: 'semibold', color: f.a.alert ? ORANGE : f.a.color });
-  stack.addSpacer(2);
-  text(stack, f.a.title, big ? 22 : 19, { weight: 'bold', lines: 2 });
-  if (f.a.sub) text(stack, f.a.sub, 12, { color: LABEL2 });
-  if (f.a.alert) text(stack, f.a.alert, 12, { weight: 'semibold', color: ORANGE, lines: 2 });
+// Eine Zeile wie im Kalender-Widget: Zeit · Farbbalken · Titel/Ort
+function row(stack, i, { compact = false, isToday = false } = {}) {
+  const cur = isToday && !i.cancelled && min(i.start) <= nm && nm < endOf(i); // läuft gerade
+  const r = stack.addStack();
+  r.centerAlignContent();
+  r.spacing = 6;
+  const time = r.addStack();
+  time.layoutVertically();
+  time.size = new Size(compact ? 34 : 38, 0);
+  text(time, i.start, compact ? 11 : 12, { weight: 'semibold', color: cur ? BLUE : LABEL, opacity: i.cancelled ? 0.45 : 1 });
+  if (!compact && i.end) text(time, i.end, 10, { color: LABEL2, opacity: i.cancelled ? 0.45 : 1 });
+  const bar = r.addStack();
+  bar.size = new Size(3, compact ? 14 : 26);
+  bar.cornerRadius = 1.5;
+  bar.backgroundColor = i.cancelled ? RED : i.changed ? ORANGE : i.color;
+  const body = r.addStack();
+  body.layoutVertically();
+  text(body, i.title, compact ? 12 : 13, { weight: 'semibold', opacity: i.cancelled ? 0.45 : 1 });
+  if (!compact && i.sub) text(body, i.sub, 11, { color: i.cancelled ? RED : i.changed ? ORANGE : LABEL2, weight: i.cancelled || i.changed ? 'semibold' : 'regular' });
+  r.addSpacer();
 }
 
-function listBlock(stack, title, rows, max) {
-  if (!rows.length) return;
-  text(stack, title.toUpperCase(), 11, { weight: 'semibold', color: LABEL2 });
-  stack.addSpacer(4);
-  for (const r of rows.slice(0, max)) {
-    const row = stack.addStack();
-    row.centerAlignContent();
-    const dot = row.addStack();
-    dot.size = new Size(7, 7);
-    dot.cornerRadius = 3.5;
-    dot.backgroundColor = r.color;
-    row.addSpacer(6);
-    text(row, r.text, 13, { weight: 'semibold' });
-    row.addSpacer(4);
-    text(row, r.meta || '', 12, { color: LABEL2 });
-    stack.addSpacer(4);
-  }
+function header(stack, p, big) {
+  const d = day(p.date);
+  text(stack, (p.isToday ? WD[d.getDay()] : dayTitle(p.date)).toUpperCase(), big ? 12 : 11, { weight: 'semibold', color: RED });
+  text(stack, big ? `${d.getDate()}. ${MON[d.getMonth()]}` : String(d.getDate()), big ? 22 : 30, { weight: 'bold' });
 }
 
+/* ---------------------------------------------------------------- Widgets */
 function build(D, family) {
   const w = new ListWidget();
-  w.url = SERVER;
-  w.refreshAfterDate = new Date(Date.now() + 15 * 60e3);
-  const ch = changes(D), dueList = due(D), f = focus(D);
+  w.url = `${SERVER}/#kalender`;
+  const p = pickDay(D), next = p.items.find((i) => !i.cancelled);
+  // nach der nächsten Stunde neu zeichnen (iOS entscheidet am Ende selbst, wann)
+  const bound = p.isToday && next ? Math.min(...p.items.map((i) => [min(i.start), endOf(i)]).flat().filter((m) => m > nm)) : null;
+  w.refreshAfterDate = new Date(Date.now() + Math.min(15, bound ? bound - nm + 1 : 15) * 60e3);
 
   if (family === 'accessoryInline') {
-    w.addText(f ? `${f.a.title} · ${f.kicker}${ch.length ? ` · ⚠︎${ch.length}` : ''}` : 'Nichts geplant');
+    w.addText(next ? `${next.start} ${next.title}${next.sub && !next.changed ? ` · ${next.sub.split(' · ')[0]}` : ''}` : 'Nichts geplant');
+    return w;
+  }
+  if (family === 'accessoryCircular') {
+    const s = w.addStack(); s.layoutVertically(); s.centerAlignContent();
+    text(s, next ? next.start : '–', 13, { weight: 'semibold' });
+    text(s, next ? next.title.slice(0, 4) : '', 10);
     return w;
   }
   if (family === 'accessoryRectangular') {
-    const t = (s, bold) => { const x = w.addText(s); x.font = bold ? Font.boldSystemFont(14) : Font.systemFont(12); x.lineLimit = 1; };
-    if (!f) { t('Nichts geplant', true); return w; }
-    t(f.kicker, false);
-    t(f.a.title, true);
-    t(ch.length ? `${ch.length} Vertretung${ch.length > 1 ? 'en' : ''}` : f.a.sub || `${dueList.length} fällig`, false);
+    if (!p.items.length) { text(w, p.allday[0] || 'Nichts geplant', 13, { weight: 'semibold' }); return w; }
+    for (const i of p.items.slice(0, 2)) {
+      text(w, `${i.start} ${i.title}`, 13, { weight: 'semibold', opacity: i.cancelled ? 0.5 : 1 });
+      if (i === p.items[0]) text(w, i.sub || dayTitle(p.date), 11);
+    }
     return w;
   }
 
   const g = new LinearGradient();
-  g.colors = [dyn(['#F5F8FE'], ['#1C1E26']), dyn(['#E8EEFB'], ['#101218'])];
+  g.colors = [dyn(['#FFFFFF'], ['#1C1C1E']), dyn(['#F2F4F9'], ['#141416'])];
   g.locations = [0, 1];
   w.backgroundGradient = g;
-  w.setPadding(14, 15, 14, 15);
-
-  const subRows = ch.map((c) => ({ color: c.kind === 'cancel' ? RED : ORANGE, text: c.label ? `${c.label} ${c.text}` : c.text, meta: dayLabel(c.date) }));
-  const dueRows = dueList.map((x) => ({ color: x.exam ? RED : x.own ? PURPLE : colorOf(x.title), text: x.title, meta: x.meta }));
-  const todayRows = agenda(D, today).filter((a) => endOf(a) > nm).map((a) => ({ color: a.color, text: `${a.start} ${a.title}`, meta: a.sub }));
+  w.setPadding(14, 14, 14, 14);
 
   if (family === 'small') {
-    focusBlock(w, D, false);
+    header(w, p, false);
+    w.addSpacer(4);
+    if (p.allday.length) text(w, p.allday[0], 11, { weight: 'semibold', color: PURPLE });
+    if (!p.items.length) text(w, 'Keine Stunden', 12, { color: LABEL2 });
+    for (const i of p.items.slice(0, p.allday.length ? 2 : 3)) { row(w, i, { compact: true, isToday: p.isToday }); w.addSpacer(3); }
     w.addSpacer();
-    const foot = ch.length ? `⚠︎ ${ch.length} Vertretung${ch.length > 1 ? 'en' : ''}` : dueList.length ? `${dueList.length} fällig` : 'Alles ruhig';
-    text(w, foot, 12, { weight: 'semibold', color: ch.length ? ORANGE : BLUE });
-  } else if (family === 'medium') {
-    const row = w.addStack();
-    const left = row.addStack();
-    left.layoutVertically();
-    left.size = new Size(130, 0);
-    focusBlock(left, D, false);
-    left.addSpacer();
-    row.addSpacer(12);
-    const right = row.addStack();
-    right.layoutVertically();
-    if (subRows.length) listBlock(right, 'Vertretungen', subRows, 3);
-    else if (dueRows.length) listBlock(right, 'Fällig', dueRows, 4);
-    else listBlock(right, 'Heute noch', todayRows, 4);
-    right.addSpacer();
-  } else {
-    text(w, 'Alltag', 13, { weight: 'semibold', color: LABEL2 });
-    w.addSpacer(6);
-    focusBlock(w, D, true);
-    w.addSpacer(12);
-    listBlock(w, 'Vertretungen', subRows, 3);
-    if (subRows.length) w.addSpacer(8);
-    listBlock(w, 'Fällig', dueRows, 3);
-    if (dueRows.length) w.addSpacer(8);
-    listBlock(w, 'Heute noch', todayRows, 4);
-    w.addSpacer();
+    return w;
   }
-  if (D.offline) text(w, 'Offline · letzter Stand', 10, { color: LABEL2 });
+
+  if (family === 'medium') {
+    const main = w.addStack();
+    const left = main.addStack();
+    left.layoutVertically();
+    left.size = new Size(78, 0);
+    header(left, p, false);
+    left.addSpacer();
+    const cd = countdown(D);
+    if (cd) text(left, cd, 10, { color: LABEL2, lines: 3 });
+    main.addSpacer(10);
+    const right = main.addStack();
+    right.layoutVertically();
+    if (p.allday.length) { text(right, p.allday.join(' · '), 11, { weight: 'semibold', color: PURPLE }); right.addSpacer(4); }
+    if (!p.items.length) text(right, 'Keine Stunden oder Termine', 13, { color: LABEL2 });
+    for (const i of p.items.slice(0, p.allday.length ? 3 : 4)) { row(right, i, { isToday: p.isToday }); right.addSpacer(5); }
+    right.addSpacer();
+    return w;
+  }
+
+  // groß: ganzer restlicher Tag, darunter Fälliges und Ferien-Countdown
+  header(w, p, true);
+  w.addSpacer(8);
+  if (p.allday.length) { text(w, p.allday.join(' · '), 12, { weight: 'semibold', color: PURPLE }); w.addSpacer(6); }
+  if (!p.items.length) text(w, 'Keine Stunden oder Termine', 13, { color: LABEL2 });
+  for (const i of p.items.slice(0, 7)) { row(w, i, { isToday: p.isToday }); w.addSpacer(5); }
+  const due = [...(D.snap?.tasks || []).filter((t) => !t.done && t.due && t.due <= addDays(today, 1)).map((t) => `${t.subject || t.label}: ${t.title}`),
+    ...D.db.reminders.filter((r) => !r.done && r.due && r.due <= addDays(today, 1)).map((r) => r.title)];
+  w.addSpacer();
+  if (due.length) {
+    text(w, 'FÄLLIG', 11, { weight: 'semibold', color: LABEL2 });
+    for (const d of due.slice(0, 2)) text(w, d, 12);
+    w.addSpacer(4);
+  }
+  const cd = countdown(D);
+  if (cd || D.offline) text(w, [cd, D.offline ? 'Offline · letzter Stand' : ''].filter(Boolean).join(' · '), 10, { color: LABEL3 });
   return w;
 }
 
@@ -175,8 +215,8 @@ try {
   widget = build(await load(), config.widgetFamily || 'medium');
 } catch (e) {
   widget = new ListWidget();
-  widget.addText('Alltag').font = Font.boldSystemFont(15);
-  widget.addText(`Keine Verbindung: ${e.message}`).font = Font.systemFont(12);
+  text(widget, 'Alltag', 15, { weight: 'bold' });
+  text(widget, `Keine Verbindung: ${e.message}`, 12, { color: LABEL2, lines: 3 });
 }
 if (config.runsInWidget) Script.setWidget(widget);
 else await widget.presentMedium();
