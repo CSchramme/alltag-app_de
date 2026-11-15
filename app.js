@@ -462,7 +462,15 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, await edupageDo(async (ep) => {
         const html = (await ep.req('/user')).text;
         const msgKeys = (ep.data?.items || []).filter((x) => x.typ === 'sprava').slice(0, 8).map((x) => { try { return Object.keys(JSON.parse(x.data || '{}')); } catch { return []; } });
-        return { scripts: [...new Set([...html.matchAll(/src=["']([^"']+\.js[^"']*)["']/g)].map((m) => m[1]))], msgKeys, itemKeys: Object.keys(ep.data?.items?.[0] || {}) };
+        const msgs = (ep.data?.items || []).filter((x) => x.typ === 'sprava').map((x) => { try { return JSON.parse(x.data || '{}'); } catch { return {}; } });
+        const cut = (v) => JSON.stringify(v ?? null).slice(0, 300);
+        return {
+          scripts: [...new Set([...html.matchAll(/src=["']([^"']+\.js[^"']*)["']/g)].map((m) => m[1]))], msgKeys, itemKeys: Object.keys(ep.data?.items?.[0] || {}),
+          // nachgeladene Module und Form der Bestätigungs-Felder (für Lesebestätigung und „Gefällt mir“)
+          modules: [...new Set([...html.matchAll(/["']([\w/.-]*(?:timeline|message|sprava|confirm|bundle|react)[\w/.-]*)["']/gi)].map((m) => m[1]))].slice(0, 80),
+          fields: msgs.filter((d) => d.receipt !== undefined || d.confirmations || d.myConfirmations).slice(0, 6)
+            .map((d) => ({ receipt: cut(d.receipt), confirmations: cut(d.confirmations), myConfirmations: cut(d.myConfirmations), importantReply: cut(d.importantReply), repliesByUser: cut(d.repliesByUser) })),
+        };
       }));
     }
     if (url.pathname === '/api/cron') { // geplante Aufgabe in Plesk bzw. cron-job.org ("URL abrufen")
