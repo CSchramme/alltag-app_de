@@ -129,7 +129,7 @@ const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* privater Modus */ } },
 };
-const EMPTY = { days: [], tasks: [], messages: [], student: {}, classKnown: false };
+const EMPTY = { days: [], tasks: [], messages: [], student: {} };
 let D = null;
 const S = () => D.snap || EMPTY;
 let tab = 'heute';
@@ -221,7 +221,6 @@ function banners() {
   if (!navigator.onLine) out.push(['warn', 'Offline', 'Angezeigt wird der zuletzt geladene Stand.']);
   else if (D.edupage.connected && D.status?.ok === false) out.push(['warn', 'EduPage-Abgleich fehlgeschlagen', D.status.error || '']);
   if (!D.edupage.connected) out.push(['info', 'EduPage noch nicht verbunden', 'Tippe hier, um Stundenplan, Vertretungen und Nachrichten zu holen.', 'data-settings']);
-  else if (D.snap && !D.snap.classKnown && D.snap.days.some((d) => d.changes.length)) out.push(['info', 'Klasse nicht erkannt', 'Es werden alle Vertretungen der Schule gezeigt. Trage deine Klasse im Profil ein.', 'data-settings']);
   return out.map(([k, t, s, attr]) => `<${attr ? `button ${attr}` : 'div'} class="card banner ${k}"><div><b>${esc(t)}</b>${esc(s)}</div></${attr ? 'button' : 'div'}>`).join('');
 }
 
@@ -805,18 +804,18 @@ function edupageSection() {
   const e = D.edupage;
   if (D.demo) return group(`<div class="row"><div class="main"><div class="title">Demo-Daten</div><div class="sub">Im Demo-Modus ist EduPage nicht verbunden.</div></div></div>`);
   if (e.connected && !$('#sheet')?.dataset.editEdu) {
-    return `${group(`<div class="row"><div class="main"><div class="title">Verbunden</div><div class="sub">${esc(e.user)} · ${esc(e.school)}.edupage.org${e.cls ? ` · Klasse ${esc(e.cls)}` : ''}</div></div></div>`,
+    return `${group(`<div class="row"><div class="main"><div class="title">Verbunden</div><div class="sub">${esc(e.user)} · ${esc(e.school)}.edupage.org</div></div></div>`,
       `<div class="row"><div class="main">Letzter Abgleich</div><div class="trail">${esc(ago(D.snap?.updated))}</div></div>`,
       `<button class="row" data-refresh><span class="btn-plain">Jetzt aktualisieren</span></button>`,
-      `<button class="row" data-edit-edu><span class="btn-plain">Zugang oder Klasse ändern</span></button>`,
+      `<button class="row" data-edit-edu><span class="btn-plain">Zugang ändern</span></button>`,
+      `<button class="row" id="diag-copy"><span class="btn-plain">Diagnose-Link kopieren</span></button>`,
       `<button class="row" data-disconnect><span class="btn-plain danger">Verbindung trennen</span></button>`)}
       ${D.status?.ok === false ? `<p class="footnote warn-text">${esc(D.status.error)}</p>` : ''}`;
   }
   return `<form class="form" id="edu-form" autocomplete="off">
     ${group(fRow('Schule', `<input name="school" placeholder="meineschule" value="${esc(e.school)}" autocapitalize="off" spellcheck="false" required><em class="suffix">.edupage.org</em>`),
       fText('user', 'Benutzername', e.user, 'autocapitalize="off" spellcheck="false" required'),
-      fText('pass', e.connected ? 'Passwort (leer = unverändert)' : 'Passwort', '', 'type="password" autocomplete="new-password"'),
-      fText('cls', 'Klasse für Vertretungen (optional, z. B. 7.A)', e.cls, 'maxlength="40"'))}
+      fText('pass', 'Passwort', '', 'type="password" autocomplete="new-password" required'))}
     <p class="form-error" role="alert"></p>
     <button class="btn-primary pressable" type="submit">${e.connected ? 'Sichern' : 'Verbinden'}</button>
     <p class="footnote" style="text-align:left">Die Schul-Adresse ist der Teil vor „.edupage.org“. Die Zugangsdaten bleiben auf deinem Server und werden nur an EduPage geschickt.</p></form>`;
@@ -860,6 +859,8 @@ async function openSettings() {
     const tpl = await fetch('/widget.js').then((r) => r.text());
     const script = tpl.replace('__SERVER__', location.origin).replace('__TOKEN__', widget);
     const cronUrl = `${location.origin}/api/cron?key=${cron}`;
+    const diag = $('#diag-copy');
+    if (diag) diag.onclick = () => copy(`${location.origin}/api/diagnose?key=${cron}`, $('#cron-hint'));
     $('#widget-copy').disabled = $('#cron-copy').disabled = false;
     $('#widget-copy').onclick = () => copy(script, $('#widget-hint'));
     $('#cron-copy').onclick = () => copy(cronUrl, $('#cron-hint'));

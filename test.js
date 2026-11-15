@@ -5,7 +5,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, parseSubstHtml, affects } = require('./edupage');
+const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = require('./edupage');
 
 (async () => {
   // 1. Anfrage-Kodierung gleichwertig zur Python-Bibliothek. Node-zlib packt andere Bytes als Python-zlib,
@@ -28,15 +28,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, parseSu
   assert.equal(home.gsh, 'g123');
   assert.throws(() => parseHome('<html>Login</html>'), { code: 'expired' });
 
-  // 3. Vertretungsplan-HTML (Aufbau wie getSubstViewerDayDataHtml)
-  const sec = (cls, rows) => `</div><div class="section print-nobreak"><div class="header"><span class="print-font-resizable">${cls}</span><div class="rows">${rows}</div></div>`;
-  const row = (a, n, t) => `<div class="row ${a}"><div class="period"><span class="print-font-resizable">${n}</span></div><div class="info"><span class="print-font-resizable">${t}</span></div></div>`;
-  const subst = parseSubstHtml(`<div>${sec('7.A', row('remove', '3', 'Mathematik – Entfall') + row('change', '5 - 6', 'Physik: Hr. X ➔ Fr. Y'))}${sec('8.B', row('add', '1', 'Zusatz'))}`);
-  assert.deepEqual(subst.map((s) => [s.cls, s.periods, s.title, s.action]), [
-    ['7.A', [3], 'Mathematik – Entfall', 'remove'], ['7.A', [5, 6], 'Physik: Hr. X ➔ Fr. Y', 'change'], ['8.B', [1], 'Zusatz', 'add']]);
-  assert.ok(affects('7.A, 7.B', ['7.B']) && affects('7.A - Gruppe 1', ['7.A']) && !affects('7.AB', ['7.A']));
-
-  // 4. Snapshot aus nachgebauten EduPage-Daten
+  // 3. Snapshot aus nachgebauten EduPage-Daten
   const ep = new Edupage('schule');
   ep.data = {
     userid: 'Student42',
@@ -55,22 +47,22 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, parseSu
   };
   ep.plan = async () => [{ uniperiod: '3', starttime: '09:45', endtime: '10:30', subjectid: '1', teacherids: ['9'], classroomids: ['5'], groupnames: [''], type: 'card' },
     { header: [] }, { uniperiod: '4', starttime: '10:35', endtime: '11:20', subjectid: '1', type: 'absent' }];
-  ep.substitutions = async () => subst;
   const snap = await snapshot(ep, { school: 'schule', now: new Date(2026, 10, 16, 8) });
   assert.deepEqual(snap.errors, []);
   assert.deepEqual(snap.student, { name: 'Max M', class: '7.A' });
   assert.equal(snap.days.length, 5); // Mo–Fr innerhalb von 7 Tagen
   const d0 = snap.days[0];
-  assert.equal(d0.changes.length, 2, 'nur Vertretungen der eigenen Klasse');
-  assert.deepEqual(d0.lessons.map((l) => [l.subject, l.teachers[0], l.rooms[0], l.cancelled, l.changes]), [
-    ['Mathematik', 'Bea Becker', '104', false, ['Mathematik – Entfall']], ['Mathematik', undefined, undefined, true, []]]);
+  // Entfall kommt aus dem persönlichen Stundenplan, nicht aus dem Vertretungsplan der Schule
+  assert.deepEqual(d0.changes, [{ periods: [4], label: '4.', text: 'Mathematik – Entfall', kind: 'cancel' }]);
+  assert.deepEqual(d0.lessons.map((l) => [l.subject, l.teachers[0], l.rooms[0], l.cancelled]), [
+    ['Mathematik', 'Bea Becker', '104', false], ['Mathematik', undefined, undefined, true]]);
   assert.deepEqual(snap.tasks.map((t) => [t.title, t.subject, t.due, t.done]), [['S. 12', 'Mathematik', '2026-11-17', true]]);
   assert.equal(snap.messages.length, 1);
   assert.equal(snap.messages[0].text, 'Hallo');
   assert.equal(snap.messages[0].replies[0].text, 'Antwort');
   assert.equal(snap.messages[0].attachments[0].url, 'https://schule.edupage.org/x/a.pdf');
 
-  // 5. Web-Push: Empfänger-Seite nachgebaut (RFC 8291) entschlüsselt, VAPID-Signatur prüfbar
+  // 4. Web-Push: Empfänger-Seite nachgebaut (RFC 8291) entschlüsselt, VAPID-Signatur prüfbar
   const { encrypt, vapidHeader, generateVapidKeys } = require('./push');
   const ua = crypto.createECDH('prime256v1'), uaPub = ua.generateKeys(), authSecret = crypto.randomBytes(16);
   const msg = JSON.stringify({ title: 'Vertretung', body: 'Mathe – Entfall äöü' });
@@ -90,7 +82,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, parseSu
   assert.ok(crypto.verify('sha256', Buffer.from(`${h64}.${b64}`), { key: vkey, dsaEncoding: 'ieee-p1363' }, Buffer.from(s64, 'base64url')));
   assert.equal(JSON.parse(Buffer.from(b64, 'base64url')).aud, 'https://push.example');
 
-  // 6. Server (Demo) über HTTP
+  // 5. Server (Demo) über HTTP
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-test-'));
   const port = 3900 + Math.floor(Math.random() * 90);
   const srv = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, DEMO: '1', DATA_DIR: dir, PORT: String(port) }, stdio: 'pipe' });
@@ -125,6 +117,8 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, parseSu
     assert.equal((await call('/api/tokens', { headers: { Authorization: `Bearer ${widget}` } })).status, 401);
     assert.equal((await call('/api/cron?key=falsch')).status, 403);
     assert.equal((await call(`/api/cron?key=${cron}`)).status, 200);
+    assert.equal((await call('/api/diagnose?key=falsch')).status, 403);
+    assert.equal((await (await call(`/api/diagnose?key=${cron}`)).json()).error, 'EduPage nicht verbunden');
     assert.equal((await call('/api/push/subscribe', { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify({ endpoint: 'http://x' }) })).status, 400);
 
     // statische Dateien, kein Ausbruch aus public/

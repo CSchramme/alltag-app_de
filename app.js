@@ -115,8 +115,8 @@ const dayLabel = (iso, now) => {
 function news(snap, data, done, now) {
   const out = [];
   const today = isoDay(now), tomorrow = isoDay(addDays(now, 1)), hm = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
-  if (snap?.classKnown) { // ohne bekannte Klasse wären es die Vertretungen der ganzen Schule
-    for (const d of snap.days) for (const c of d.changes) {
+  {
+    for (const d of snap?.days || []) for (const c of d.changes) {
       out.push([`sub|${d.date}|${c.label}|${c.text}`, { title: `Vertretung · ${dayLabel(d.date, now)}`, body: c.label ? `${c.label} Std. · ${c.text}` : c.text, url: `/#kalender/${d.date}`, tag: `sub-${d.date}-${c.label}` }]);
     }
   }
@@ -167,17 +167,42 @@ async function notify(snap) {
 
 /* ------------------------------------------------------------------ Abgleich mit EduPage */
 let running = null;
+// Gespeicherte Sitzung weiterverwenden, nur wenn sie abgelaufen ist neu einloggen (Captcha-Schutz)
+async function connect(cfg) {
+  const ep = new Edupage(cfg.school, load('session.json', {}));
+  try { await ep.refresh(); } catch (e) { if (!(e instanceof EduError) && !(e instanceof SyntaxError)) throw e; await ep.login(cfg.user, cfg.pass); }
+  save('session.json', Object.fromEntries(ep.cookies));
+  return ep;
+}
+
+// Vorübergehend: rohe EduPage-Daten zum Auswerten der echten Feldnamen (wird danach wieder entfernt)
+async function diagnose() {
+  const cfg = load('config.json', {}).edupage;
+  if (!cfg) return { error: 'EduPage nicht verbunden' };
+  const ep = await connect(cfg), plans = {};
+  for (let i = 0, n = 0; i < 10 && n < 3; i++) {
+    const d = addDays(new Date(), i);
+    if (d.getDay() === 0 || d.getDay() === 6) continue;
+    n++;
+    try { plans[isoDay(d)] = await ep.plan(isoDay(d)); } catch (e) { plans[isoDay(d)] = `Fehler: ${e.message}`; }
+  }
+  const items = ep.data?.items || [], types = {};
+  items.forEach((x) => { types[x.typ] = (types[x.typ] || 0) + 1; });
+  const school = ['homework', 'bexam', 'sexam', 'oexam', 'rexam', 'pexam', 'testing', 'etesthw', 'homeworkstudentstav', 'substitution', 'changeroom'];
+  return {
+    userid: ep.data?.userid, dataKeys: Object.keys(ep.data || {}), timelineTypes: types,
+    timelineSchool: items.filter((x) => school.includes(x.typ)).slice(0, 25), plans, subjects: ep.data?.dbi?.subjects,
+  };
+}
+
 async function syncEdupage() {
   if (DEMO) { const s = demo.snapshot(); save('snapshot.json', s); return s; }
   const cfg = load('config.json', {}).edupage;
   if (!cfg) return null;
   const status = load('status.json', {});
   if (status.blockedUntil > Date.now()) return load('snapshot.json', null); // nach Captcha eine Stunde Ruhe
-  const ep = new Edupage(cfg.school, load('session.json', {}));
   try {
-    try { await ep.refresh(); } catch (e) { if (!(e instanceof EduError) && !(e instanceof SyntaxError)) throw e; await ep.login(cfg.user, cfg.pass); }
-    save('session.json', Object.fromEntries(ep.cookies));
-    const s = await snapshot(ep, { cls: cfg.cls, school: cfg.school });
+    const s = await snapshot(await connect(cfg), { school: cfg.school });
     save('snapshot.json', s);
     save('status.json', { ok: true, at: s.updated, error: null });
     s.errors.forEach((e) => console.warn('Teilfehler:', e));
@@ -210,7 +235,7 @@ function payload() {
   const st = state(), snap = load('snapshot.json', null), cfg = load('config.json', {}).edupage;
   return {
     app: APP, demo: DEMO, status: load('status.json', {}),
-    edupage: DEMO ? { connected: true, school: 'demo', user: 'demo', cls: '' } : cfg ? { connected: true, school: cfg.school, user: cfg.user, cls: cfg.cls || '' } : { connected: false },
+    edupage: DEMO ? { connected: true, school: 'demo', user: 'demo' } : cfg ? { connected: true, school: cfg.school, user: cfg.user } : { connected: false },
     snap: snap && { ...snap, tasks: snap.tasks.map((t) => ({ ...t, done: st.done[t.id] ?? t.done })) },
     db: db(),
   };
@@ -264,10 +289,9 @@ const routes = {
     const b = await readJson(req);
     const cfg = {
       school: String(b.school || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\.edupage\.org.*$/, ''),
-      user: String(b.user || '').trim(), pass: String(b.pass || ''), cls: String(b.cls || '').trim(),
+      user: String(b.user || '').trim(), pass: String(b.pass || ''),
     };
     const old = load('config.json', {}).edupage;
-    if (!cfg.pass && old?.user === cfg.user && old?.school === cfg.school) cfg.pass = old.pass; // nur Klasse geändert
     if (!/^[a-z0-9-]{2,63}$/.test(cfg.school) || !cfg.user || !cfg.pass) return send(res, 400, { error: 'Bitte Schul-Adresse, Benutzername und Passwort angeben.' });
     try {
       const ep = new Edupage(cfg.school);
@@ -332,6 +356,10 @@ const server = http.createServer(async (req, res) => {
     if (!url.pathname.startsWith('/api/')) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method Not Allowed');
       return serveStatic(req, res, url.pathname);
+    }
+    if (url.pathname === '/api/diagnose') { // vorübergehend, Zugang mit Anmeldung oder Cron-Schlüssel
+      if (!loggedIn(req) && !same(url.searchParams.get('key') || '', TOKENS.cron)) return send(res, 403, { error: 'falscher Schlüssel' });
+      return send(res, 200, await diagnose());
     }
     if (url.pathname === '/api/cron') { // geplante Aufgabe in Plesk ("URL abrufen")
       if (!same(url.searchParams.get('key') || '', TOKENS.cron)) return send(res, 403, { error: 'falscher Schlüssel' });

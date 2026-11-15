@@ -43,29 +43,6 @@ function parseHome(html) {
   return { data, gsh };
 }
 
-const digits = (s) => { const n = parseInt(String(s).replace(/\D/g, ''), 10); return Number.isNaN(n) ? null : n; };
-
-function parseSubstHtml(html) {
-  const sections = html.split('</div><div class="section print-nobreak"><div class="header"><span class="print-font-resizable">').slice(1);
-  if (!sections.length) return [];
-  const footer = '<div style="text-align:center;font-size:12px"><a href="https://www.asctimetables.com" target="_blank">www.asctimetables.com</a> -';
-  sections[sections.length - 1] = sections.at(-1).split(footer)[0];
-  const out = [];
-  for (const raw of sections) {
-    const x = raw.replaceAll('</div>', '').replaceAll('<div class="period">', '')
-      .replaceAll('<span class="print-font-resizable">', '').replaceAll('<div class="info">', '');
-    const [cls, rows = ''] = x.split('</span><div class="rows">');
-    for (const row of rows.split('<div class="row ').slice(1)) {
-      const [action = '', lessonN = '', title0 = ''] = row.replaceAll('">', '</span>').split('</span>');
-      const title = title0.includes('<img src=') ? title0.split('>')[1] || '' : title0;
-      const [a, b] = lessonN.includes('-') ? lessonN.split(' - ').map(digits) : [digits(lessonN), digits(lessonN)];
-      const periods = a == null ? [] : Array.from({ length: Math.max(0, (b ?? a) - a) + 1 }, (_, i) => a + i);
-      out.push({ cls: cls.trim(), periods, title: title.trim(), action: action.trim() });
-    }
-  }
-  return out;
-}
-
 class Edupage {
   constructor(school, cookies = {}) {
     this.base = `https://${school}.edupage.org`;
@@ -174,15 +151,6 @@ class Edupage {
     return out;
   }
 
-  async substitutions(date) {
-    const r = await this.req('/substitution/server/viewer.js?__func=getSubstViewerDayDataHtml', {
-      method: 'POST', json: { __args: [null, { date, mode: 'classes' }], __gsh: this.gsh },
-    });
-    const j = JSON.parse(r.text);
-    if (j.reload) throw new EduError('expired', 'Sitzung abgelaufen');
-    return parseSubstHtml(j.r || '');
-  }
-
   timeline() {
     const props = this.data?.userProps && typeof this.data.userProps === 'object' ? this.data.userProps : {};
     const out = [];
@@ -206,13 +174,11 @@ class Edupage {
     return out;
   }
 
-  whoami(forced) {
+  whoami() {
     const sid = String(this.data?.userid || '').replace(/\D/g, '');
     const me = this.dbi('students', sid);
     const c = this.dbi('classes', me?.classid ?? this.data?.userrow?.TriedaID);
-    const name = me ? `${me.firstname} ${me.lastname}`.trim() : '';
-    if (forced) return { name, cls: forced, mine: [forced] };
-    return { name, cls: c?.name || '', mine: c ? [c.name, c.short].filter(Boolean) : [] };
+    return { name: me ? `${me.firstname} ${me.lastname}`.trim() : '', cls: c?.name || '' };
   }
 }
 
@@ -229,15 +195,13 @@ const KEEP_DAYS = 14;
 const pad = (n) => String(n).padStart(2, '0');
 const isoDay = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
-const affects = (cls, mine) => cls.trim().split(/[,\s]+/).some((x) => mine.includes(x));
-const changeKind = (a) => (a.includes('remove') ? 'cancel' : a.includes('add') ? 'add' : 'change');
 
-async function snapshot(ep, { cls: forcedClass, school, now = new Date() } = {}) {
+async function snapshot(ep, { school, now = new Date() } = {}) {
   const errors = [];
   const attempt = async (label, fn, fallback) => {
     try { return await fn(); } catch (e) { errors.push(`${label}: ${e.message}`); return fallback; }
   };
-  const who = await attempt('Klasse', () => ep.whoami(forcedClass), { name: '', cls: '', mine: [] });
+  const who = await attempt('Klasse', () => ep.whoami(), { name: '', cls: '' });
   const subjects = ep.data?.dbi?.subjects || {};
 
   // nächste 7 Kalendertage, Stundenplan nur an Werktagen
@@ -245,14 +209,11 @@ async function snapshot(ep, { cls: forcedClass, school, now = new Date() } = {})
   for (let i = 0; i < 7; i++) {
     const dt = addDays(now, i), date = isoDay(dt);
     if (dt.getDay() === 0 || dt.getDay() === 6) continue;
-    const changes = (await attempt(`Vertretungen ${date}`, () => ep.substitutions(date), []))
-      .filter((c) => !who.mine.length || affects(c.cls, who.mine))
-      .map((c) => ({
-        periods: c.periods, text: c.title, kind: changeKind(c.action), class: c.cls,
-        label: c.periods.length > 1 ? `${c.periods[0]}.–${c.periods.at(-1)}.` : c.periods.length ? `${c.periods[0]}.` : '',
-      }));
-    const lessons = (await attempt(`Stundenplan ${date}`, async () => ep.lessons(await ep.plan(date)), []))
-      .map((l) => ({ ...l, changes: changes.filter((c) => c.periods.includes(l.period)).map((c) => c.text) }));
+    // Nur der persönliche Stundenplan zählt – der Vertretungsplan der ganzen Schule passt nicht zu Kursen/Gruppen
+    const lessons = (await attempt(`Stundenplan ${date}`, async () => ep.lessons(await ep.plan(date)), [])).map((l) => ({ ...l, changes: [] }));
+    const changes = lessons.filter((l) => l.cancelled).map((l) => ({
+      periods: l.period ? [l.period] : [], label: l.period ? `${l.period}.` : '', text: `${l.subject} – Entfall`, kind: 'cancel',
+    }));
     days.push({ date, lessons, changes });
   }
 
@@ -283,11 +244,10 @@ async function snapshot(ep, { cls: forcedClass, school, now = new Date() } = {})
   return {
     updated: new Date().toISOString(),
     student: { name: who.name, class: who.cls },
-    classKnown: who.mine.length > 0,
     days, tasks,
     messages: [...messages.values()].sort((a, b) => (b.last || b.time).localeCompare(a.last || a.time)).slice(0, 100),
     errors,
   };
 }
 
-module.exports = { Edupage, EduError, snapshot, encodeRequestBody, decodeResponse, parseHome, parseSubstHtml, affects, isoDay, addDays };
+module.exports = { Edupage, EduError, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay, addDays };

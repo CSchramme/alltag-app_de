@@ -41,7 +41,6 @@ function snapshot(now = new Date()) {
   return {
     updated: now.toISOString(),
     student: { name: 'Alex Beispiel', class: '8b' },
-    classKnown: true,
     days,
     tasks: [
       task('h1', 'homework', 'Hausaufgabe', 'Mathematik', 'Buch S. 84, Nr. 3 a–f und Nr. 5. Rechenweg bitte vollständig aufschreiben.', school(0), 'Hr. Becker'),
