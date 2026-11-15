@@ -1030,8 +1030,8 @@ async function openTeacher(id) {
   const p = (S().people || []).find((x) => x.id === id);
   if (!p) return;
   openSheet(p.name, '<div class="card empty slim"><div class="spinner"></div></div>');
-  let lessons;
-  try { ({ lessons } = await api(`/api/teacher/${encodeURIComponent(id)}`)); } catch (e) {
+  let lessons, source;
+  try { ({ lessons, source } = await api(`/api/teacher/${encodeURIComponent(id)}`)); } catch (e) {
     if ($('#sheet-title').textContent === p.name) sheetBody.innerHTML = `<div class="card banner warn"><div><b>Nicht verfügbar</b>${esc(e.message)}</div></div>`;
     return;
   }
@@ -1043,6 +1043,7 @@ async function openTeacher(id) {
     : next ? [`Gerade frei · ab ${next.start}`, next.rooms.map(room).join(', ') || next.subject, info(next)]
       : ['Heute', act.length ? 'Kein Unterricht mehr' : 'Kein Unterricht', ''];
   sheetBody.innerHTML = `<div class="hero glass" style="--c:${colorOf(p.name)}"><div class="kicker">${esc(state[0])}</div><div class="subject">${esc(state[1])}</div>${state[2] ? `<div class="where">${esc(state[2])}</div>` : ''}</div>
+    ${source === 'regular' ? '<p class="footnote" style="text-align:left;margin:8px 4px 0">Laut regulärem Stundenplan der Schule – Vertretungen sind hier nicht berücksichtigt.</p>' : ''}
     ${lessons.length ? `<p class="label-sm">Heute</p><div class="list card">${lessons.map((l) => `
       <div class="row lesson${l === cur ? ' now' : ''}${l.cancelled ? ' cancelled' : ''}" style="--c:${colorOf(l.subject)}">
         <div class="time"><b>${esc(l.start || 'ganzt.')}</b><span>${esc(l.end)}</span></div><div class="bar"></div>

@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { generateVapidKeys, sendPush } = require('./push');
-const { Edupage, EduError, snapshot, schoolDay, SNAPSHOT_VERSION, isoDay, addDays } = require('./edupage');
+const { Edupage, EduError, snapshot, schoolDay, regularDay, SNAPSHOT_VERSION, isoDay, addDays } = require('./edupage');
 const demo = require('./demo');
 const { occursOn } = require('./public/recur');
 
@@ -350,14 +350,25 @@ const routes = {
   // Wo ist Lehrkraft X gerade? (Stundenplan der Lehrkraft für heute, 5 Minuten zwischengespeichert)
   'GET /api/teacher/:id': async (req, res, id) => {
     const date = isoDay(new Date()), key = `${id}|${date}`, hit = teacherCache.get(key);
-    if (hit && Date.now() - hit.at < 5 * 60e3) return send(res, 200, { date, lessons: hit.lessons });
-    let lessons;
+    if (hit && Date.now() - hit.at < 5 * 60e3) return send(res, 200, { date, lessons: hit.lessons, source: hit.source });
+    let lessons, source = 'live';
     if (DEMO) {
       const name = (load('snapshot.json', null)?.people || []).find((p) => p.id === id)?.name;
       lessons = (demo.snapshot().days[0]?.lessons || []).filter((l) => l.teachers.includes(name)).map((l) => ({ ...l, classes: ['8b'] }));
-    } else lessons = await edupageDo((ep) => ep.teacherPlan(id, date));
-    teacherCache.set(key, { at: Date.now(), lessons });
-    send(res, 200, { date, lessons });
+    } else {
+      lessons = await edupageDo(async (ep) => {
+        try { return await ep.teacherPlan(id, date); } catch (e) {
+          if (!/erlaubt|insuf/i.test(e.message)) throw e;
+          // Schülerkonten dürfen den Lehrer-Stundenplan oft nicht sehen → regulärer Gesamtstundenplan (einen Tag zwischengespeichert)
+          source = 'regular';
+          let tables = load('regular.json', null);
+          if (!tables || Date.now() - tables.at > 864e5) { tables = { at: Date.now(), data: await ep.regularTables() }; save('regular.json', tables); }
+          return regularDay(tables.data, id, date);
+        }
+      });
+    }
+    teacherCache.set(key, { at: Date.now(), lessons, source });
+    send(res, 200, { date, lessons, source });
   },
   // Kalender: beliebige Woche (Mo–Fr). Was schon im Abgleich steckt, kommt ohne EduPage-Anfrage; Rest 10 Min. zwischengespeichert
   'GET /api/week': async (req, res) => {

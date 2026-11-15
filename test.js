@@ -94,6 +94,18 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
   assert.deepEqual(snap.missing.map((m) => [m.title, m.subject]), [['AB Zellatmung', 'Mathematik']]);
   assert.equal(snap.v, 5);
 
+  // Lehrkraft laut regulärem Gesamtstundenplan (Montag = erste Stelle in „days“, Doppelstunde über durationperiods)
+  const { regularDay } = require('./edupage');
+  const tables = {
+    periods: [{ id: '1', period: '1', starttime: '07:55', endtime: '08:40' }, { id: '2', period: '2', starttime: '08:40', endtime: '09:25' }],
+    lessons: [{ id: 'L1', subjectid: 'S1', teacherids: ['-156'], classids: ['C1'], durationperiods: 2 }, { id: 'L2', subjectid: 'S1', teacherids: ['-9'], classids: ['C1'] }],
+    cards: [{ lessonid: 'L1', period: '1', days: '10000', classroomids: ['R1'] }, { lessonid: 'L1', period: '1', days: '01000', classroomids: ['R1'] }, { lessonid: 'L2', period: '2', days: '10000', classroomids: ['R1'] }],
+    subjects: [{ id: 'S1', name: 'Englisch', short: 'E' }], classrooms: [{ id: 'R1', name: 'A004 (Tel. 4004)', short: 'A004' }], classes: [{ id: 'C1', name: '9A', short: '9A' }],
+  };
+  assert.deepEqual(regularDay(tables, '-156', '2026-11-16').map((l) => [l.start, l.end, l.subject, l.rooms[0], l.classes[0]]), [['07:55', '09:25', 'Englisch', 'A004', '9A']]);
+  assert.equal(regularDay(tables, '-156', '2026-11-18').length, 0); // Mittwoch: keine Karte
+  assert.equal(regularDay(tables, '-156', '2026-11-15').length, 0); // Sonntag
+
   // Wiederholungen (gemeinsam für Server und App)
   const R = require('./public/recur');
   assert.ok(R.occursOn({ date: '2026-11-17', repeat: 'weekly' }, '2026-11-24'));

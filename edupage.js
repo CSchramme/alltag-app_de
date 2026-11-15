@@ -232,6 +232,19 @@ class Edupage {
     if (j.error) throw new Error(/insuf/i.test(j.error) ? 'Deine Schule erlaubt keinen Einblick in Lehrer-Stundenpläne.' : String(j.error));
     return this.lessons(j.ttitems || []);
   }
+  // Regulärer Gesamtstundenplan, wie ihn der EduPage-Stundenplan-Viewer zeigt (ohne Vertretungen) –
+  // Rückfall, wenn Schülerkonten den Lehrer-Stundenplan nicht sehen dürfen
+  async regularTables() {
+    const post = async (path, args) => JSON.parse((await this.req(path, { method: 'POST', json: { __args: args, __gsh: this.gsh || '00000000' } })).text).r || {};
+    const list = await post('/timetable/server/ttviewer.js?__func=getTTViewerData', [null, this.data?.dp?.year]);
+    const tt = list.regular?.default_num || list.regular?.timetables?.find((t) => !t.hidden)?.tt_num;
+    if (!tt) throw new Error('Deine Schule hat keinen Gesamtstundenplan freigegeben.');
+    const r = await post('/timetable/server/regulartt.js?__func=regularttGetData', [null, tt]);
+    const tables = Object.fromEntries((r.dbiAccessorRes?.tables || []).map((t) => [t.id, t.data_rows || []]));
+    if (!tables.cards?.length || !tables.lessons?.length) throw new Error('Der Gesamtstundenplan der Schule ist nicht einsehbar.');
+    return tables;
+  }
+
   teachers() {
     return Object.entries(this.data?.dbi?.teachers || {}).map(([id, p]) => ({ id, name: `${p.firstname || ''} ${p.lastname || ''}`.trim() }))
       .filter((t) => t.name).sort((a, b) => a.name.localeCompare(b.name, 'de'));
@@ -342,4 +355,25 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
   };
 }
 
-module.exports = { Edupage, EduError, snapshot, schoolDay, SNAPSHOT_VERSION, encodeRequestBody, decodeResponse, parseHome, isoDay, addDays };
+// Tagesplan einer Lehrkraft aus dem regulären Gesamtstundenplan (Karten: Stunde, Tage als „10000“, Räume)
+function regularDay(tables, teacherId, date) {
+  const dow = new Date(`${date}T12:00`).getDay();
+  if (dow === 0 || dow === 6) return [];
+  const byId = (name) => new Map((tables[name] || []).map((x) => [String(x.id), x]));
+  const lessons = byId('lessons'), subjects = byId('subjects'), rooms = byId('classrooms'), classes = byId('classes');
+  const periods = new Map((tables.periods || []).map((p) => [String(p.period ?? p.id), p]));
+  return (tables.cards || []).flatMap((c) => {
+    const l = lessons.get(String(c.lessonid));
+    if (!l || !(l.teacherids || []).map(String).includes(String(teacherId)) || String(c.days || '')[dow - 1] !== '1') return [];
+    const p = periods.get(String(c.period)), last = periods.get(String(Number(c.period) + (Number(l.durationperiods) || 1) - 1)) || p;
+    return [{
+      period: Number(c.period) || null, start: p?.starttime || '', end: last?.endtime || '',
+      subject: subjects.get(String(l.subjectid))?.name || 'Unterricht', short: subjects.get(String(l.subjectid))?.short || '',
+      teachers: [], rooms: (c.classroomids || []).map((id) => rooms.get(String(id))).filter(Boolean).map((r) => r.short || r.name),
+      classes: (l.classids || []).map((id) => classes.get(String(id))).filter(Boolean).map((k) => k.short || k.name),
+      groups: [], topic: null, cancelled: false, event: false, allday: false, online: null, changes: [], homework: [],
+    }];
+  }).sort((a, b) => a.start.localeCompare(b.start));
+}
+
+module.exports = { Edupage, EduError, snapshot, schoolDay, regularDay, SNAPSHOT_VERSION, encodeRequestBody, decodeResponse, parseHome, isoDay, addDays };
