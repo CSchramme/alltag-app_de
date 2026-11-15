@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { generateVapidKeys, sendPush } = require('./push');
-const { Edupage, EduError, snapshot, isoDay, addDays } = require('./edupage');
+const { Edupage, EduError, snapshot, SNAPSHOT_VERSION, isoDay, addDays } = require('./edupage');
 const demo = require('./demo');
 
 const APP = 'Alltag';
@@ -209,7 +209,8 @@ function sync(minAgeMs) {
 }
 // Läuft der Prozess dauerhaft, gleicht er selbst ab; unter Plesk weckt ihn zusätzlich die geplante Aufgabe (/api/cron)
 setInterval(() => { const h = new Date().getHours(); sync(h >= 5 && h < 22 ? 14 * 60e3 : 55 * 60e3); }, 5 * 60e3);
-setTimeout(() => sync(10 * 60e3), 3000);
+// nach einem Update mit neuer Auswertung sofort neu abgleichen, sonst nur wenn der letzte Abgleich älter als 10 Min. ist
+setTimeout(() => sync(load('snapshot.json', null)?.v === SNAPSHOT_VERSION ? 10 * 60e3 : 0), 3000);
 
 /* ------------------------------------------------------------------ API */
 function payload() {

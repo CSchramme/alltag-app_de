@@ -189,10 +189,9 @@ const dayOf = (iso) => S().days.find((d) => d.date === iso);
 const lessonsOn = (iso) => dayOf(iso)?.lessons || [];
 const subjects = () => [...new Set([...S().days.flatMap((d) => d.lessons.map((l) => l.subject)), ...D.db.grades.map((g) => g.subject), ...D.db.reminders.map((r) => r.subject)].filter(Boolean))].sort((a, b) => a.localeCompare(b, 'de'));
 
-// Alles an einem Tag in zeitlicher Reihenfolge: Ganztägiges, Stunden, eigene Termine
+// Alles an einem Tag in zeitlicher Reihenfolge: Ganztägiges und Stunden aus dem Stundenplan, eigene Termine
 function agenda(date) {
   const items = [];
-  S().tasks.filter((t) => t.due === date && (t.kind === 'event' || t.kind === 'exam')).forEach((t) => items.push({ type: 'allday', start: '', t }));
   lessonsOn(date).forEach((l, i) => items.push(l.allday
     ? { type: 'allday', start: '', t: { id: '', kind: 'event', label: 'Ganztägig', title: l.subject, subject: '' } }
     : { type: 'lesson', start: l.start, end: l.end, l, i }));
@@ -249,7 +248,7 @@ function eventRow(e) {
 }
 function alldayRow(t) {
   const c = t.kind === 'exam' ? 'var(--red)' : 'var(--indigo)';
-  return `<button class="row lesson allday" style="--c:${c}" data-edu-task="${esc(t.id)}">
+  return `<button class="row lesson allday" style="--c:${c}"${t.id ? ` data-edu-task="${esc(t.id)}"` : ''}>
     <div class="time"><b>ganzt.</b></div><div class="bar"></div>
     <div class="main"><div class="title">${esc(t.title)}</div><div class="sub">${esc([t.label, t.subject].filter(Boolean).join(' · '))}</div></div></button>`;
 }

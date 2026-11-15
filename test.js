@@ -41,7 +41,10 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
       { timelineid: '1', typ: 'homework', text: '', timestamp: '2026-11-15 10:00:00', cas_udalosti: '2026-11-17 00:00:00', data: '{"predmetid":"1","nazov":"S. 12","popis":"mit Rechenweg"}', vlastnik_meno: 'Fr. X' },
       { timelineid: '2', typ: 'sprava', text: '', timestamp: '2026-11-15 11:00:00', data: '{"messageContent":"Hallo","attachements":{"/x/a.pdf":"a.pdf"}}', vlastnik_meno: 'Fr. X' },
       { timelineid: '3', typ: 'sprava', text: 'Antwort', timestamp: '2026-11-15 12:00:00', data: '', reakcia_na: '2', vlastnik_meno: 'Max M' },
-      { timelineid: '4', typ: 'homework', text: 'uralt', timestamp: '2020-01-01 10:00:00', data: '{}', vlastnik_meno: 'Fr. X' },
+      { timelineid: '4', typ: 'homework', text: '', timestamp: '2026-11-10 10:00:00', cas_udalosti: '2026-11-13 00:00:00', data: '{"nazov":"überfällig"}', vlastnik_meno: 'Fr. X' },
+      { timelineid: '6', typ: 'homework', text: '', timestamp: '2026-11-14 09:00:00', cas_udalosti: '2026-11-18 00:00:00', data: '{"id":"HW7","predmetid":"1","nazov":"alt"}', vlastnik_meno: 'Fr. X' },
+      { timelineid: '7', typ: 'homework', text: 'Geändert: S. 40', timestamp: '2026-11-15 09:00:00', cas_udalosti: '2026-11-19 00:00:00', data: '{"id":"HW7","predmetid":"1","nazov":"S. 40"}', vlastnik_meno: 'Fr. X' },
+      { timelineid: '8', typ: 'event', text: 'Udalosť: 1.Deutsch-SchA', timestamp: '2026-11-15 09:00:00', cas_udalosti: '2026-11-16 00:00:00', data: '{}', vlastnik_meno: 'Fr. X' },
       { timelineid: '5', typ: 'homework', text: 'weg', timestamp: '2026-11-15 10:00:00', data: '{}', removed: '1' },
     ],
     userProps: { 1: { doneMaxCas: '2026-11-15 13:00:00' } },
@@ -79,7 +82,10 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
   assert.deepEqual(d0.lessons[0].homework, ['S. 12 Nr. 4']);
   assert.deepEqual(d0.lessons[0].changes, []);
   assert.deepEqual(d0.lessons[3].teachers, ['Tom Tal']);
-  assert.deepEqual(snap.tasks.map((t) => [t.title, t.details, t.subject, t.due, t.done]), [['S. 12', 'mit Rechenweg', 'Mathematik', '2026-11-17', true]]);
+  // überfällig und Timeline-Termine fallen weg, die geänderte Hausaufgabe ersetzt ihr Original
+  assert.deepEqual(snap.tasks.map((t) => [t.id, t.title, t.details, t.subject, t.due, t.done]).sort(), [
+    ['1', 'S. 12', 'mit Rechenweg', 'Mathematik', '2026-11-17', true], ['HW7', 'S. 40', '', 'Mathematik', '2026-11-19', false]]);
+  assert.equal(snap.v, 2);
   assert.equal(snap.messages.length, 1);
   assert.equal(snap.messages[0].text, 'Hallo');
   assert.equal(snap.messages[0].replies[0].text, 'Antwort');

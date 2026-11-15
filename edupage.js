@@ -208,9 +208,8 @@ class Edupage {
 const TASK_KINDS = {
   homework: ['homework', 'Hausaufgabe'], bexam: ['exam', 'Klassenarbeit'], sexam: ['exam', 'Test'], testing: ['exam', 'Test'],
   oexam: ['exam', 'Mündliche Prüfung'], rexam: ['exam', 'Referat'], pexam: ['exam', 'Projekt'],
-  event: ['event', 'Termin'], schoolevent: ['event', 'Schulveranstaltung'], excursion: ['event', 'Exkursion'], trip: ['event', 'Ausflug'],
-  culture: ['event', 'Kultur'], parentsevening: ['event', 'Elternabend'], holiday: ['event', 'Ferien'], freeday: ['event', 'Schulfrei'], sholiday: ['event', 'Schulfrei'],
-};
+}; // Termine/Feiertage nicht aus der Timeline – die stehen schon im persönlichen Stundenplan
+const SNAPSHOT_VERSION = 2; // erhöhen, wenn sich die Auswertung ändert → Server gleicht nach dem Update sofort neu ab
 const MESSAGE_KINDS = { sprava: 'message', news: 'news', chat: 'chat' };
 const KEEP_DAYS = 14;
 
@@ -242,18 +241,23 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
 
   const items = (await attempt('Timeline', () => ep.timeline(), [])).sort((a, b) => a.time.localeCompare(b.time));
   const cutoff = isoDay(addDays(now, -KEEP_DAYS));
-  const tasks = [], messages = new Map();
+  const today = isoDay(now), tasks = new Map(), messages = new Map();
   for (const n of items) {
-    if (n.removed) continue;
     if (TASK_KINDS[n.type]) {
-      const due = n.eventTime ? n.eventTime.slice(0, 10) : null;
-      if ((due || n.time.slice(0, 10)) < cutoff) continue;
+      // Ändert die Lehrkraft eine Hausaufgabe, legt EduPage einen neuen Eintrag mit derselben data.id an („Geändert: …“) → der neueste gilt
+      const key = String(n.data.id || n.id), prev = tasks.get(key);
+      tasks.delete(key);
+      const due = n.eventTime ? n.eventTime.slice(0, 10) : n.data.date || null;
+      if (n.removed || (due ? due < today : n.time.slice(0, 10) < cutoff)) continue; // Vergangenes ausblenden
       const [kind, label] = TASK_KINDS[n.type];
-      tasks.push({
-        id: n.id, kind, label, title: n.text || n.data.nazov || label, details: String(n.data.popis || '').trim(),
+      tasks.set(key, {
+        id: key, kind, label, title: String(n.data.nazov || n.text || label).replace(/^Geändert:\s*/, '').trim(),
+        details: String(n.data.popis || '').trim(),
         subject: subjects[String(n.data.predmetid ?? n.data.subjectid ?? '')]?.name || '',
-        due, created: n.time.replace(' ', 'T'), author: n.author, done: n.done,
+        due, created: n.time.replace(' ', 'T'), author: n.author, done: n.done || !!prev?.done,
       });
+    } else if (n.removed) {
+      continue;
     } else if (MESSAGE_KINDS[n.type]) {
       const att = n.data.attachements && typeof n.data.attachements === 'object' ? n.data.attachements : {};
       const m = {
@@ -265,12 +269,13 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
     }
   }
   return {
+    v: SNAPSHOT_VERSION,
     updated: new Date().toISOString(),
     student: { name: who.name, class: who.cls },
-    days, tasks,
+    days, tasks: [...tasks.values()],
     messages: [...messages.values()].sort((a, b) => (b.last || b.time).localeCompare(a.last || a.time)).slice(0, 100),
     errors,
   };
 }
 
-module.exports = { Edupage, EduError, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay, addDays };
+module.exports = { Edupage, EduError, snapshot, SNAPSHOT_VERSION, encodeRequestBody, decodeResponse, parseHome, isoDay, addDays };

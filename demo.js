@@ -46,10 +46,8 @@ function snapshot(now = new Date()) {
       task('h1', 'homework', 'Hausaufgabe', 'Mathematik', 'Buch S. 84, Nr. 3 a–f und Nr. 5. Rechenweg bitte vollständig aufschreiben.', school(0), 'Hr. Becker'),
       task('h2', 'homework', 'Hausaufgabe', 'Englisch', 'Vokabeln Unit 4 lernen (S. 212–214)', school(1), 'Fr. Weber'),
       task('h3', 'homework', 'Hausaufgabe', 'Deutsch', 'Erörterung zum Thema „Handyverbot an Schulen“ fertigstellen', school(3), 'Fr. Schneider'),
-      task('h4', 'homework', 'Hausaufgabe', 'Biologie', 'Arbeitsblatt Zellatmung', isoDay(addDays(now, -2)), 'Hr. Wolf'),
       task('e1', 'exam', 'Klassenarbeit', 'Mathematik', 'Klassenarbeit Nr. 2 – Lineare Funktionen', school(4), 'Hr. Becker'),
       task('e2', 'exam', 'Test', 'Chemie', 'Kurztest Atombau', school(2), 'Fr. Braun'),
-      task('v1', 'event', 'Termin', '', 'Wandertag – Treffpunkt 8:00 am Bahnhof', school(4), 'Schulleitung'),
     ],
     messages: [
       { id: 'm1', kind: 'message', author: 'Fr. Schneider', time: ago(1.5), attachments: [], last: ago(1),
