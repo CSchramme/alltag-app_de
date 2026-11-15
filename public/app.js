@@ -124,6 +124,12 @@ const ICON = {
   note: '<svg viewBox="0 0 44 44"><path d="M13 7h13l8 8v20a3 3 0 01-3 3H13a3 3 0 01-3-3V10a3 3 0 013-3z"/><path d="M26 7v8h8M16 23h12M16 29h8"/></svg>',
   clip: '<svg viewBox="0 0 24 24"><path d="M20 11.5l-7.8 7.8a5 5 0 01-7.1-7.1l8.5-8.5a3.3 3.3 0 014.7 4.7l-8.5 8.5a1.7 1.7 0 01-2.4-2.4l7.8-7.8"/></svg>',
   gift: '<svg viewBox="0 0 44 44"><rect x="8" y="17" width="28" height="8" rx="2"/><path d="M10 25v10a2 2 0 002 2h20a2 2 0 002-2V25M22 17v20M22 17c-3-6-10-6-10-1.5S19 17 22 17zm0 0c3-6 10-6 10-1.5S25 17 22 17z"/></svg>',
+  camera: '<svg viewBox="0 0 44 44"><path d="M8 15a3 3 0 013-3h4l3-4h8l3 4h4a3 3 0 013 3v16a3 3 0 01-3 3H11a3 3 0 01-3-3z"/><circle cx="22" cy="23" r="6.5"/></svg>',
+  timer: '<svg viewBox="0 0 44 44"><circle cx="22" cy="24" r="14"/><path d="M22 24v-7M18 6h8M22 6v4"/></svg>',
+  cart: '<svg viewBox="0 0 44 44"><path d="M6 9h5l4 19h18l4-13H13"/><circle cx="17" cy="35" r="2"/><circle cx="31" cy="35" r="2"/></svg>',
+  power: '<svg viewBox="0 0 44 44"><path d="M22 7v14M14 12a13 13 0 1016 0"/></svg>',
+  play: '<svg viewBox="0 0 44 44"><path d="M15 10l19 12-19 12z"/></svg>',
+  ticket: '<svg viewBox="0 0 44 44"><path d="M7 14a3 3 0 013-3h24a3 3 0 013 3v4a4 4 0 000 8v4a3 3 0 01-3 3H10a3 3 0 01-3-3v-4a4 4 0 000-8z"/><path d="M27 12v20" stroke-dasharray="2 3"/></svg>',
   pin: '<svg class="pin" viewBox="0 0 16 16"><path d="M10.5 1.5l4 4-2.5 1-3 3 .5 3.5-1 1L5 10.5 1.5 14l-.5-.5L4.5 10 1 6.5l1-1 3.5.5 3-3z"/></svg>',
 };
 
@@ -467,6 +473,212 @@ function wayCard() {
   </div>`;
 }
 
+/* ---------------------------------------------------------------- Lernzeit (Fokus-Timer) */
+const fmtMin = (m) => (m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} Min.` : ''}` : `${m} Min.`);
+const timerLeft = () => Math.max(0, Math.ceil((D.timer.end - Date.now()) / 1000));
+const mmss = (s) => `${Math.floor(s / 60)}:${pad(s % 60)}`;
+const ring = (r, size) => `<svg class="ring" viewBox="0 0 44 44" style="width:${size}px;height:${size}px" aria-hidden="true"><circle cx="22" cy="22" r="19"/><circle cx="22" cy="22" r="19" class="fill" pathLength="100" data-ring style="stroke-dashoffset:${(100 * (1 - r)).toFixed(2)}"/></svg>`;
+function timerCard() {
+  const t = D.timer;
+  if (!t) return '';
+  return `<button class="card timer-card pressable" data-timer style="--c:${t.subject ? colorOf(t.subject) : 'var(--teal)'}">${ring(timerLeft() / (t.minutes * 60), 46)}
+    <div class="main"><div class="kicker">Lernzeit${t.subject ? ` · ${esc(t.subject)}` : ''}</div><div class="big" data-timer-left>${mmss(timerLeft())}</div></div><span class="due">von ${t.minutes} Min.</span></button>`;
+}
+function openTimer() {
+  const t = D.timer, monday = mondayOf(today()), wk = (D.db.sessions || []).filter((s) => s.date >= monday);
+  const sum = {};
+  for (const s of wk) sum[s.subject || 'Ohne Fach'] = (sum[s.subject || 'Ohne Fach'] || 0) + s.minutes;
+  const by = Object.entries(sum).sort((a, b) => b[1] - a[1]), max = by[0]?.[1] || 1;
+  const total = wk.reduce((a, s) => a + s.minutes, 0), todayMin = wk.filter((s) => s.date === today()).reduce((a, s) => a + s.minutes, 0);
+  const stats = `<p class="label-sm">Diese Woche · ${fmtMin(total)}${todayMin ? ` · heute ${fmtMin(todayMin)}` : ''}</p>
+    ${by.length ? `<div class="card stats">${by.map(([s, m]) => `<div class="stat"><span>${esc(s)}</span><i style="--w:${(m / max).toFixed(3)};--c:${s === 'Ohne Fach' ? 'var(--teal)' : colorOf(s)}"></i><b>${fmtMin(m)}</b></div>`).join('')}</div>` : emptyCard('timer', 'Diese Woche noch keine Lernzeit.')}`;
+  if (t) {
+    openSheet('Lernzeit', `<div class="timer-big" style="--c:${t.subject ? colorOf(t.subject) : 'var(--teal)'}">${ring(timerLeft() / (t.minutes * 60), 220)}
+        <div class="timer-text"><b data-timer-left>${mmss(timerLeft())}</b><span>${esc(t.subject || 'Lernen')} · ${t.minutes} Min.</span></div></div>
+      <p class="footnote" style="margin-top:0">Wenn die Zeit um ist, kommt eine Mitteilung – auch bei geschlossener App.</p>
+      <button class="btn-plain danger" id="timer-stop" type="button" style="margin:8px auto 0">Beenden</button>${stats}`);
+    $('#timer-stop').onclick = () => stopTimer(true);
+    return;
+  }
+  const next = tasks().filter((x) => !x.done && x.subject && (x.kind === 'exam' || x.kind === 'study')).sort((a, b) => (a.due || '9').localeCompare(b.due || '9'))[0]?.subject || '';
+  openSheet('Lernzeit', `<form class="form" id="timer-form">
+    ${group(fText('subject', 'Fach (optional)', next, 'list="subjects" maxlength="80"'))}
+    <p class="label-sm">Dauer</p>
+    ${fChoice('minutes', [[15, '15 Min.'], [25, '25 Min.'], [45, '45 Min.'], [60, '60 Min.']], store.get('timer-min', 25))}
+    <button class="btn-primary pressable" type="submit" style="margin-top:16px">Starten</button></form>${stats}`);
+  $('#timer-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const body = Object.fromEntries(new FormData(e.target));
+    store.set('timer-min', Number(body.minutes));
+    try { setData(await api('/api/timer', { method: 'POST', body })); haptic(); openTimer(); } catch (x) { toast(x.message); }
+  };
+}
+let stopping = false;
+async function stopTimer(early) {
+  if (stopping || !D.timer) return;
+  stopping = true;
+  try {
+    setData(await api('/api/timer/stop', { method: 'POST' }));
+    haptic();
+    toast(early ? 'Lernzeit beendet' : 'Geschafft – Zeit für eine Pause');
+    if (sheetOpen && $('#sheet-title').textContent === 'Lernzeit') openTimer();
+  } catch (x) { toast(x.message); } finally { stopping = false; }
+}
+setInterval(() => { // Sekundentakt nur für sichtbare Anzeigen
+  if (!D?.timer || document.hidden) return;
+  const s = timerLeft(), r = s / (D.timer.minutes * 60);
+  $$('[data-timer-left]').forEach((el) => { el.textContent = mmss(s); });
+  $$('[data-ring]').forEach((el) => { el.style.strokeDashoffset = (100 * (1 - r)).toFixed(2); });
+  if (s === 0) stopTimer(false);
+}, 1000);
+
+/* ---------------------------------------------------------------- Tafelbilder */
+const photoUrl = (p) => `/api/photos/${encodeURIComponent(p.id)}`;
+function photoGrid(list) {
+  const ps = [...list].sort((a, b) => ((b.date || '') + b.updated).localeCompare((a.date || '') + a.updated));
+  return ps.length ? `<div class="photo-grid">${ps.map((p) => `<button class="card photo pressable${p.id === justAdded ? ' appear' : ''}" data-photo="${esc(p.id)}">
+      <img src="${photoUrl(p)}" alt="${esc(p.caption || p.subject || 'Tafelbild')}" loading="lazy" decoding="async">
+      <div class="cap"><b>${esc(p.subject || 'Tafelbild')}</b>${p.date ? `<span>${esc(F.short.format(parseDay(p.date)))}</span>` : ''}</div></button>`).join('')}</div>`
+    : emptyCard('camera', 'Noch keine Tafelbilder. Tippe auf +, um eins aufzunehmen.');
+}
+// Foto aufnehmen oder wählen → verkleinern (schnellerer Upload, weniger Platz) → Fach und Datum zuordnen
+function pickPhoto(pre = {}) {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'image/*';
+  inp.onchange = async () => {
+    const f = inp.files[0];
+    if (!f) return;
+    try { photoForm(await shrink(f), pre); } catch { toast('Dieses Bildformat wird nicht unterstützt'); }
+  };
+  inp.click(); // muss direkt im Tippen passieren (iOS)
+}
+async function shrink(file, max = 2200) {
+  const img = await createImageBitmap(file), k = Math.min(1, max / Math.max(img.width, img.height)), c = document.createElement('canvas');
+  c.width = Math.round(img.width * k);
+  c.height = Math.round(img.height * k);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return new Promise((ok, fail) => c.toBlob((b) => (b ? ok(b) : fail(new Error('jpeg'))), 'image/jpeg', 0.82));
+}
+function photoForm(blob, pre) {
+  const cur = lessonsOn(today()).filter((l) => l.start && !l.cancelled && !l.allday && toMin(l.start) <= nowMin()).at(-1);
+  const src = URL.createObjectURL(blob);
+  openSheet('Tafelbild', `<form class="form" novalidate><img class="photo-full" src="${src}" alt="Vorschau">
+    ${group(fText('subject', 'Fach', pre.subject || cur?.subject || '', 'list="subjects" maxlength="80"'), fRow('Datum', `<input type="date" name="date" value="${esc(pre.date || today())}">`), fText('caption', 'Beschriftung (optional)', '', 'maxlength="300"'))}
+    <p class="form-error" role="alert"></p><button class="btn-primary pressable" type="submit">Sichern</button></form>`);
+  const f = $('#sheet form'), btn = $('button[type=submit]', f);
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    btn.disabled = true;
+    btn.textContent = 'Lädt hoch …';
+    try {
+      const res = await fetch(`/api/photos?${new URLSearchParams(Object.fromEntries(new FormData(f)))}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || res.statusText);
+      D.db.photos = [...D.db.photos, j];
+      justAdded = j.id; setTimeout(() => { justAdded = null; }, 1200);
+      URL.revokeObjectURL(src);
+      haptic();
+      closeSheet();
+      renderNotizen();
+    } catch (x) { $('.form-error', f).textContent = x.message; btn.disabled = false; btn.textContent = 'Sichern'; }
+  };
+}
+function openPhoto(id) {
+  const p = D.db.photos.find((x) => x.id === id);
+  if (!p) return;
+  formSheet('photos', p, p.subject || 'Tafelbild', `<a href="${photoUrl(p)}" target="_blank" rel="noopener"><img class="photo-full" src="${photoUrl(p)}" alt="${esc(p.caption || 'Tafelbild')}"></a>
+    ${group(fText('subject', 'Fach', p.subject, 'list="subjects" maxlength="80"'), fRow('Datum', `<input type="date" name="date" value="${esc(p.date)}">`), fText('caption', 'Beschriftung', p.caption, 'maxlength="300"'))}`);
+}
+
+/* ---------------------------------------------------------------- Einkaufsliste (Home Assistant, z. B. Cookidoo) */
+let shop = { items: null, error: '', at: 0 }, shopBusy = false;
+function loadShop(force) {
+  if (shopBusy || (!force && Date.now() - shop.at < 30e3)) return;
+  shopBusy = true;
+  api('/api/shop').then((items) => { shop = { items, error: '', at: Date.now() }; }, (x) => { shop = { ...shop, error: x.message, at: Date.now() }; })
+    .finally(() => { shopBusy = false; if (notesSeg === 'einkauf') renderNotesBody(); });
+}
+function shopBody() {
+  if (!D.ha?.connected || !D.ha.todo) {
+    return `<div class="card empty">${ICON.cart}Verbinde im Profil Home Assistant und wähle dort deine Einkaufsliste – zum Beispiel die von Cookidoo.
+      <button class="btn-link" data-settings style="display:block;margin:10px auto 0">Profil öffnen</button></div>`;
+  }
+  loadShop();
+  const items = shop.items || [], open = items.filter((i) => i.status !== 'completed'), done = items.filter((i) => i.status === 'completed');
+  return `<form class="card shop-add" id="shop-add"><input name="text" placeholder="Artikel hinzufügen" maxlength="200" autocomplete="off" enterkeyhint="done" aria-label="Artikel hinzufügen"><button class="btn-link" type="submit">Hinzufügen</button></form>
+    ${shop.error ? `<p class="footnote warn-text" style="margin:0 4px 12px">${esc(shop.error)}</p>` : ''}
+    ${!shop.items ? (shop.error ? '' : '<div class="card row"><div class="spinner"></div></div>') : open.length ? `<div class="list card">${open.map(shopRow).join('')}</div>` : emptyCard('check', 'Alles eingekauft.')}
+    ${done.length ? `<h2 class="section-title">Erledigt<button data-shop-clear>Entfernen</button></h2><div class="list card">${done.map(shopRow).join('')}</div>` : ''}`;
+}
+const shopRow = (i) => `<div class="row task${i.status === 'completed' ? ' done' : ''}" style="--c:var(--green)">
+  <button class="check" role="checkbox" aria-checked="${i.status === 'completed'}" aria-label="${esc(i.summary)} erledigt" data-shop="${esc(i.uid)}"></button>
+  <div class="main"><div class="title">${esc(i.summary)}</div></div></div>`;
+function wireShop() {
+  const f = $('#shop-add');
+  if (!f) return;
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const inp = $('input', f), text = inp.value.trim();
+    if (!text) return;
+    inp.value = '';
+    try { shop = { items: await api('/api/shop', { method: 'POST', body: { text } }), error: '', at: Date.now() }; haptic(); } catch (x) { inp.value = text; toast(x.message); }
+    renderNotesBody();
+    $('#shop-add input')?.focus();
+  };
+}
+async function toggleShop(uid) {
+  const it = shop.items?.find((i) => i.uid === uid);
+  if (!it) return;
+  const done = it.status !== 'completed';
+  it.status = done ? 'completed' : 'needs_action';
+  haptic();
+  renderNotesBody();
+  try { shop = { items: await api(`/api/shop/${encodeURIComponent(uid)}`, { method: 'POST', body: { done } }), error: '', at: Date.now() }; } catch (x) { it.status = done ? 'needs_action' : 'completed'; toast(x.message); }
+  renderNotesBody();
+}
+async function clearShop() {
+  try { shop = { items: await api('/api/shop/done', { method: 'DELETE' }), error: '', at: Date.now() }; haptic(); } catch (x) { toast(x.message); }
+  renderNotesBody();
+}
+
+/* ---------------------------------------------------------------- Zuhause: PC und andere Knöpfe aus Home Assistant */
+let pcState = { list: null, at: 0 }, pcBusy = false;
+function loadPc(force) {
+  if (pcBusy || (!force && Date.now() - pcState.at < 30e3)) return;
+  pcBusy = true;
+  api('/api/ha/pc').then((list) => { pcState = { list, at: Date.now() }; }, () => { pcState = { ...pcState, at: Date.now() }; })
+    .finally(() => { pcBusy = false; const el = $('#pc'); if (el) el.outerHTML = pcCard(); });
+}
+function pcCard() {
+  const ids = D.ha?.connected ? D.ha.pc : [];
+  if (!ids?.length) return '';
+  loadPc();
+  const list = ids.map((id) => pcState.list?.find((e) => e.id === id) || { id, name: id.split('.')[1].replace(/_/g, ' '), state: '' });
+  return `<div id="pc">${section('Zuhause')}<div class="pc-grid">${list.map((e) => {
+    const sw = e.id.startsWith('switch.'), on = e.state === 'on', gone = e.state === 'unavailable';
+    return `<button class="card pc-btn pressable${on ? ' on' : ''}" data-pc="${esc(e.id)}"${gone ? ' disabled' : ''}>${sw ? ICON.power : ICON.play}<span>${esc(e.name)}</span>
+      ${gone ? '<small>nicht erreichbar</small>' : sw && e.state ? `<small>${on ? 'An' : 'Aus'}</small>` : ''}</button>`;
+  }).join('')}</div></div>`;
+}
+async function runPc(id, el) {
+  el.disabled = true;
+  haptic();
+  try { await api(`/api/ha/pc/${encodeURIComponent(id)}`, { method: 'POST' }); toast(`${$('span', el).textContent}: ausgelöst`); } catch (x) { toast(x.message); }
+  el.disabled = false;
+  setTimeout(() => loadPc(true), 1500);
+}
+
+/* ---------------------------------------------------------------- Ticket (öffnet die offizielle App bzw. Website) */
+function ticketRow() {
+  const t = D.ticket;
+  if (!t?.url) return '';
+  const n = t.until ? daysBetween(today(), t.until) : null;
+  const sub = n == null ? 'Öffnen' : n < 0 ? 'abgelaufen' : n === 0 ? 'läuft heute ab' : n <= 7 ? `läuft in ${n} ${n === 1 ? 'Tag' : 'Tagen'} ab` : `bis ${F.short.format(parseDay(t.until))}`;
+  const href = /^(javascript|data|vbscript|file|blob):/i.test(t.url) ? '#' : t.url;
+  return `<a class="card bell-row ticket pressable" href="${esc(href)}"${/^https?:/i.test(href) ? ' target="_blank" rel="noopener"' : ''}>${ICON.ticket}<span class="main">${esc(t.name || 'Ticket')}</span><b class="${n != null && n <= 7 ? 'warn' : ''}">${esc(sub)}</b></a>`;
+}
+
 /* ---------------------------------------------------------------- Geburtstage */
 function nextBirthday(b) {
   for (let i = 0; i <= 366; i++) { const d = addDays(today(), i); if (Recur.birthdayOn(b, d)) return d; }
@@ -497,8 +709,10 @@ function renderHeute() {
     ${banners()}
     <div class="today-grid"><div class="col">
       ${heroHTML()}
+      ${timerCard()}
       ${bellRow()}
       ${wayCard()}
+      ${ticketRow()}
       ${holidayCard()}
       ${changes.length ? section('Vertretungen') + `<div class="list card">${changes.join('')}</div>` : ''}
       ${show ? section(show === t ? 'Tagesablauf' : dayName(show), 'kalender') + `<div class="list card">${agendaList(show)}</div>` : ''}
@@ -506,6 +720,7 @@ function renderHeute() {
       ${section('Fällig', 'aufgaben')}
       ${due.length ? `<div class="list card">${due.slice(0, 6).map(taskRow).join('')}</div>` : emptyCard('check', 'Für heute und morgen ist nichts fällig.')}
       ${msgs.length ? section('Nachrichten', 'schule') + `<div class="list card">${msgs.slice(0, 3).map(msgRow).join('')}</div>` : ''}
+      ${pcCard()}
       ${bdays.length ? `<h2 class="section-title">Geburtstage<button data-bdays>Alle</button></h2><div class="list card">${bdays.slice(0, 3).map(({ b, d }) => bdayItem(b, d)).join('')}</div>` : ''}
     </div></div>
     ${D.edupage.connected ? `<p class="footnote">EduPage aktualisiert ${esc(ago(D.snap?.updated))} · <button class="btn-link" data-refresh>Jetzt aktualisieren</button>${S().bells?.length ? ' · <button class="btn-link" data-bells>Klingelzeiten</button>' : ''}</p>` : ''}`;
@@ -685,10 +900,27 @@ async function toggleTask(key, btn) {
 }
 
 /* ---------------------------------------------------------------- Notizen */
+const NOTES = [['notizen', 'Notizen'], ['tafel', 'Tafelbilder'], ['einkauf', 'Einkauf']];
+let notesSeg = 'notizen', notesSegCtl = null;
 function renderNotizen() {
+  $('#view-notizen').innerHTML = `${largeTitle('Notizen', '')}${segHTML(NOTES, notesSeg, 'Bereich')}<div id="notes-body"></div>`;
+  notesSegCtl = Seg($('#view-notizen .seg'), (i) => { notesSeg = NOTES[i][0]; notesSegCtl.glide(i); renderNotesBody(); });
+  renderNotesBody();
+  if (tab === 'notizen') requestAnimationFrame(() => notesSegCtl.track(NOTES.findIndex(([k]) => k === notesSeg)));
+}
+function renderNotesBody() {
+  const el = $('#notes-body');
+  if (notesSeg === 'tafel') { el.innerHTML = photoGrid(D.db.photos); return; }
+  if (notesSeg === 'einkauf') { // Eingabe überlebt das Neuzeichnen nach dem Laden
+    const old = $('#shop-add input'), val = old?.value, focused = old && document.activeElement === old;
+    el.innerHTML = shopBody();
+    wireShop();
+    if (val) $('#shop-add input').value = val;
+    if (focused) $('#shop-add input')?.focus();
+    return;
+  }
   const notes = [...D.db.notes].sort((a, b) => (b.pinned - a.pinned) || (b.updated || '').localeCompare(a.updated || ''));
-  $('#view-notizen').innerHTML = `
-    ${largeTitle('Notizen', notes.length ? `${notes.length} ${notes.length === 1 ? 'Notiz' : 'Notizen'}` : 'Leer')}
+  el.innerHTML = `
     ${notes.length ? `<div class="notes-grid">${notes.map((n) => `
       <button class="card note pressable${n.id === justAdded ? ' appear' : ''}" data-note="${esc(n.id)}">
         <div class="title">${n.pinned ? ICON.pin : ''}${esc(n.title || n.body.split('\n')[0] || 'Neue Notiz')}</div>
@@ -943,11 +1175,12 @@ function birthdayForm(b) {
 }
 
 function newChooser() {
-  const tiles = [['reminder', 'Erinnerung', ICON.check], ['event', 'Termin', ICON.cal], ['note', 'Notiz', ICON.note], ['grade', 'Note', ICON.cap], ['birthday', 'Geburtstag', ICON.gift]];
+  const tiles = [['reminder', 'Erinnerung', ICON.check], ['event', 'Termin', ICON.cal], ['note', 'Notiz', ICON.note], ['grade', 'Note', ICON.cap], ['photo', 'Tafelbild', ICON.camera], ['timer', 'Lernzeit', ICON.timer], ['birthday', 'Geburtstag', ICON.gift]];
   openSheet('Neu', `<div class="new-grid">${tiles.map(([k, l, i]) => `<button class="card new-tile pressable" data-new="${k}">${i}<span>${l}</span></button>`).join('')}</div>`);
 }
-const NEW = { reminder: () => reminderForm(), event: () => eventForm(null, planDay), note: () => noteForm(), grade: () => gradeForm(), birthday: () => birthdayForm() };
-const ADD = { heute: newChooser, kalender: () => eventForm(null, planDay), aufgaben: () => reminderForm(), notizen: () => noteForm(),
+const NEW = { reminder: () => reminderForm(), event: () => eventForm(null, planDay), note: () => noteForm(), grade: () => gradeForm(), birthday: () => birthdayForm(), photo: () => pickPhoto(), timer: () => openTimer() };
+const ADD = { heute: newChooser, kalender: () => eventForm(null, planDay), aufgaben: () => reminderForm(),
+  notizen: () => (notesSeg === 'tafel' ? pickPhoto() : notesSeg === 'einkauf' ? $('#shop-add input')?.focus() : noteForm()),
   schule: () => (schoolSeg === 'noten' ? gradeForm() : composeMessage()) };
 const updateAdd = () => { $('#add').hidden = tab === 'schule' && (schoolSeg === 'lehrer' || (schoolSeg === 'nachrichten' && !D.edupage.connected)); };
 
@@ -956,6 +1189,7 @@ function openLesson(date, i) {
   const l = lessonsOn(date)[i];
   if (!l) return;
   const hw = tasks().filter((t) => t.due === date && t.subject && t.subject === l.subject);
+  const pics = D.db.photos.filter((p) => p.subject === l.subject && p.date === date);
   const kv = [['Tag', F.long.format(parseDay(date))], ['Zeit', `${l.start} – ${l.end} Uhr`], ['Stunde', l.period ? `${l.period}.` : ''],
     ['Raum', l.rooms.join(', ')], ['Lehrkraft', l.teachers.join(', ')], ['Gruppe', l.groups.join(', ')], ['Thema', l.topic]].filter(([, v]) => v);
   openSheet(l.subject, `
@@ -963,7 +1197,10 @@ function openLesson(date, i) {
     <div class="card"><dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl></div>
     ${l.homework?.length ? `<p class="label-sm">Hausaufgabe fällig</p>${l.homework.map((h) => `<div class="card bubble">${linkify(h)}</div>`).join('')}` : ''}
     ${l.online ? `<a class="btn-primary pressable" style="line-height:52px" href="${esc(safeUrl(l.online))}" target="_blank" rel="noopener">Online-Stunde öffnen</a>` : ''}
-    ${hw.length ? `<p class="label-sm">Fällig in dieser Stunde</p><div class="list card">${hw.map(taskRow).join('')}</div>` : ''}`);
+    ${hw.length ? `<p class="label-sm">Fällig in dieser Stunde</p><div class="list card">${hw.map(taskRow).join('')}</div>` : ''}
+    <p class="label-sm">Tafelbilder</p>
+    ${pics.length ? `<div class="photo-strip">${pics.map((p) => `<button class="photo-thumb" data-photo="${esc(p.id)}"><img src="${photoUrl(p)}" alt="${esc(p.caption || 'Tafelbild')}" loading="lazy"></button>`).join('')}</div>` : ''}
+    <button class="btn-plain pressable" data-new-photo="${esc(l.subject)}" data-date="${date}">+ Tafelbild aufnehmen</button>`);
 }
 
 function openEduTask(id) {
@@ -1295,6 +1532,14 @@ async function openSettings() {
       `<button class="row" data-choose="school"><div class="main"><div class="title">Haltestelle Schule</div></div><div class="trail">${esc(D.stops?.school?.name || 'Wählen')}</div>${ICON.chev}</button>`,
       fRow('Wecker-Vorlauf', `<select id="wake-lead">${[20, 30, 45, 60, 75, 90, 120].map((v) => `<option value="${v}"${D.wakeLead === v ? ' selected' : ''}>${v} Min.</option>`).join('')}</select>`))}
     <p class="footnote" style="margin-top:8px;text-align:left">Fahrplan mit Echtzeit aus dem bayerischen Nahverkehr (Bahnland Bayern), Wetter von Open-Meteo. Der Wecker richtet sich nach der Abfahrt zur ersten Stunde, ohne Haltestellen nach dem Unterrichtsbeginn.</p>
+    <p class="label-sm">Ticket</p>
+    <form class="form" id="ticket-form">${group(fText('name', 'Name, z. B. Allgäu-Walser-Pass', D.ticket?.name, 'maxlength="80"'),
+      fText('url', 'Link zum Ticket (App oder Website)', D.ticket?.url, 'inputmode="url" autocapitalize="off" spellcheck="false" maxlength="1000"'),
+      fRow('Gültig bis', `<input type="date" name="until" value="${esc(D.ticket?.until)}">`))}
+      <button class="btn-plain pressable" type="submit">Ticket sichern</button></form>
+    <p class="footnote" style="margin-top:0;text-align:left">Auf „Heute“ erscheint ein Knopf, der dein Ticket in der offiziellen App oder auf der Website öffnet. Vor dem Ablauf kommt eine Erinnerung (1 Woche, 1 Tag vorher und am Tag).</p>
+    <p class="label-sm">Home Assistant</p>
+    <div id="ha-section">${haSection()}</div>
     <p class="label-sm">Darstellung</p>
     <div class="card" style="padding:14px 16px">
       <div class="sub" style="margin-bottom:8px">Erscheinungsbild</div>
@@ -1345,6 +1590,11 @@ async function openSettings() {
     try { setData(await api('/api/settings', { method: 'POST', body: { lessonPush: e.target.checked } })); } catch (x) { e.target.checked = !e.target.checked; toast(x.message); }
   };
   $$('#sheet [data-choose]').forEach((b) => { b.onclick = () => openChooser(b.dataset.choose); });
+  $('#ticket-form').onsubmit = async (e) => {
+    e.preventDefault();
+    try { setData(await api('/api/settings', { method: 'POST', body: { ticket: Object.fromEntries(new FormData(e.target)) } })); haptic(); toast('Ticket gesichert'); } catch (x) { toast(x.message); }
+  };
+  wireHa();
   $('#wake-lead').onchange = async (e) => {
     try { setData(await api('/api/settings', { method: 'POST', body: { wakeLead: Number(e.target.value) } })); haptic(); } catch (x) { toast(x.message); }
   };
@@ -1397,6 +1647,59 @@ async function openSettings() {
       .finally(() => { toggle.disabled = false; });
   };
   test.onclick = () => api('/api/push/test', { method: 'POST' }).then((r) => say(r.ok ? 'Gesendet – kommt gleich an.' : 'Kein Gerät registriert.')).catch((e) => say(e.message));
+}
+
+// Home Assistant: verbinden, Einkaufsliste wählen, freigegebene Knöpfe (nur diese darf die App auslösen)
+function haSection() {
+  const h = D.ha || {};
+  if (!h.connected) {
+    return `<form class="form" id="ha-form" autocomplete="off">
+      ${group(fText('url', 'Adresse, z. B. https://xyz.ui.nabu.casa', '', 'inputmode="url" autocapitalize="off" spellcheck="false" required'), fText('token', 'Langlebiges Zugriffstoken', '', 'type="password" autocomplete="off" required'))}
+      <p class="form-error" role="alert"></p>
+      <button class="btn-primary pressable" type="submit">Verbinden</button>
+      <p class="footnote" style="text-align:left">Für Einkaufsliste (z. B. Cookidoo) und PC-Knöpfe. Token: In Home Assistant unten links auf dein Profil → Sicherheit → „Langlebige Zugriffstoken“ → Erstellen. Die Adresse muss aus dem Internet erreichbar sein (z. B. Nabu Casa) – „homeassistant.local“ reicht nicht.</p></form>`;
+  }
+  return `${group(`<div class="row"><div class="main"><div class="title">Verbunden</div><div class="sub">${esc(h.url)}</div></div></div>`,
+      fRow('Einkaufsliste', `<select id="ha-todo"><option value="${esc(h.todo)}">${esc(h.todo || 'Lädt …')}</option></select>`),
+      '<button class="row" id="ha-off" type="button"><span class="btn-plain danger">Trennen</span></button>')}
+    <p class="label-sm">Knöpfe auf „Heute“</p>
+    <div class="list card" id="ha-pc"><div class="row"><div class="spinner"></div></div></div>
+    <p class="footnote" style="margin-top:8px;text-align:left">Nur was du hier einschaltest, kann die App auslösen. PC einschalten: Integration „Wake on LAN“. Programme öffnen, sperren, herunterfahren: HASS.Agent auf dem PC – dessen Befehle erscheinen hier als Knöpfe.</p>`;
+}
+function wireHa() {
+  const f = $('#ha-form');
+  if (f) {
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = $('button[type=submit]', f), err = $('.form-error', f);
+      btn.disabled = true;
+      btn.textContent = 'Verbinde …';
+      err.textContent = '';
+      try { setData(await api('/api/ha', { method: 'POST', body: Object.fromEntries(new FormData(f)) })); haptic(); $('#ha-section').innerHTML = haSection(); wireHa(); }
+      catch (x) { err.textContent = x.message; btn.disabled = false; btn.textContent = 'Verbinden'; }
+    };
+    return;
+  }
+  $('#ha-off').onclick = async (e) => {
+    const b = e.currentTarget;
+    if (!b.dataset.sure) { b.dataset.sure = '1'; $('span', b).textContent = 'Wirklich trennen?'; return; }
+    try { setData(await api('/api/ha', { method: 'DELETE' })); $('#ha-section').innerHTML = haSection(); wireHa(); } catch (x) { toast(x.message); }
+  };
+  api('/api/ha/entities').then((list) => {
+    const sel = $('#ha-todo'), box = $('#ha-pc');
+    if (!sel || !box) return;
+    const todos = list.filter((x) => x.id.startsWith('todo.')), pcs = list.filter((x) => !x.id.startsWith('todo.'));
+    sel.innerHTML = `<option value="">Keine</option>${todos.map((x) => `<option value="${esc(x.id)}"${x.id === D.ha.todo ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}`;
+    sel.onchange = async () => { try { setData(await api('/api/settings', { method: 'POST', body: { haTodo: sel.value } })); shop = { items: null, error: '', at: 0 }; haptic(); } catch (x) { toast(x.message); } };
+    box.innerHTML = pcs.length ? pcs.map((x) => `<label class="row"><div class="main"><div class="title">${esc(x.name)}</div><div class="sub">${esc(x.id)}</div></div>
+        <input type="checkbox" class="switch" value="${esc(x.id)}"${D.ha.pc.includes(x.id) ? ' checked' : ''} aria-label="${esc(x.name)} auf Heute zeigen"></label>`).join('')
+      : '<div class="row"><div class="main"><div class="sub">Keine Knöpfe, Skripte oder Schalter gefunden.</div></div></div>';
+    $$('input', box).forEach((c) => {
+      c.onchange = async () => {
+        try { setData(await api('/api/settings', { method: 'POST', body: { haPc: $$('input:checked', box).map((x) => x.value) } })); pcState = { list: null, at: 0 }; haptic(); } catch (x) { c.checked = !c.checked; toast(x.message); }
+      };
+    });
+  }).catch((x) => { const box = $('#ha-pc'); if (box) box.innerHTML = `<div class="row"><div class="main"><div class="sub warn-text">${esc(x.message)}</div></div></div>`; });
 }
 
 // Ort (Wetter) oder Haltestelle suchen und übernehmen
@@ -1560,6 +1863,7 @@ function selectTab(name, { fromBar = false } = {}) {
   if (name === 'kalender') syncPlan();
   if (name === 'aufgaben') { taskSeg.measure(); taskSeg.track(FILTERS.findIndex(([k]) => k === taskFilter)); }
   if (name === 'schule') { schoolSegCtl.measure(); schoolSegCtl.track(SCHOOL.findIndex(([k]) => k === schoolSeg)); }
+  if (name === 'notizen') { notesSegCtl.measure(); notesSegCtl.track(NOTES.findIndex(([k]) => k === notesSeg)); }
 }
 
 /* Kompakter Titel + Scroll-Kante erscheinen, sobald der große Titel unter die Leiste rutscht */
@@ -1573,7 +1877,7 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-bday],[data-bdays],[data-like],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (el.id === 'me' || 'settings' in ds) return openSettings();
@@ -1583,6 +1887,12 @@ document.addEventListener('click', async (e) => {
   if ('bells' in ds) return openBells();
   if (ds.bday) return birthdayForm(D.db.birthdays.find((x) => x.id === ds.bday));
   if ('bdays' in ds) return openBirthdays();
+  if (ds.shop) return toggleShop(ds.shop);
+  if ('shopClear' in ds) return clearShop();
+  if (ds.photo) return openPhoto(ds.photo);
+  if (ds.newPhoto !== undefined) return pickPhoto({ subject: ds.newPhoto, date: ds.date });
+  if ('timer' in ds) return openTimer();
+  if (ds.pc) return runPc(ds.pc, el);
   if (ds.star) return toggleStar(ds.star, el);
   if (ds.like) return toggleLike(ds.like);
   if (ds.confirm) return confirmRead(ds.confirm, el);

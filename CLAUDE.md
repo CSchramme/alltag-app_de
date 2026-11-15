@@ -15,6 +15,10 @@ Web-App/PWA „Alltag“ für Schule (EduPage) + Privates (Erinnerungen, Termine
 - Schulweg: Wetter von Open-Meteo (Server holt stündlich in `data/weather.json`, CSP verbietet Abrufe vom Browser), Fahrplan mit Echtzeit von `bahnland-bayern.de/efa` (rapidJSON: STOPFINDER → `locations[].id`, TRIP_REQUEST2 mit `itdTripDateTimeDepArr=arr|dep`, Zeiten in UTC). db.transport.rest ist tot, bahn.de blockt.
 - Kurzbefehle: `/api/wake` (Abfahrt zur 1. Stunde minus Vorlauf, sonst Beginn minus Vorlauf; leer ohne Schule) und `/api/focus` (Schulschluss) liefern nur „HH:MM“, lesbar mit Widget-Schlüssel.
 - Geburtstage: db-Art `birthdays`, Regel `birthdayOn`/`ageOn` in recur.js (29.2. → 28.2., Jahr 1900 = unbekannt).
+- Tafelbilder: Browser verkleinert auf JPEG (max. 2200 px), `POST /api/photos?subject&date&caption` mit Rohdaten, Dateien in `data/photos/<uuid>.jpg`, nur angemeldet abrufbar; CSP erlaubt dafür `img-src blob:`.
+- Lernzeit: `state.timer` {subject, minutes, start, end}; Ende meldet `notify()` (minütlich) per Push und schreibt `db.sessions`; offene App stoppt selbst bei 0.
+- Home Assistant: `config.ha` {url, token, todo, pc[]} – Token geht nie an den Browser; Einkauf über `todo.get_items?return_response`/`add_item`/`update_item`/`remove_completed_items`; PC-Knöpfe nur aus der Freigabeliste (button/input_button → press, script → turn_on, switch → toggle). Stand 11/2026: im HA des Nutzers nur `todo.einkaufsliste`, noch kein Cookidoo, keine PC-Entitäten.
+- Ticket: `config.ticket` {name, url, until} – nur ein Knopf zur offiziellen App/Website (Ticket-Optik wird bewusst nicht nachgebaut), Erinnerung 7/1/0 Tage vorher.
 - `main.py` = ursprüngliches Python-CLI-Skript (nicht mehr Teil der App).
 - Demo: `npm run demo` (DEMO=1, Passwort `demo`, Daten in `data-demo/`). Tests: `npm test`.
 

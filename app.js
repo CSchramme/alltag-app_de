@@ -40,7 +40,9 @@ const VAPID = once('vapid.json', generateVapidKeys);
 if (DEMO && !load('db.json', null)) save('db.json', demo.db());
 
 const state = () => ({ seen: [], subs: [], done: {}, eduSeeded: false, ...load('state.json', {}) });
-const db = () => ({ reminders: [], events: [], notes: [], grades: [], birthdays: [], ...load('db.json', {}) });
+const db = () => ({ reminders: [], events: [], notes: [], grades: [], birthdays: [], photos: [], sessions: [], ...load('db.json', {}) });
+const PHOTOS = path.join(DATA, 'photos'); // Tafelbilder als JPEG, nur angemeldet abrufbar
+fs.mkdirSync(PHOTOS, { recursive: true, mode: 0o700 });
 
 /* ------------------------------------------------------------------ Hilfen */
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
@@ -56,13 +58,17 @@ function send(res, status, body, headers = {}) {
   res.end(json ? JSON.stringify(body) : body);
 }
 
-function readJson(req) {
+function readBody(req, max) {
   return new Promise((resolve, reject) => {
     let size = 0; const chunks = [];
-    req.on('data', (c) => { size += c.length; if (size > 200e3) { reject(Object.assign(new Error('zu groß'), { status: 413 })); req.destroy(); } else chunks.push(c); });
-    req.on('end', () => { try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks)) : {}); } catch { reject(Object.assign(new Error('kein JSON'), { status: 400 })); } });
+    req.on('data', (c) => { size += c.length; if (size > max) { reject(Object.assign(new Error('zu groß'), { status: 413 })); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
+}
+async function readJson(req) {
+  const buf = await readBody(req, 200e3);
+  try { return buf.length ? JSON.parse(buf) : {}; } catch { throw Object.assign(new Error('kein JSON'), { status: 400 }); }
 }
 
 const cookies = (req) => Object.fromEntries((req.headers.cookie || '').split(';').map((c) => c.trim().split('=')).filter(([k]) => k));
@@ -94,6 +100,7 @@ const KINDS = {
   notes: { title: F.text(200), body: F.text(50000), subject: F.text(80), pinned: F.bool() },
   grades: { subject: F.text(80, true), value: F.text(12, true), weight: F.num(0, 10, 1), title: F.text(120), date: F.date() },
   birthdays: { name: F.text(120, true), date: F.date(true), before: F.num(0, 30, 3), notes: F.text(1000) },
+  photos: { subject: F.text(80), date: F.date(), caption: F.text(300) }, // anlegen nur über POST /api/photos (mit Bild)
 };
 const clean = (kind, body) => Object.fromEntries(Object.entries(KINDS[kind]).map(([k, f]) => [k, f(body[k])]));
 
@@ -157,6 +164,10 @@ function news(snap, data, done, now) {
         : { title: `${b.name} hat heute Geburtstag`, body: age ? `wird ${age} – Glückwünsche nicht vergessen!` : 'Glückwünsche nicht vergessen!', url: '/#heute', tag: `bday-${b.id}` }]);
     }
   }
+  const ticket = load('config.json', {}).ticket;
+  if (ticket?.until && now.getHours() >= 9) for (const n of [7, 1, 0]) {
+    if (isoDay(addDays(now, n)) === ticket.until) out.push([`tkt|${ticket.until}|${n}`, { title: `${ticket.name || 'Ticket'} läuft ${n ? (n === 1 ? 'morgen' : `in ${n} Tagen`) : 'heute'} ab`, body: 'Rechtzeitig verlängern, damit du morgens nicht ohne dastehst.', url: '/#heute', tag: 'ticket' }]);
+  }
   if (now.getHours() >= 17) { // Abendübersicht für morgen
     const due = [...(snap?.tasks || []).filter((t) => t.kind !== 'event' && t.due === tomorrow && !(done[t.id] ?? t.done)),
       ...data.reminders.filter((r) => r.due === tomorrow && !r.done)];
@@ -176,7 +187,9 @@ async function notify(snap) {
   const items = news(snap && { ...snap, tasks: [...snap.tasks, ...study(snap, st.done)] }, db(), st.done, new Date());
   const seen = new Set(st.seen), quiet = !st.eduSeeded; // erster EduPage-Abgleich: Bestand still übernehmen
   let fresh = items.filter(([k]) => !seen.has(k));
-  const changed = fresh.length || (snap && !st.eduSeeded);
+  const timer = st.timer && Date.now() >= st.timer.end ? st.timer : null;
+  if (timer) delete st.timer;
+  const changed = fresh.length || (snap && !st.eduSeeded) || timer;
   st.seen = [...st.seen, ...fresh.map(([k]) => k)].slice(-4000);
   if (snap) st.eduSeeded = true;
   if (changed) save('state.json', st); // läuft minütlich – nur schreiben, wenn sich etwas tut
@@ -187,6 +200,34 @@ async function notify(snap) {
     fresh.push(['', { title: `${subs.length} neue Vertretungen`, body: `${subs.slice(0, 3).map(([, p]) => p.body).join(' · ')} …`, url: '/#kalender', tag: 'subs' }]);
   }
   for (const [, p] of fresh) await push(p);
+  if (timer) {
+    logSession(timer.subject, timer.minutes, timer.start);
+    await push({ title: 'Lernzeit geschafft', body: `${timer.subject || 'Lernen'} · ${timer.minutes} Min. – Zeit für eine Pause.`, url: '/#heute', tag: 'timer' });
+  }
+}
+const logSession = (subject, minutes, start) => {
+  const d = db();
+  d.sessions = [...d.sessions, { id: crypto.randomUUID(), subject, minutes, date: isoDay(new Date(start)) }].slice(-1000);
+  save('db.json', d);
+};
+
+/* ------------------------------------------------------------------ Home Assistant (Einkaufsliste, PC-Knöpfe) */
+const HA_PC = /^(button|input_button|script|switch)\.[a-z0-9_]+$/;
+async function ha(pathname, body, cfg = load('config.json', {}).ha) {
+  if (!cfg?.url || !cfg?.token) throw bad('Home Assistant ist nicht verbunden');
+  if (DEMO) return demo.ha(pathname, body);
+  const r = await fetch(`${cfg.url}${pathname}`, { method: body ? 'POST' : 'GET', body: body && JSON.stringify(body), signal: AbortSignal.timeout(10000),
+    headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' } }).catch(() => { throw bad('Home Assistant nicht erreichbar'); });
+  if (r.status === 401) throw bad('Home Assistant: Token ungültig');
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw bad(`Home Assistant: ${j.message || `Fehler ${r.status}`}`);
+  return j;
+}
+async function shopItems() {
+  const todo = load('config.json', {}).ha?.todo;
+  if (!todo) throw bad('Keine Einkaufsliste gewählt');
+  const j = await ha('/api/services/todo/get_items?return_response', { entity_id: todo });
+  return (j.service_response?.[todo]?.items || []).map((i) => ({ uid: i.uid, summary: i.summary, status: i.status }));
 }
 
 /* ------------------------------------------------------------------ Abgleich mit EduPage */
@@ -384,7 +425,8 @@ setTimeout(() => sync(load('snapshot.json', null)?.v === SNAPSHOT_VERSION ? 10 *
 /* ------------------------------------------------------------------ API */
 function settings() {
   const c = load('config.json', {});
-  return { state: c.state || 'BY', lessonPush: !!c.lessonPush, place: c.place || null, stops: c.stops || {}, wakeLead: c.wakeLead ?? 60 };
+  return { state: c.state || 'BY', lessonPush: !!c.lessonPush, place: c.place || null, stops: c.stops || {}, wakeLead: c.wakeLead ?? 60, ticket: c.ticket || null,
+    ha: c.ha ? { connected: true, url: c.ha.url, todo: c.ha.todo || '', pc: c.ha.pc || [] } : { connected: false } }; // Token bleibt auf dem Server
 }
 function payload() {
   const st = state(), snap = load('snapshot.json', null), cfg = load('config.json', {}).edupage;
@@ -392,6 +434,7 @@ function payload() {
     app: APP, demo: DEMO, status: load('status.json', {}),
     ...settings(), holidays: load('holidays.json', null)?.list || [],
     weather: DEMO ? demo.weather() : load('weather.json', null)?.hours || [],
+    timer: st.timer || null,
     edupage: DEMO ? { connected: true, school: 'demo', user: 'demo' } : cfg ? { connected: true, school: cfg.school, user: cfg.user } : { connected: false },
     snap: snap && {
       ...snap,
@@ -521,6 +564,7 @@ const routes = {
 
   'POST /api/items/:kind': async (req, res, kind) => {
     if (!KINDS[kind]) return send(res, 404, { error: 'unbekannt' });
+    if (kind === 'photos') throw bad('Fotos bitte über /api/photos hochladen');
     const item = { id: crypto.randomUUID(), ...clean(kind, await readJson(req)), updated: new Date().toISOString() };
     const d = db(); d[kind].push(item); save('db.json', d);
     send(res, 200, item);
@@ -535,7 +579,9 @@ const routes = {
   },
   'DELETE /api/items/:kind/:id': (req, res, kind, id) => {
     if (!KINDS[kind]) return send(res, 404, { error: 'unbekannt' });
-    const d = db(); d[kind] = d[kind].filter((x) => x.id !== id); save('db.json', d);
+    const d = db();
+    if (kind === 'photos' && d.photos.some((x) => x.id === id)) fs.rmSync(path.join(PHOTOS, `${id}.jpg`), { force: true }); // id stammt vom Server
+    d[kind] = d[kind].filter((x) => x.id !== id); save('db.json', d);
     send(res, 200, { ok: true });
   },
 
@@ -584,6 +630,19 @@ const routes = {
       c.stops = { ...c.stops, [k]: s ? { id: String(s.id), name: F.text(120, true)(s.name) } : null };
     }
     if (b.wakeLead !== undefined) c.wakeLead = F.num(0, 240, 60)(b.wakeLead);
+    if (b.haTodo !== undefined && c.ha) {
+      if (b.haTodo && !/^todo\.[a-z0-9_]+$/.test(b.haTodo)) throw bad('Ungültige Liste');
+      c.ha.todo = b.haTodo || '';
+    }
+    if (b.haPc !== undefined && c.ha) {
+      if (!Array.isArray(b.haPc) || b.haPc.length > 12 || !b.haPc.every((x) => HA_PC.test(x))) throw bad('Ungültige Auswahl');
+      c.ha.pc = b.haPc;
+    }
+    if (b.ticket !== undefined) {
+      const t = { name: F.text(80)(b.ticket?.name), url: F.text(1000)(b.ticket?.url), until: F.date()(b.ticket?.until) };
+      if (t.url && (!/^[a-z][a-z0-9+.-]*:\S+$/i.test(t.url) || /^(javascript|data|vbscript|file|blob):/i.test(t.url))) throw bad('Bitte einen gültigen Link eintragen');
+      c.ticket = t.name || t.url || t.until ? t : null;
+    }
     save('config.json', c);
     if (b.state) await refreshHolidays(true);
     if (b.place) await refreshWeather(true);
@@ -611,6 +670,84 @@ const routes = {
   // Kurzbefehle: nur die Uhrzeit als Text (leer = keine Schule) – für „Wecker erstellen“ bzw. „Fokus … bis“
   'GET /api/wake': async (req, res) => send(res, 200, await wakeTime(isoDay(addDays(new Date(), new URL(req.url, 'http://x').searchParams.get('day') === 'heute' ? 0 : 1)))),
   'GET /api/focus': (req, res) => send(res, 200, schoolTimes(isoDay(addDays(new Date(), new URL(req.url, 'http://x').searchParams.get('day') === 'morgen' ? 1 : 0)))?.end || ''),
+  // Tafelbilder: Bild als JPEG im Body, Angaben in der Adresse
+  'POST /api/photos': async (req, res) => {
+    const u = new URL(req.url, 'http://x').searchParams, buf = await readBody(req, 8e6);
+    if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8 || buf[2] !== 0xff) throw bad('Bitte ein Foto (JPEG) senden');
+    const item = { id: crypto.randomUUID(), ...clean('photos', { subject: u.get('subject'), date: u.get('date'), caption: u.get('caption') }), updated: new Date().toISOString() };
+    fs.writeFileSync(path.join(PHOTOS, `${item.id}.jpg`), buf, { mode: 0o600 });
+    const d = db(); d.photos.push(item); save('db.json', d);
+    send(res, 200, item);
+  },
+  'GET /api/photos/:id': (req, res, id) => {
+    if (!/^[0-9a-f-]{36}$/.test(id)) return send(res, 404, { error: 'nicht gefunden' });
+    fs.readFile(path.join(PHOTOS, `${id}.jpg`), (err, buf) => {
+      if (err) return send(res, 404, { error: 'nicht gefunden' });
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+      res.end(buf);
+    });
+  },
+
+  // Lernzeit (Fokus-Timer): Ende meldet der Server per Mitteilung, auch wenn die App zu ist
+  'POST /api/timer': async (req, res) => {
+    const b = await readJson(req), st = state(), minutes = F.num(1, 180, 25)(b.minutes);
+    st.timer = { subject: F.text(80)(b.subject), minutes, start: Date.now(), end: Date.now() + minutes * 60e3 };
+    save('state.json', st);
+    send(res, 200, payload());
+  },
+  'POST /api/timer/stop': (req, res) => {
+    const st = state(), t = st.timer;
+    if (t) {
+      delete st.timer; save('state.json', st);
+      const m = Math.min(t.minutes, Math.round((Date.now() - t.start) / 60e3));
+      if (m >= 1) logSession(t.subject, m, t.start);
+    }
+    send(res, 200, payload());
+  },
+
+  // Home Assistant verbinden (Adresse + langlebiges Zugriffstoken), Liste und Knöpfe wählen
+  'POST /api/ha': async (req, res) => {
+    const b = await readJson(req), old = load('config.json', {}).ha;
+    const url = String(b.url || '').trim().replace(/\/+$/, ''), token = String(b.token || '').trim() || old?.token || '';
+    if (!/^https?:\/\/[^\s/?#]+(\/[^\s?#]*)?$/.test(url) || !token) throw bad('Bitte Adresse und Zugriffstoken angeben.');
+    await ha('/api/', null, { url, token });
+    save('config.json', { ...load('config.json', {}), ha: { url, token, todo: old?.todo || '', pc: old?.pc || [] } });
+    send(res, 200, payload());
+  },
+  'DELETE /api/ha': (req, res) => {
+    const c = load('config.json', {}); delete c.ha; save('config.json', c);
+    send(res, 200, payload());
+  },
+  'GET /api/ha/entities': async (req, res) => {
+    const list = await ha('/api/states');
+    send(res, 200, list.filter((e) => /^todo\./.test(e.entity_id) || HA_PC.test(e.entity_id))
+      .map((e) => ({ id: e.entity_id, name: e.attributes?.friendly_name || e.entity_id, state: e.state })).sort((a, b) => a.name.localeCompare(b.name, 'de')));
+  },
+  'GET /api/ha/pc': async (req, res) => {
+    const ids = load('config.json', {}).ha?.pc || [];
+    send(res, 200, await Promise.all(ids.map((id) => ha(`/api/states/${id}`).then((e) => ({ id, name: e.attributes?.friendly_name || id, state: e.state }), () => ({ id, name: id, state: 'unavailable' })))));
+  },
+  'POST /api/ha/pc/:id': async (req, res, id) => {
+    if (!(load('config.json', {}).ha?.pc || []).includes(id)) throw bad('Dieser Knopf ist nicht freigegeben'); // nur vorher gewählte Aktionen
+    const domain = id.split('.')[0], service = { button: 'press', input_button: 'press', script: 'turn_on', switch: 'toggle' }[domain];
+    await ha(`/api/services/${domain}/${service}`, { entity_id: id });
+    send(res, 200, { ok: true });
+  },
+  'GET /api/shop': async (req, res) => send(res, 200, await shopItems()),
+  'POST /api/shop': async (req, res) => {
+    const text = F.text(200, true)((await readJson(req)).text);
+    await ha('/api/services/todo/add_item', { entity_id: load('config.json', {}).ha?.todo, item: text });
+    send(res, 200, await shopItems());
+  },
+  'POST /api/shop/:uid': async (req, res, uid) => {
+    const { done } = await readJson(req);
+    await ha('/api/services/todo/update_item', { entity_id: load('config.json', {}).ha?.todo, item: uid, status: done === true ? 'completed' : 'needs_action' });
+    send(res, 200, await shopItems());
+  },
+  'DELETE /api/shop/done': async (req, res) => {
+    await ha('/api/services/todo/remove_completed_items', { entity_id: load('config.json', {}).ha?.todo });
+    send(res, 200, await shopItems());
+  },
   'GET /api/push/key': (req, res) => send(res, 200, { key: VAPID.publicKey }),
   'POST /api/push/subscribe': async (req, res) => {
     const s = await readJson(req);
@@ -633,7 +770,7 @@ const routes = {
 };
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.json': 'application/json', '.ico': 'image/x-icon' };
-const CSP = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+const CSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
 function serveStatic(req, res, pathname) {
   let rel;

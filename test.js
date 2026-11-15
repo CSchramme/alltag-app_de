@@ -214,6 +214,39 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const bd = await (await auth('/api/items/birthdays', { method: 'POST', body: JSON.stringify({ name: 'Oma', date: '1950-07-01', before: 99 }) })).json();
     assert.equal(bd.before, 30);
     assert.equal((await auth('/api/items/birthdays', { method: 'POST', body: JSON.stringify({ name: 'Ohne Datum' }) })).status, 400);
+    // Tafelbilder: nur JPEG, nur angemeldet, Löschen entfernt die Datei
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 0xff, 0xd9]);
+    const ph = await (await auth('/api/photos?subject=Mathe&date=2026-11-16&caption=Tafel', { method: 'POST', body: jpeg, headers: { 'Content-Type': 'image/jpeg' } })).json();
+    assert.equal(ph.subject, 'Mathe');
+    const img = await auth(`/api/photos/${ph.id}`);
+    assert.equal(img.headers.get('content-type'), 'image/jpeg');
+    assert.deepEqual(Buffer.from(await img.arrayBuffer()), jpeg);
+    assert.equal((await call(`/api/photos/${ph.id}`)).status, 401);
+    assert.equal((await auth('/api/photos', { method: 'POST', body: 'kein Bild' })).status, 400);
+    assert.equal((await auth('/api/items/photos', { method: 'POST', body: '{}' })).status, 400);
+    assert.equal((await auth('/api/photos/..%2Fsecret.json')).status, 404);
+    assert.equal((await auth(`/api/items/photos/${ph.id}`, { method: 'DELETE' })).status, 200);
+    assert.equal((await auth(`/api/photos/${ph.id}`)).status, 404);
+    // Lernzeit starten und beenden (unter 1 Minute wird nichts gezählt)
+    assert.equal((await (await auth('/api/timer', { method: 'POST', body: JSON.stringify({ subject: 'Mathe', minutes: 999 }) })).json()).timer.minutes, 180);
+    const stopped = await (await auth('/api/timer/stop', { method: 'POST', body: '{}' })).json();
+    assert.equal(stopped.timer, null);
+    assert.ok(!stopped.db.sessions.some((s) => s.subject === 'Mathe' && s.date === isoDay(new Date()) && s.minutes > 25));
+    // Ticket: nur echte Links
+    assert.equal((await auth('/api/settings', { method: 'POST', body: JSON.stringify({ ticket: { name: 'Pass', url: 'javascript:alert(1)' } }) })).status, 400);
+    assert.equal((await (await auth('/api/settings', { method: 'POST', body: JSON.stringify({ ticket: { name: 'Pass', url: 'https://example.org/ticket', until: '2027-01-31' } }) })).json()).ticket.until, '2027-01-31');
+    // Home Assistant (Demo): Token verlässt den Server nie, nur freigegebene Knöpfe
+    const hc = await auth('/api/ha', { method: 'POST', body: JSON.stringify({ url: 'https://ha.example/', token: 'geheimes-token' }) });
+    const hcText = await hc.text();
+    assert.equal(hc.status, 200);
+    assert.ok(!hcText.includes('geheimes-token') && JSON.parse(hcText).ha.url === 'https://ha.example');
+    assert.equal((await auth('/api/settings', { method: 'POST', body: JSON.stringify({ haPc: ['light.wohnzimmer'] }) })).status, 400);
+    assert.equal((await auth('/api/settings', { method: 'POST', body: JSON.stringify({ haPc: ['switch.pc'], haTodo: 'todo.cookidoo_einkaufsliste' }) })).status, 200);
+    assert.equal((await auth('/api/ha/pc/button.pc_sperren', { method: 'POST', body: '{}' })).status, 400);
+    assert.equal((await auth('/api/ha/pc/switch.pc', { method: 'POST', body: '{}' })).status, 200);
+    assert.equal((await (await auth('/api/ha/pc')).json())[0].state, 'on');
+    const shopList = await (await auth('/api/shop', { method: 'POST', body: JSON.stringify({ text: 'Eier' }) })).json();
+    assert.ok(shopList.some((i) => i.summary === 'Eier'));
     // Siri schreibt Schul-Kürzel aus
     const td = new Date(); const tdIso = `${td.getFullYear()}-${String(td.getMonth() + 1).padStart(2, '0')}-${String(td.getDate()).padStart(2, '0')}`;
     await auth('/api/items/events', { method: 'POST', body: JSON.stringify({ title: 'SchA Mathe und PLN Physik', date: tdIso }) });

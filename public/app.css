@@ -505,6 +505,57 @@ button.banner { display: flex; text-align: left; }
 .bday.today .title { color: var(--pink); }
 .bday .cake { font-size: 22px; }
 
+/* ---------------------------------------------------------------- Tafelbilder */
+.photo-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.photo { display: block; overflow: hidden; padding: 0; text-align: left; }
+.photo img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--fill); }
+.photo .cap { display: grid; gap: 1px; padding: 8px 12px 10px; font-size: 13px; letter-spacing: -.08px; }
+.photo .cap b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.photo .cap span { flex: none; color: var(--label2); }
+.photo-full { display: block; width: 100%; max-height: 50vh; margin-bottom: 12px; object-fit: contain; border-radius: 16px; background: var(--fill); }
+.photo-strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; }
+.photo-thumb { flex: none; width: 104px; height: 78px; overflow: hidden; border-radius: 12px; background: var(--fill); }
+.photo-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+
+/* ---------------------------------------------------------------- Lernzeit */
+.ring { flex: none; transform: rotate(-90deg); }
+.ring circle { fill: none; stroke: var(--fill); stroke-width: 4; }
+.ring .fill { stroke: var(--c, var(--teal)); stroke-linecap: round; stroke-dasharray: 100; transition: stroke-dashoffset 1s linear; }
+.timer-card { display: flex; align-items: center; gap: 14px; width: 100%; margin-top: 12px; padding: 12px 16px; text-align: left; }
+.timer-card .main { flex: 1; min-width: 0; }
+.timer-card .kicker { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; letter-spacing: -.08px; color: color-mix(in srgb, var(--c) 85%, var(--ink)); text-transform: uppercase; }
+.timer-card .big { font-size: 28px; line-height: 32px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.timer-big { position: relative; display: grid; place-items: center; width: 220px; height: 220px; margin: 8px auto 16px; }
+.timer-big .ring { position: absolute; inset: 0; }
+.timer-big .ring circle { stroke-width: 2.4; }
+.timer-text { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.timer-text b { font-size: 52px; line-height: 56px; font-weight: 300; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.timer-text span { font-size: 15px; letter-spacing: -.24px; color: var(--label2); }
+.stats { display: grid; gap: 10px; padding: 14px 16px; }
+.stat { display: grid; grid-template-columns: minmax(0, 7.5em) 1fr auto; align-items: center; gap: 10px; font-size: 15px; letter-spacing: -.24px; }
+.stat span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stat i { height: 8px; border-radius: 4px; background: var(--c); transform: scaleX(var(--w)); transform-origin: 0 50%; }
+.stat b { font-size: 13px; font-weight: 600; color: var(--label2); font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------- Zuhause (Home Assistant) */
+.pc-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.pc-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 14px 16px; text-align: left; font-weight: 600; letter-spacing: -.24px; }
+.pc-btn svg { width: 28px; height: 28px; fill: none; stroke: var(--label2); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; transition: stroke .25s; }
+.pc-btn.on svg { stroke: var(--green); }
+.pc-btn small { font-size: 13px; font-weight: 500; color: var(--label2); }
+.pc-btn:disabled { opacity: .5; }
+
+/* ---------------------------------------------------------------- Einkauf */
+.shop-add { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding: 6px 12px 6px 16px; }
+.shop-add input { flex: 1; min-width: 0; min-height: 44px; border: 0; background: none; font: inherit; color: var(--label); }
+.shop-add input:focus { outline: none; }
+
+/* ---------------------------------------------------------------- Ticket */
+.ticket svg { flex: none; width: 24px; height: 24px; fill: none; stroke: var(--indigo); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.ticket .main { flex: 1; min-width: 0; font-weight: 600; color: var(--label); }
+.ticket b { font-weight: 500; color: var(--label2); }
+.ticket b.warn { color: var(--orange); font-weight: 600; }
+
 /* ---------------------------------------------------------------- Woche wechseln */
 .week-nav { display: flex; align-items: center; gap: 10px; margin: -4px 0 14px; }
 .week-nav .circle { width: 38px; height: 38px; color: var(--blue); }

@@ -88,6 +88,11 @@ function db(now = new Date()) {
       { id: id('b1'), name: 'Mama', date: `1984-${isoDay(addDays(now, 2)).slice(5)}`, before: 3, notes: 'Konzertkarten?' },
       { id: id('b2'), name: 'Ben', date: `2011-${isoDay(addDays(now, 9)).slice(5)}`, before: 3, notes: '' },
     ],
+    sessions: [
+      { id: id('s1'), subject: 'Mathematik', minutes: 25, date: day(-1) },
+      { id: id('s2'), subject: 'Englisch', minutes: 45, date: day(-1) },
+      { id: id('s3'), subject: 'Mathematik', minutes: 25, date: day(0) },
+    ],
     grades: [
       { id: id('g1'), subject: 'Mathematik', value: '2', weight: 2, title: 'Klassenarbeit Nr. 1', date: day(-24) },
       { id: id('g2'), subject: 'Mathematik', value: '3+', weight: 1, title: 'Test Brüche', date: day(-7) },
@@ -115,4 +120,25 @@ function trips(time, mode) {
     legs: [{ line: '11', kind: 'Regionalbus', dir: mode === 'arr' ? 'Schulzentrum' : 'Bühl Alpsee', from: mode === 'arr' ? 'Rathaus' : 'Schulzentrum', plat: '2', dep: t(dep), depRt: t(dep + (i === 0 ? 2 : 0)), cancelled: false }] }));
 }
 
-module.exports = { snapshot, db, weather, trips };
+// Home Assistant zum Ausprobieren: Einkaufsliste (wie von Cookidoo) und PC-Knöpfe
+const haItems = [{ uid: 'i1', summary: 'Milch', status: 'needs_action' }, { uid: 'i2', summary: 'Haferflocken', status: 'needs_action' }, { uid: 'i3', summary: '400 g Tomaten', status: 'completed' }];
+const haStates = [
+  { entity_id: 'todo.cookidoo_einkaufsliste', state: '2', attributes: { friendly_name: 'Cookidoo Einkaufsliste' } },
+  { entity_id: 'todo.einkaufsliste', state: '0', attributes: { friendly_name: 'Einkaufsliste' } },
+  { entity_id: 'switch.pc', state: 'off', attributes: { friendly_name: 'PC' } },
+  { entity_id: 'script.pc_spotify', state: 'off', attributes: { friendly_name: 'Spotify öffnen' } },
+  { entity_id: 'button.pc_sperren', state: 'unknown', attributes: { friendly_name: 'PC sperren' } },
+];
+function ha(p, body) {
+  if (p === '/api/') return { message: 'API running.' };
+  if (p === '/api/states') return haStates;
+  if (p.startsWith('/api/states/')) return haStates.find((e) => e.entity_id === p.slice(12)) || {};
+  if (p.includes('get_items')) return { service_response: { [body.entity_id]: { items: haItems } } };
+  if (p.includes('add_item')) haItems.push({ uid: `i${Date.now()}`, summary: body.item, status: 'needs_action' });
+  if (p.includes('update_item')) { const it = haItems.find((i) => i.uid === body.item); if (it) it.status = body.status; }
+  if (p.includes('remove_completed')) for (let i = haItems.length; i--;) if (haItems[i].status === 'completed') haItems.splice(i, 1);
+  if (p.includes('switch/toggle')) { const e = haStates.find((x) => x.entity_id === body.entity_id); if (e) e.state = e.state === 'on' ? 'off' : 'on'; }
+  return [];
+}
+
+module.exports = { snapshot, db, weather, trips, ha };
