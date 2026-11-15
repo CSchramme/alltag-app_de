@@ -573,7 +573,11 @@ function photoForm(blob, pre) {
     btn.disabled = true;
     btn.textContent = 'Lädt hoch …';
     try {
-      const res = await fetch(`/api/photos?${new URLSearchParams(Object.fromEntries(new FormData(f)))}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
+      // als Formular-Datei mit Base64-Inhalt – die Firewall des Hosters sperrt image/jpeg als Anfrage-Typ
+      const b64 = await new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result.split(',')[1]); r.onerror = fail; r.readAsDataURL(blob); });
+      const body = new FormData();
+      body.append('bild', new Blob([b64]), 'bild.jpg');
+      const res = await fetch(`/api/photos?${new URLSearchParams(Object.fromEntries(new FormData(f)))}`, { method: 'POST', credentials: 'same-origin', body });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j.error || res.statusText);
       D.db.photos = [...D.db.photos, j];

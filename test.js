@@ -216,7 +216,10 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await auth('/api/items/birthdays', { method: 'POST', body: JSON.stringify({ name: 'Ohne Datum' }) })).status, 400);
     // Tafelbilder: nur JPEG, nur angemeldet, Löschen entfernt die Datei
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 0xff, 0xd9]);
-    const ph = await (await auth('/api/photos?subject=Mathe&date=2026-11-16&caption=Tafel', { method: 'POST', body: jpeg, headers: { 'Content-Type': 'image/jpeg' } })).json();
+    const form = (b) => { const fd = new FormData(); fd.append('bild', new Blob([b.toString('base64')]), 'bild.jpg'); return fd; };
+    const up = (p, b, h = {}) => fetch(base + p, { method: 'POST', body: form(b), headers: h }); // ohne JSON-Kopf: fetch setzt multipart mit Grenze
+    assert.equal((await auth('/api/photos?subject=Mathe', { method: 'POST', body: jpeg, headers: { 'Content-Type': 'image/jpeg' } })).status, 400); // roh als image/jpeg sperrt die Hoster-Firewall
+    const ph = await (await up('/api/photos?subject=Mathe&date=2026-11-16&caption=Tafel', jpeg, { Cookie: cookie })).json();
     assert.equal(ph.subject, 'Mathe');
     const img = await auth(`/api/photos/${ph.id}`);
     assert.equal(img.headers.get('content-type'), 'image/jpeg');
@@ -247,11 +250,12 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await (await auth('/api/ha/pc')).json())[0].state, 'on');
     // PC-Bildschirm: Programm mit eigenem Schlüssel, Eingaben nur bekannte Arten in Grenzen
     const { screen: skey } = await (await auth('/api/tokens')).json();
-    assert.equal((await call('/api/screen/agent?key=falsch', { method: 'POST', body: '' })).status, 403);
+    assert.equal((await call('/api/screen/agent', { method: 'POST', body: '', headers: { 'X-Key': 'falsch' } })).status, 403);
+    assert.equal((await call(`/api/screen/agent?key=${skey}`, { method: 'POST', body: '' })).status, 403); // Schlüssel nur im Header
     const off = await auth('/api/screen/frame?after=0');
     assert.equal(off.status, 204);
     assert.equal(off.headers.get('x-agent'), '0');
-    const ag1 = await (await call(`/api/screen/agent?key=${skey}&n=2&s=0`, { method: 'POST', body: jpeg, headers: { 'Content-Type': 'image/jpeg' } })).json();
+    const ag1 = await (await up('/api/screen/agent?n=2&s=0', jpeg, { 'X-Key': skey })).json();
     assert.equal(ag1.active, true);
     await auth('/api/screen/input', { method: 'POST', body: JSON.stringify({ events: [{ t: 'move', x: 2, y: 0.5 }, { t: 'key', k: 'rm -rf' }, { t: 'text', s: 'hi' }, { t: 'exec' }] }) });
     const fr = await auth('/api/screen/frame?after=0');
@@ -259,7 +263,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal(fr.headers.get('x-screens'), '2');
     assert.deepEqual(Buffer.from(await fr.arrayBuffer()), jpeg);
     assert.equal((await call('/api/screen/frame?after=0')).status, 401);
-    const ag2 = await (await call(`/api/screen/agent?key=${skey}`, { method: 'POST', body: '' })).json();
+    const ag2 = await (await call('/api/screen/agent', { method: 'POST', body: '', headers: { 'X-Key': skey } })).json();
     assert.deepEqual(ag2.events, [{ t: 'move', x: 1, y: 0.5 }, { t: 'text', s: 'hi' }]);
     const shopList = await (await auth('/api/shop', { method: 'POST', body: JSON.stringify({ text: 'Eier' }) })).json();
     assert.ok(shopList.some((i) => i.summary === 'Eier'));

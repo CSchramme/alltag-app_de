@@ -71,6 +71,17 @@ async function readJson(req) {
   const buf = await readBody(req, 200e3);
   try { return buf.length ? JSON.parse(buf) : {}; } catch { throw Object.assign(new Error('kein JSON'), { status: 400 }); }
 }
+// Bilder kommen als Formular-Datei mit Base64-Inhalt: die Firewall des Hosters (ModSecurity/Comodo) wertet image/jpeg als Angriff
+// und sperrt danach die IP; Base64 verhindert, dass zufällige Bytes im Bild wie eine Formular-Grenze aussehen.
+async function readImage(req, max) {
+  const buf = await readBody(req, max);
+  if (!buf.length) return buf;
+  const m = /boundary=(?:"([^"]+)"|([^;\s]+))/.exec(req.headers['content-type'] || ''), s = buf.toString('latin1');
+  const i = s.indexOf('\r\n\r\n'), j = m ? s.indexOf(`\r\n--${m[1] || m[2]}`, i) : -1;
+  const img = i >= 0 && j > i ? Buffer.from(s.slice(i + 4, j), 'base64') : Buffer.alloc(0);
+  if (img.length < 4 || img[0] !== 0xff || img[1] !== 0xd8 || img[2] !== 0xff) throw bad('Bitte ein Foto (JPEG) senden');
+  return img;
+}
 
 const cookies = (req) => Object.fromEntries((req.headers.cookie || '').split(';').map((c) => c.trim().split('=')).filter(([k]) => k));
 const https = (req) => req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
@@ -476,10 +487,9 @@ function screenEvent(e) { // nur bekannte Eingaben in festen Grenzen an den PC w
   }
 }
 async function screenAgent(req, res, q) {
-  const buf = await readBody(req, 6e6);
+  const buf = await readImage(req, 8e6);
   Object.assign(screen, { agentAt: Date.now(), n: Math.min(9, Math.max(1, Math.trunc(Number(q.get('n')) || 1))), s: Math.trunc(Number(q.get('s')) || 0), locked: q.get('locked') === '1' });
   if (buf.length) {
-    if (buf[0] !== 0xff || buf[1] !== 0xd8) return send(res, 400, { error: 'kein JPEG' });
     screen.frame = buf; screen.seq++;
     wake(screen.viewers);
   }
@@ -712,10 +722,10 @@ const routes = {
   // Kurzbefehle: nur die Uhrzeit als Text (leer = keine Schule) – für „Wecker erstellen“ bzw. „Fokus … bis“
   'GET /api/wake': async (req, res) => send(res, 200, await wakeTime(isoDay(addDays(new Date(), new URL(req.url, 'http://x').searchParams.get('day') === 'heute' ? 0 : 1)))),
   'GET /api/focus': (req, res) => send(res, 200, schoolTimes(isoDay(addDays(new Date(), new URL(req.url, 'http://x').searchParams.get('day') === 'morgen' ? 1 : 0)))?.end || ''),
-  // Tafelbilder: Bild als JPEG im Body, Angaben in der Adresse
+  // Tafelbilder: Bild als Formular-Datei (Base64, siehe readImage), Angaben in der Adresse
   'POST /api/photos': async (req, res) => {
-    const u = new URL(req.url, 'http://x').searchParams, buf = await readBody(req, 8e6);
-    if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8 || buf[2] !== 0xff) throw bad('Bitte ein Foto (JPEG) senden');
+    const u = new URL(req.url, 'http://x').searchParams, buf = await readImage(req, 11e6);
+    if (!buf.length) throw bad('Bitte ein Foto (JPEG) senden');
     const item = { id: crypto.randomUUID(), ...clean('photos', { subject: u.get('subject'), date: u.get('date'), caption: u.get('caption') }), updated: new Date().toISOString() };
     fs.writeFileSync(path.join(PHOTOS, `${item.id}.jpg`), buf, { mode: 0o600 });
     const d = db(); d.photos.push(item); save('db.json', d);
@@ -853,7 +863,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/ping') return send(res, 200, 'ok'); // Selbst-Wachhalten, verrät nichts
     if (url.pathname === '/api/screen/agent') { // Fernsteuerungs-Programm auf dem PC, eigener Schlüssel statt Anmeldung
-      if (req.method !== 'POST' || !same(url.searchParams.get('key') || '', TOKENS.screen)) return send(res, 403, { error: 'falscher Schlüssel' });
+      if (req.method !== 'POST' || !same(req.headers['x-key'] || '', TOKENS.screen)) return send(res, 403, { error: 'falscher Schlüssel' }); // Header statt Adresse: landet nicht im Zugriffsprotokoll
       return await screenAgent(req, res, url.searchParams);
     }
     if (url.pathname === '/api/cron') { // geplante Aufgabe in Plesk bzw. cron-job.org ("URL abrufen")

@@ -22,6 +22,7 @@ public static class AlltagInput {
 
 $http = New-Object System.Net.Http.HttpClient
 $http.Timeout = [TimeSpan]::FromSeconds(40)
+$http.DefaultRequestHeaders.Add('X-Key', $Key)   # im Header, damit der Schluessel nicht im Zugriffsprotokoll des Servers steht
 $jpeg = [Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
 $quality = New-Object Drawing.Imaging.EncoderParameters 1
 $quality.Param[0] = New-Object Drawing.Imaging.EncoderParameter ([Drawing.Imaging.Encoder]::Quality), ([long]55)
@@ -73,9 +74,13 @@ while ($true) {
       if ($h -ne $last) { $body = $f; $last = $h }   # unveraendertes Bild nicht nochmal schicken
     } catch { $locked = 1 }   # gesperrter Bildschirm laesst sich nicht abgreifen
   } else { $last = '' }
-  $content = New-Object System.Net.Http.ByteArrayContent (, $body)
-  $content.Headers.ContentType = New-Object System.Net.Http.Headers.MediaTypeHeaderValue 'image/jpeg'
-  $url = "$Server/api/screen/agent?key=$Key&n=$([Windows.Forms.Screen]::AllScreens.Count)&s=$sel&locked=$locked"
+  # Bild als Formular-Datei mit Base64-Inhalt: die Firewall des Hosters sperrt sonst (image/jpeg) nach kurzer Zeit diesen PC
+  $content = $null
+  if ($body.Length) {
+    $content = New-Object System.Net.Http.MultipartFormDataContent
+    $content.Add((New-Object System.Net.Http.StringContent ([Convert]::ToBase64String($body))), 'bild', 'bild.jpg')
+  }
+  $url = "$Server/api/screen/agent?n=$([Windows.Forms.Screen]::AllScreens.Count)&s=$sel&locked=$locked"
   try {
     $r = $http.PostAsync($url, $content).GetAwaiter().GetResult()
     if ([int]$r.StatusCode -eq 403) { Write-Host 'Schluessel ungueltig - Programm in Alltag neu laden.'; break }
