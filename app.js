@@ -36,6 +36,7 @@ const token = () => crypto.randomBytes(24).toString('base64url');
 
 const SECRET = once('secret.json', () => crypto.randomBytes(32).toString('hex'));
 const TOKENS = once('tokens.json', () => ({ widget: token(), cron: token() }));
+if (!TOKENS.screen) { TOKENS.screen = token(); save('tokens.json', TOKENS); } // Schlüssel für das Fernsteuerungs-Programm auf dem PC
 const VAPID = once('vapid.json', generateVapidKeys);
 if (DEMO && !load('db.json', null)) save('db.json', demo.db());
 
@@ -449,6 +450,47 @@ function payload() {
   };
 }
 
+/* ------------------------------------------------------------------ PC-Bildschirm: Server reicht Bild (PC → App) und Eingaben (App → PC) durch */
+// shortcut: alles im Speicher eines Prozesses – passt für Plesk/Passenger mit einer Node-Instanz; bei mehreren Instanzen bräuchte es einen gemeinsamen Speicher
+const screen = { frame: null, seq: 0, n: 1, s: 0, locked: false, agentAt: 0, viewerAt: 0, events: [], viewers: [], agents: [] };
+const waitFor = (list, ms) => new Promise((resolve) => {
+  const done = () => { clearTimeout(t); const i = list.indexOf(done); if (i >= 0) list.splice(i, 1); resolve(); };
+  const t = setTimeout(done, ms);
+  list.push(done);
+});
+const wake = (list) => [...list].forEach((f) => f());
+const viewing = () => Date.now() - screen.viewerAt < 12e3;
+const agentOnline = () => screen.agents.length > 0 || Date.now() - screen.agentAt < 10e3;
+const SCREEN_KEYS = ['Enter', 'Backspace', 'Tab', 'Escape', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown', 'F5',
+  'Ctrl+A', 'Ctrl+C', 'Ctrl+V', 'Ctrl+X', 'Ctrl+Z', 'Alt+Tab', 'Alt+F4', 'Win'];
+function screenEvent(e) { // nur bekannte Eingaben in festen Grenzen an den PC weitergeben
+  const n01 = (v) => Math.min(1, Math.max(0, Number(v) || 0));
+  switch (e?.t) {
+    case 'move': return { t: 'move', x: n01(e.x), y: n01(e.y) };
+    case 'down': case 'up': return { t: e.t, b: [0, 1, 2].includes(e.b) ? e.b : 0 };
+    case 'wheel': return { t: 'wheel', d: Math.max(-1200, Math.min(1200, Math.round(Number(e.d) || 0))) };
+    case 'text': { const s = String(e.s ?? '').slice(0, 200); return s ? { t: 'text', s } : null; }
+    case 'key': return SCREEN_KEYS.includes(e.k) ? { t: 'key', k: e.k } : null;
+    case 'screen': return { t: 'screen', i: Math.max(-1, Math.min(8, Math.trunc(Number(e.i) || 0))) };
+    default: return null;
+  }
+}
+async function screenAgent(req, res, q) {
+  const buf = await readBody(req, 6e6);
+  Object.assign(screen, { agentAt: Date.now(), n: Math.min(9, Math.max(1, Math.trunc(Number(q.get('n')) || 1))), s: Math.trunc(Number(q.get('s')) || 0), locked: q.get('locked') === '1' });
+  if (buf.length) {
+    if (buf[0] !== 0xff || buf[1] !== 0xd8) return send(res, 400, { error: 'kein JPEG' });
+    screen.frame = buf; screen.seq++;
+    wake(screen.viewers);
+  }
+  if (!viewing()) { // niemand schaut zu: Bild verwerfen und warten, bis jemand die Ansicht öffnet
+    screen.frame = null;
+    await waitFor(screen.agents, 25e3);
+    screen.agentAt = Date.now();
+  }
+  send(res, 200, { active: viewing(), events: screen.events.splice(0) });
+}
+
 const teacherCache = new Map(), weekCache = new Map();
 const routes = {
   'POST /api/login': async (req, res) => {
@@ -748,6 +790,23 @@ const routes = {
     await ha('/api/services/todo/remove_completed_items', { entity_id: load('config.json', {}).ha?.todo });
     send(res, 200, await shopItems());
   },
+  'GET /api/screen/frame': async (req, res) => { // wartet bis zu 8 s auf ein neues Bild
+    const after = Number(new URL(req.url, 'http://x').searchParams.get('after')) || 0, fresh = () => screen.seq > after && screen.frame;
+    screen.viewerAt = Date.now();
+    wake(screen.agents);
+    if (!fresh() && agentOnline()) await waitFor(screen.viewers, 8e3);
+    screen.viewerAt = Date.now();
+    if (!fresh()) return send(res, 204, '', { 'X-Agent': agentOnline() ? '1' : '0', 'X-Locked': screen.locked ? '1' : '0' });
+    res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+      'X-Seq': String(screen.seq), 'X-Screens': String(screen.n), 'X-Screen': String(screen.s) });
+    res.end(screen.frame);
+  },
+  'POST /api/screen/input': async (req, res) => {
+    const { events } = await readJson(req);
+    if (!Array.isArray(events)) throw bad('events fehlt');
+    screen.events = [...screen.events, ...events.slice(0, 60).map(screenEvent).filter(Boolean)].slice(-300);
+    send(res, 200, { ok: true });
+  },
   'GET /api/push/key': (req, res) => send(res, 200, { key: VAPID.publicKey }),
   'POST /api/push/subscribe': async (req, res) => {
     const s = await readJson(req);
@@ -793,6 +852,10 @@ const server = http.createServer(async (req, res) => {
       return serveStatic(req, res, url.pathname);
     }
     if (url.pathname === '/api/ping') return send(res, 200, 'ok'); // Selbst-Wachhalten, verrät nichts
+    if (url.pathname === '/api/screen/agent') { // Fernsteuerungs-Programm auf dem PC, eigener Schlüssel statt Anmeldung
+      if (req.method !== 'POST' || !same(url.searchParams.get('key') || '', TOKENS.screen)) return send(res, 403, { error: 'falscher Schlüssel' });
+      return await screenAgent(req, res, url.searchParams);
+    }
     if (url.pathname === '/api/cron') { // geplante Aufgabe in Plesk bzw. cron-job.org ("URL abrufen")
       if (!same(url.searchParams.get('key') || '', TOKENS.cron)) return send(res, 403, { error: 'falscher Schlüssel' });
       await sync(10 * 60e3);

@@ -130,6 +130,7 @@ const ICON = {
   power: '<svg viewBox="0 0 44 44"><path d="M22 7v14M14 12a13 13 0 1016 0"/></svg>',
   play: '<svg viewBox="0 0 44 44"><path d="M15 10l19 12-19 12z"/></svg>',
   ticket: '<svg viewBox="0 0 44 44"><path d="M7 14a3 3 0 013-3h24a3 3 0 013 3v4a4 4 0 000 8v4a3 3 0 01-3 3H10a3 3 0 01-3-3v-4a4 4 0 000-8z"/><path d="M27 12v20" stroke-dasharray="2 3"/></svg>',
+  screen: '<svg viewBox="0 0 44 44"><rect x="6" y="9" width="32" height="22" rx="3"/><path d="M16 37h12M22 31v6"/></svg>',
   pin: '<svg class="pin" viewBox="0 0 16 16"><path d="M10.5 1.5l4 4-2.5 1-3 3 .5 3.5-1 1L5 10.5 1.5 14l-.5-.5L4.5 10 1 6.5l1-1 3.5.5 3-3z"/></svg>',
 };
 
@@ -655,7 +656,7 @@ function pcCard() {
   if (!ids?.length) return '';
   loadPc();
   const list = ids.map((id) => pcState.list?.find((e) => e.id === id) || { id, name: id.split('.')[1].replace(/_/g, ' '), state: '' });
-  return `<div id="pc">${section('Zuhause')}<div class="pc-grid">${list.map((e) => {
+  return `<div id="pc">${section('Zuhause')}<div class="pc-grid"><button class="card pc-btn pressable" data-screen>${ICON.screen}<span>Bildschirm</span><small>ansehen und steuern</small></button>${list.map((e) => {
     const sw = e.id.startsWith('switch.'), on = e.state === 'on', gone = e.state === 'unavailable';
     return `<button class="card pc-btn pressable${on ? ' on' : ''}" data-pc="${esc(e.id)}"${gone ? ' disabled' : ''}>${sw ? ICON.power : ICON.play}<span>${esc(e.name)}</span>
       ${gone ? '<small>nicht erreichbar</small>' : sw && e.state ? `<small>${on ? 'An' : 'Aus'}</small>` : ''}</button>`;
@@ -667,6 +668,136 @@ async function runPc(id, el) {
   try { await api(`/api/ha/pc/${encodeURIComponent(id)}`, { method: 'POST' }); toast(`${$('span', el).textContent}: ausgelöst`); } catch (x) { toast(x.message); }
   el.disabled = false;
   setTimeout(() => loadPc(true), 1500);
+}
+
+/* ---------------------------------------------------------------- PC-Bildschirm: ansehen, Maus und Tastatur */
+const SKEYS = [['Escape', 'Esc'], ['Tab', 'Tab'], ['Enter', 'Enter'], ['Backspace', '⌫'], ['Delete', 'Entf'], ['ArrowLeft', '←'], ['ArrowUp', '↑'], ['ArrowDown', '↓'], ['ArrowRight', '→'],
+  ['Win', 'Win'], ['Alt+Tab', 'Alt+Tab'], ['Ctrl+C', 'Strg+C'], ['Ctrl+V', 'Strg+V'], ['Ctrl+Z', 'Strg+Z'], ['Ctrl+A', 'Strg+A'], ['F5', 'F5'], ['Alt+F4', 'Alt+F4']];
+const KEYMAP = new Set(['Enter', 'Backspace', 'Tab', 'Escape', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown', 'F5']);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let scr = null;
+function openScreen() {
+  if (scr) return;
+  closeSheet();
+  const el = document.createElement('div');
+  el.className = 'screen-view';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-label', 'PC-Bildschirm');
+  el.innerHTML = `<div class="screen-bar">
+      <button class="sbtn" data-s="close" aria-label="Schließen">✕</button>
+      <button class="sbtn" data-s="mon" hidden></button>
+      <button class="sbtn" data-s="zoom" aria-label="Vergrößern">1×</button>
+      <button class="sbtn" data-s="kbd">Tastatur</button>
+      <button class="sbtn" data-s="keys" aria-expanded="false">Tasten</button>
+      <button class="sbtn" data-s="up" aria-label="Nach oben scrollen">▲</button>
+      <button class="sbtn" data-s="down" aria-label="Nach unten scrollen">▼</button></div>
+    <div class="screen-keys" hidden>${SKEYS.map(([k, l]) => `<button class="sbtn" data-k="${k}">${l}</button>`).join('')}</div>
+    <div class="screen-area"><img alt="PC-Bildschirm" draggable="false"><p class="screen-msg">Verbinde mit dem PC …</p></div>
+    <input class="screen-input" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="send" aria-label="Tastatur">`;
+  document.body.append(el);
+  appEl.inert = true;
+  scr = { el, img: $('img', el), msg: $('.screen-msg', el), input: $('.screen-input', el), seq: 0, zoom: 1, n: 1, s: 0, q: [], p: Promise.resolve(), wheel: 0, moved: 0 };
+  wireScreen(scr);
+  screenLoop(scr);
+}
+function closeScreen() {
+  if (!scr) return;
+  document.removeEventListener('keydown', scr.onkey, true);
+  scr.el.remove();
+  scr = null;
+  appEl.inert = false;
+}
+// Eingaben sammeln und alle 50 ms in Reihenfolge abschicken
+function sendEv(e) {
+  const s = scr;
+  if (!s) return;
+  s.q.push(e);
+  if (s.t) return;
+  s.t = setTimeout(() => {
+    const events = s.q.splice(0);
+    s.t = null;
+    s.p = s.p.then(() => api('/api/screen/input', { method: 'POST', body: { events } })).catch(() => {});
+  }, 50);
+}
+function wireScreen(s) {
+  const pos = (e) => { const r = s.img.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height }; };
+  const btn = (b) => ({ 0: 0, 2: 1, 1: 2 })[b] ?? 0; // Browser: links/Mitte/rechts → PC: links/rechts/Mitte
+  s.img.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') { e.preventDefault(); sendEv({ t: 'move', ...pos(e) }); sendEv({ t: 'down', b: btn(e.button) }); return; }
+    s.touch = { x: e.clientX, y: e.clientY, at: Date.now(), p: pos(e) };
+  });
+  s.img.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'mouse') { if (Date.now() - s.moved > 40) { s.moved = Date.now(); sendEv({ t: 'move', ...pos(e) }); } return; }
+    if (s.touch && Math.hypot(e.clientX - s.touch.x, e.clientY - s.touch.y) > 10) s.touch = null; // wischen = Bild verschieben
+  });
+  s.img.addEventListener('pointerup', (e) => {
+    if (e.pointerType === 'mouse') { sendEv({ t: 'move', ...pos(e) }); sendEv({ t: 'up', b: btn(e.button) }); return; }
+    const t = s.touch;
+    s.touch = null;
+    if (!t) return;
+    const b = Date.now() - t.at > 500 ? 1 : 0; // lange drücken = Rechtsklick
+    sendEv({ t: 'move', ...t.p }); sendEv({ t: 'down', b }); sendEv({ t: 'up', b });
+    haptic();
+  });
+  s.img.addEventListener('pointercancel', () => { s.touch = null; });
+  s.img.addEventListener('contextmenu', (e) => e.preventDefault());
+  $('.screen-area', s.el).addEventListener('wheel', (e) => {
+    e.preventDefault();
+    s.wheel += e.deltaY;
+    if (Math.abs(s.wheel) >= 60) { sendEv({ t: 'wheel', d: -Math.sign(s.wheel) * 120 }); s.wheel = 0; }
+  }, { passive: false });
+  s.onkey = (e) => {
+    if (!scr) return;
+    let k = null;
+    if ((e.ctrlKey || e.metaKey) && /^[acvxz]$/i.test(e.key)) k = `Ctrl+${e.key.toUpperCase()}`;
+    else if (KEYMAP.has(e.key)) k = e.key;
+    if (k) { e.preventDefault(); e.stopPropagation(); return sendEv({ t: 'key', k }); }
+    if (e.target === s.input) return; // Text vom Handy kommt über das input-Ereignis (Umlaute, Autokorrektur)
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); sendEv({ t: 'text', s: e.key }); }
+  };
+  document.addEventListener('keydown', s.onkey, true);
+  s.input.addEventListener('input', () => { if (s.input.value) { sendEv({ t: 'text', s: s.input.value }); s.input.value = ''; } });
+  s.el.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-s],[data-k]');
+    if (!b) return;
+    haptic();
+    if (b.dataset.k) return sendEv({ t: 'key', k: b.dataset.k });
+    const a = b.dataset.s;
+    if (a === 'close') return closeScreen();
+    if (a === 'kbd') return s.input.focus();
+    if (a === 'keys') { const k = $('.screen-keys', s.el); k.hidden = !k.hidden; b.setAttribute('aria-expanded', String(!k.hidden)); return; }
+    if (a === 'up' || a === 'down') return sendEv({ t: 'wheel', d: a === 'up' ? 360 : -360 });
+    if (a === 'zoom') { s.zoom = s.zoom >= 3 ? 1 : s.zoom + 1; s.img.style.setProperty('--z', s.zoom); b.textContent = `${s.zoom}×`; return; }
+    if (a === 'mon') { const next = s.s === -1 ? 0 : s.s + 1 >= s.n ? -1 : s.s + 1; s.s = next; monLabel(s); sendEv({ t: 'screen', i: next }); }
+  });
+}
+function monLabel(s) {
+  const b = $('[data-s=mon]', s.el);
+  b.hidden = s.n < 2;
+  b.textContent = s.s === -1 ? 'Alle Bildschirme' : `Bildschirm ${s.s + 1}`;
+}
+async function screenLoop(s) {
+  const say = (t) => { s.msg.hidden = !t; s.msg.textContent = t; };
+  while (scr === s) {
+    try {
+      const r = await fetch(`/api/screen/frame?after=${s.seq}`, { credentials: 'same-origin', cache: 'no-store' });
+      if (scr !== s) return;
+      if (r.status === 401) { closeScreen(); return showLogin(); }
+      if (r.status === 200) {
+        s.seq = Number(r.headers.get('X-Seq'));
+        s.n = Number(r.headers.get('X-Screens')) || 1;
+        if (!s.t) s.s = Number(r.headers.get('X-Screen'));
+        const url = URL.createObjectURL(await r.blob()), old = s.img.src;
+        s.img.src = url;
+        if (old.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(old), 2000);
+        say('');
+        monLabel(s);
+      } else if (r.status === 204) {
+        if (r.headers.get('X-Agent') !== '1') { say('PC nicht verbunden. Läuft dort das Fernsteuerungs-Programm? (Profil → PC-Bildschirm)'); await sleep(2000); }
+        else if (r.headers.get('X-Locked') === '1') say('Der PC ist gesperrt – bitte am PC anmelden.');
+      } else await sleep(2000);
+    } catch { await sleep(2000); }
+  }
 }
 
 /* ---------------------------------------------------------------- Ticket (öffnet die offizielle App bzw. Website) */
@@ -1540,6 +1671,13 @@ async function openSettings() {
     <p class="footnote" style="margin-top:0;text-align:left">Auf „Heute“ erscheint ein Knopf, der dein Ticket in der offiziellen App oder auf der Website öffnet. Vor dem Ablauf kommt eine Erinnerung (1 Woche, 1 Tag vorher und am Tag).</p>
     <p class="label-sm">Home Assistant</p>
     <div id="ha-section">${haSection()}</div>
+    <p class="label-sm">PC-Bildschirm</p>
+    <div class="list card">
+      <div class="row"><div class="main"><div class="sub">Am PC: 1. Programm laden · 2. Rechtsklick darauf → „Mit PowerShell ausführen“ (oder als HASS.Agent-Befehl) · 3. Hier oder auf „Heute“ unter Zuhause „Bildschirm“ öffnen. Tippen = Klick, lange drücken = Rechtsklick.</div></div></div>
+      <button class="row" id="screen-dl" disabled><span class="btn-plain">Programm für den PC laden</span></button>
+      <button class="row" data-screen><span class="btn-plain">Bildschirm öffnen</span></button>
+    </div>
+    <p class="footnote" style="margin-top:8px;text-align:left">Das Programm enthält einen eigenen Schlüssel – nicht weitergeben. Solange es läuft, kann jeder mit deinem Alltag-Passwort den PC sehen und steuern. Bei gesperrtem Windows gibt es kein Bild.</p>
     <p class="label-sm">Darstellung</p>
     <div class="card" style="padding:14px 16px">
       <div class="sub" style="margin-bottom:8px">Erscheinungsbild</div>
@@ -1610,7 +1748,8 @@ async function openSettings() {
     };
   });
   wireEduForm();
-  api('/api/tokens').then(async ({ widget, cron }) => {
+  api('/api/tokens').then(async (tokens) => {
+    const { widget, cron } = tokens;
     // vorher laden: Safari erlaubt das Kopieren nur direkt in der Tipp-Geste
     const tpl = await fetch('/widget.js').then((r) => r.text());
     const script = tpl.replace('__SERVER__', location.origin).replace('__TOKEN__', widget);
@@ -1623,6 +1762,15 @@ async function openSettings() {
     $('#sc-today').onclick = () => copy(`${location.origin}/api/summary?day=heute&key=${widget}`, $('#sc-hint'));
     $('#sc-tomorrow').onclick = () => copy(`${location.origin}/api/summary?day=morgen&key=${widget}`, $('#sc-hint'));
     $('#cron-copy').onclick = () => copy(cronUrl, $('#cron-hint'));
+    const agent = (await fetch('/screen-agent.ps1').then((r) => r.text())).replace('__SERVER__', location.origin).replace('__KEY__', tokens.screen);
+    $('#screen-dl').disabled = false;
+    $('#screen-dl').onclick = () => { // mit BOM, damit Windows PowerShell die Datei als UTF-8 liest
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob(['\ufeff', agent], { type: 'text/plain' }));
+      a.download = 'alltag-fernsteuerung.ps1';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    };
   }).catch(() => {});
 
   const toggle = $('#push-toggle'), test = $('#push-test'), hint = $('#push-hint');
@@ -1877,7 +2025,7 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (el.id === 'me' || 'settings' in ds) return openSettings();
@@ -1885,6 +2033,7 @@ document.addEventListener('click', async (e) => {
   if (el.id === 'search') return openSearch();
   if (ds.week !== undefined) return shiftWeek(Number(ds.week));
   if ('bells' in ds) return openBells();
+  if ('screen' in ds) return openScreen();
   if (ds.bday) return birthdayForm(D.db.birthdays.find((x) => x.id === ds.bday));
   if ('bdays' in ds) return openBirthdays();
   if (ds.shop) return toggleShop(ds.shop);

@@ -545,6 +545,21 @@ button.banner { display: flex; text-align: left; }
 .pc-btn small { font-size: 13px; font-weight: 500; color: var(--label2); }
 .pc-btn:disabled { opacity: .5; }
 
+/* ---------------------------------------------------------------- PC-Bildschirm */
+.screen-view { position: fixed; inset: 0; z-index: 55; display: flex; flex-direction: column; background: #000; color: #fff; }
+.screen-bar, .screen-keys { flex: none; display: flex; gap: 6px; padding: 8px 10px; background: rgba(28, 28, 30, .92); }
+.screen-bar { align-items: center; padding-top: calc(var(--safe-t, 0px) + 8px); overflow-x: auto; scrollbar-width: none; }
+.screen-keys { flex-wrap: wrap; border-top: .5px solid rgba(255, 255, 255, .12); }
+.screen-keys[hidden] { display: none; }
+.sbtn { flex: none; min-width: 40px; min-height: 36px; padding: 0 12px; border-radius: 999px; font-size: 14px; font-weight: 600; color: #fff; background: rgba(255, 255, 255, .14); transition: background-color .2s; }
+.sbtn:active { background: rgba(255, 255, 255, .3); transition-duration: 0s; }
+.sbtn[hidden] { display: none; }
+.screen-area { position: relative; display: flex; flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; }
+.screen-area img { display: block; flex: none; margin: auto; width: calc(var(--z, 1) * 100%); max-width: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.screen-msg { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 24px; text-align: center; font-size: 15px; color: rgba(255, 255, 255, .72); }
+.screen-msg[hidden] { display: none; }
+.screen-input { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; font-size: 16px; }
+
 /* ---------------------------------------------------------------- Einkauf */
 .shop-add { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding: 6px 12px 6px 16px; }
 .shop-add input { flex: 1; min-width: 0; min-height: 44px; border: 0; background: none; font: inherit; color: var(--label); }

@@ -245,6 +245,22 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await auth('/api/ha/pc/button.pc_sperren', { method: 'POST', body: '{}' })).status, 400);
     assert.equal((await auth('/api/ha/pc/switch.pc', { method: 'POST', body: '{}' })).status, 200);
     assert.equal((await (await auth('/api/ha/pc')).json())[0].state, 'on');
+    // PC-Bildschirm: Programm mit eigenem Schlüssel, Eingaben nur bekannte Arten in Grenzen
+    const { screen: skey } = await (await auth('/api/tokens')).json();
+    assert.equal((await call('/api/screen/agent?key=falsch', { method: 'POST', body: '' })).status, 403);
+    const off = await auth('/api/screen/frame?after=0');
+    assert.equal(off.status, 204);
+    assert.equal(off.headers.get('x-agent'), '0');
+    const ag1 = await (await call(`/api/screen/agent?key=${skey}&n=2&s=0`, { method: 'POST', body: jpeg, headers: { 'Content-Type': 'image/jpeg' } })).json();
+    assert.equal(ag1.active, true);
+    await auth('/api/screen/input', { method: 'POST', body: JSON.stringify({ events: [{ t: 'move', x: 2, y: 0.5 }, { t: 'key', k: 'rm -rf' }, { t: 'text', s: 'hi' }, { t: 'exec' }] }) });
+    const fr = await auth('/api/screen/frame?after=0');
+    assert.equal(fr.headers.get('content-type'), 'image/jpeg');
+    assert.equal(fr.headers.get('x-screens'), '2');
+    assert.deepEqual(Buffer.from(await fr.arrayBuffer()), jpeg);
+    assert.equal((await call('/api/screen/frame?after=0')).status, 401);
+    const ag2 = await (await call(`/api/screen/agent?key=${skey}`, { method: 'POST', body: '' })).json();
+    assert.deepEqual(ag2.events, [{ t: 'move', x: 1, y: 0.5 }, { t: 'text', s: 'hi' }]);
     const shopList = await (await auth('/api/shop', { method: 'POST', body: JSON.stringify({ text: 'Eier' }) })).json();
     assert.ok(shopList.some((i) => i.summary === 'Eier'));
     // Siri schreibt Schul-Kürzel aus
