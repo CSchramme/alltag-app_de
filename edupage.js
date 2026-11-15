@@ -258,6 +258,15 @@ const pad = (n) => String(n).padStart(2, '0');
 const isoDay = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 
+// Ein Schultag: Stunden plus Liste der Änderungen (Entfall/Vertretung) für Mitteilungen
+function schoolDay(date, lessons) {
+  const changes = lessons.filter((l) => l.cancelled || l.changes.length).map((l) => ({
+    periods: l.period ? [l.period] : [], label: l.period ? `${l.period}.` : '',
+    text: l.cancelled ? `${l.subject} – Entfall` : `${l.subject}: ${l.changes.join(', ')}`, kind: l.cancelled ? 'cancel' : 'change',
+  }));
+  return { date, lessons, changes };
+}
+
 async function snapshot(ep, { school, now = new Date() } = {}) {
   const errors = [];
   const attempt = async (label, fn, fallback) => {
@@ -272,12 +281,7 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
     const dt = addDays(now, i), date = isoDay(dt);
     if (dt.getDay() === 0 || dt.getDay() === 6) continue;
     // Nur der persönliche Stundenplan zählt – der Vertretungsplan der ganzen Schule passt nicht zu Kursen/Gruppen
-    const lessons = await attempt(`Stundenplan ${date}`, async () => ep.lessons(await ep.plan(date)), []);
-    const changes = lessons.filter((l) => l.cancelled || l.changes.length).map((l) => ({
-      periods: l.period ? [l.period] : [], label: l.period ? `${l.period}.` : '',
-      text: l.cancelled ? `${l.subject} – Entfall` : `${l.subject}: ${l.changes.join(', ')}`, kind: l.cancelled ? 'cancel' : 'change',
-    }));
-    days.push({ date, lessons, changes });
+    days.push(schoolDay(date, await attempt(`Stundenplan ${date}`, async () => ep.lessons(await ep.plan(date)), [])));
   }
 
   const items = (await attempt('Timeline', () => ep.timeline(), [])).sort((a, b) => a.time.localeCompare(b.time));
@@ -332,4 +336,4 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
   };
 }
 
-module.exports = { Edupage, EduError, snapshot, SNAPSHOT_VERSION, encodeRequestBody, decodeResponse, parseHome, isoDay, addDays };
+module.exports = { Edupage, EduError, snapshot, schoolDay, SNAPSHOT_VERSION, encodeRequestBody, decodeResponse, parseHome, isoDay, addDays };

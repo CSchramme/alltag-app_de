@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { generateVapidKeys, sendPush } = require('./push');
-const { Edupage, EduError, snapshot, SNAPSHOT_VERSION, isoDay, addDays } = require('./edupage');
+const { Edupage, EduError, snapshot, schoolDay, SNAPSHOT_VERSION, isoDay, addDays } = require('./edupage');
 const demo = require('./demo');
 const { occursOn } = require('./public/recur');
 
@@ -273,7 +273,7 @@ function payload() {
   };
 }
 
-const teacherCache = new Map();
+const teacherCache = new Map(), weekCache = new Map();
 const routes = {
   'POST /api/login': async (req, res) => {
     const now = Date.now();
@@ -342,6 +342,24 @@ const routes = {
     } else lessons = await edupageDo((ep) => ep.teacherPlan(id, date));
     teacherCache.set(key, { at: Date.now(), lessons });
     send(res, 200, { date, lessons });
+  },
+  // Kalender: beliebige Woche (Mo–Fr). Was schon im Abgleich steckt, kommt ohne EduPage-Anfrage; Rest 10 Min. zwischengespeichert
+  'GET /api/week': async (req, res) => {
+    const start = new URL(req.url, 'http://x').searchParams.get('start') || '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || new Date(`${start}T12:00`).getDay() !== 1) throw bad('start muss ein Montag sein');
+    const dates = [0, 1, 2, 3, 4].map((n) => isoDay(addDays(new Date(`${start}T12:00`), n)));
+    const known = load('snapshot.json', null)?.days || [], hit = weekCache.get(start);
+    if (DEMO) return send(res, 200, { days: demo.snapshot(new Date(`${start}T08:00`)).days });
+    if (dates.every((d) => known.some((x) => x.date === d))) return send(res, 200, { days: dates.map((d) => known.find((x) => x.date === d)) });
+    if (hit && Date.now() - hit.at < 10 * 60e3) return send(res, 200, { days: hit.days });
+    if (!load('config.json', {}).edupage) return send(res, 200, { days: [] });
+    const days = await edupageDo(async (ep) => {
+      const out = [];
+      for (const d of dates) out.push(known.find((x) => x.date === d) || schoolDay(d, await ep.plan(d).then((p) => ep.lessons(p), () => [])));
+      return out;
+    });
+    weekCache.set(start, { at: Date.now(), days });
+    send(res, 200, { days });
   },
   'GET /api/summary': (req, res) => send(res, 200, summary(new URL(req.url, 'http://x').searchParams.get('day'))),
 

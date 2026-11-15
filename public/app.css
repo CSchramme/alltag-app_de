@@ -472,6 +472,17 @@ button.banner { display: flex; text-align: left; }
 .btn-plain { display: block; padding: 10px; border-radius: 14px; }
 .copybox { width: 100%; padding: 10px; border: 0; border-radius: 12px; font: 12px ui-monospace, Menlo, monospace; }
 
+/* ---------------------------------------------------------------- Woche wechseln */
+.week-nav { display: flex; align-items: center; gap: 10px; margin: -4px 0 14px; }
+.week-nav .circle { width: 38px; height: 38px; color: var(--blue); }
+.week-nav .circle svg { width: 18px; height: 18px; stroke-width: 2.6; }
+.week-range { font-size: 17px; font-weight: 600; letter-spacing: -.43px; font-variant-numeric: tabular-nums; }
+.today-pill { margin-left: auto; height: 36px; padding: 0 16px; border-radius: 18px; font-size: 15px; font-weight: 600; color: var(--blue); }
+.pager.slide-l { animation: week-in-l .42s var(--ease-out); }
+.pager.slide-r { animation: week-in-r .42s var(--ease-out); }
+@keyframes week-in-l { from { opacity: 0; transform: translateX(28px); } }
+@keyframes week-in-r { from { opacity: 0; transform: translateX(-28px); } }
+
 /* ---------------------------------------------------------------- Neue Bausteine */
 .field select { flex: 1; min-width: 0; padding: 14px 0; border: 0; outline: 0; background: transparent; -webkit-appearance: none; appearance: none; text-align: right; text-align-last: right; font: 17px var(--font); color: var(--blue); cursor: pointer; }
 .field[hidden] { display: none; }
@@ -581,7 +592,8 @@ button.banner { display: flex; text-align: left; }
   .today-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 0 28px; align-items: start; }
   .today-grid .col > .section-title:first-child { margin-top: 0; }
   #view-kalender > * { max-width: none; } /* Titel und Tagesleiste beginnen dort, wo die erste Spalte beginnt */
-  #view-kalender .seg-bar { max-width: 760px; margin-left: 0; } /* Tagesleiste: Klick springt zur Spalte */
+  #view-kalender .seg-bar { display: none; } /* am PC sieht man die ganze Woche – die Tagesleiste braucht es nur am Handy */
+  #view-kalender .pager.slim-weekend { grid-template-columns: repeat(5, minmax(200px, 1fr)) repeat(2, minmax(110px, .45fr)); grid-auto-flow: row; }
   #view-kalender .pager {
     display: grid; grid-auto-flow: column; grid-auto-columns: minmax(250px, 1fr); gap: 14px;
     max-width: none; margin: 0 -32px; padding: 0 32px 10px; scroll-padding: 0 32px;

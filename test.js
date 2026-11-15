@@ -176,6 +176,9 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
     assert.equal((await call('/api/summary?day=morgen&key=falsch')).status, 401);
     assert.equal((await auth('/api/messages', { method: 'POST', body: JSON.stringify({ to: ['unbekannt'], text: 'Hallo' }) })).status, 400);
     assert.equal((await auth('/api/messages', { method: 'POST', body: JSON.stringify({ to: [d2.snap.people[0].id], text: 'Hallo' }) })).status, 200);
+    // Kalender: beliebige Woche ab Montag nachladen
+    assert.equal((await auth('/api/week?start=2026-11-17')).status, 400); // kein Montag
+    assert.equal((await (await auth('/api/week?start=2026-11-23')).json()).days.length, 5);
     const tp = await (await auth(`/api/teacher/${encodeURIComponent(d2.snap.people[0].id)}`)).json();
     assert.ok(Array.isArray(tp.lessons));
     // wiederkehrender Termin wird mit Regel gespeichert

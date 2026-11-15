@@ -68,6 +68,7 @@ const F = {
   full: new Intl.DateTimeFormat('de-DE', { weekday: 'short', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }),
   time: new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' }),
   rel: new Intl.RelativeTimeFormat('de', { numeric: 'auto' }),
+  dayMonth: new Intl.DateTimeFormat('de-DE', { day: 'numeric', month: 'long' }),
   num: new Intl.NumberFormat('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 2 }),
 };
 const today = () => isoDay(now());
@@ -135,6 +136,13 @@ let D = null;
 const S = () => D.snap || EMPTY;
 let tab = 'heute';
 let planDay = null;
+// Kalenderwoche Mo–So; am Wochenende zeigt der Kalender schon die kommende Woche
+const mondayOf = (iso) => addDays(iso, -((parseDay(iso).getDay() + 6) % 7));
+let weekStart = null;
+const defaultWeek = () => mondayOf(addDays(today(), [0, 6].includes(now().getDay()) ? 2 : 0));
+const calWeek = () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+const extraDays = new Map(); // nachgeladene Tage anderer Wochen
+const loadedWeeks = new Map();
 let taskFilter = 'alle';
 let schoolSeg = 'nachrichten';
 let showDone = false;
@@ -169,7 +177,8 @@ function setData(d) {
   $('#boot').hidden = true;
   $('#login').hidden = true;
   $('#app').hidden = false;
-  if (!week().includes(planDay)) planDay = today();
+  weekStart ??= defaultWeek();
+  if (!calWeek().includes(planDay)) planDay = calWeek().includes(today()) ? today() : weekStart;
   renderAll();
   if (first) { measureTabs(); lensSet(tabGeo[tabIndex(tab)][0]); route(); }
 }
@@ -185,7 +194,7 @@ function renderAll() {
 
 /* ---------------------------------------------------------------- Abgeleitete Daten */
 const week = () => Array.from({ length: 7 }, (_, i) => addDays(today(), i));
-const dayOf = (iso) => S().days.find((d) => d.date === iso);
+const dayOf = (iso) => S().days.find((d) => d.date === iso) || extraDays.get(iso);
 const lessonsOn = (iso) => dayOf(iso)?.lessons || [];
 const subjects = () => [...new Set([...S().days.flatMap((d) => d.lessons.map((l) => l.subject)), ...D.db.grades.map((g) => g.subject), ...D.db.reminders.map((r) => r.subject)].filter(Boolean))].sort((a, b) => a.localeCompare(b, 'de'));
 
@@ -402,19 +411,49 @@ function Seg(el, onPick) {
 const segHTML = (items, sel, label) => `<div class="seg-bar"><div class="seg glass" role="tablist" aria-label="${label}"><div class="thumb"></div>
   ${items.map(([k, l]) => `<button role="tab" style="flex:1 1 auto;padding:0 10px" aria-selected="${k === sel}">${l}</button>`).join('')}</div></div>`;
 
-/* ---------------------------------------------------------------- Kalender (7 Tage ab heute) */
+/* ---------------------------------------------------------------- Kalender (Woche Mo–So, wechselbar) */
+function loadWeek(start) {
+  const have = calWeek().slice(0, 5).every((d) => dayOf(d));
+  if (!D.edupage.connected || (have && loadedWeeks.has(start)) || loadedWeeks.get(start) === 'loading') return;
+  if (have && start === mondayOf(today())) return;
+  loadedWeeks.set(start, 'loading');
+  api(`/api/week?start=${start}`).then(({ days }) => {
+    days.forEach((d) => { if (!S().days.some((x) => x.date === d.date)) extraDays.set(d.date, d); });
+    loadedWeeks.set(start, Date.now());
+    if (weekStart === start) renderKalender();
+  }).catch(() => { loadedWeeks.delete(start); if (weekStart === start) renderKalender(); });
+}
+function shiftWeek(n) {
+  weekStart = n === 0 ? defaultWeek() : addDays(weekStart, 7 * n);
+  planDay = calWeek().includes(today()) ? today() : weekStart;
+  haptic();
+  renderKalender();
+  const v = $('#view-kalender .pager');
+  if (v && !reduceMotion.matches) { v.classList.remove('slide-l', 'slide-r'); void v.offsetWidth; v.classList.add(n < 0 ? 'slide-r' : 'slide-l'); }
+}
 let planSeg = null;
 function dayPage(date) {
-  const d = parseDay(date), items = agenda(date);
+  const d = parseDay(date), items = agenda(date), weekend = d.getDay() % 6 === 0;
+  const loading = !weekend && !dayOf(date) && loadedWeeks.get(weekStart) === 'loading';
   return `<h3 class="page-day${date === today() ? ' today' : ''}">${esc(F.wd.format(d))} <span>${d.getDate()}.</span></h3>
-    ${items.length ? `<div class="list card">${agendaList(date, items)}</div>` : `<div class="card empty slim">${d.getDay() % 6 === 0 ? 'Wochenende' : 'Nichts eingetragen'}</div>`}
+    ${items.length ? `<div class="list card">${agendaList(date, items)}</div>` : `<div class="card empty slim">${loading ? '<div class="spinner"></div>' : weekend ? 'Wochenende' : 'Nichts eingetragen'}</div>`}
     <button class="add-row pressable" data-new-event="${date}">+ Termin</button>`;
 }
 
 function renderKalender() {
-  const v = $('#view-kalender'), days = week();
+  weekStart ??= defaultWeek();
+  const v = $('#view-kalender'), days = calWeek(), first = parseDay(days[0]), last = parseDay(days[6]);
+  const range = first.getMonth() === last.getMonth() ? `${first.getDate()}. – ${F.dayMonth.format(last)}` : `${F.dayMonth.format(first)} – ${F.dayMonth.format(last)}`;
+  // leeres Wochenende schmal, damit die Schultage am PC Platz haben
+  const emptyWeekend = days.slice(5).every((d) => !agenda(d).length);
   v.innerHTML = `
-    ${largeTitle('Kalender', `KW ${isoWeek(parseDay(planDay))}`)}
+    ${largeTitle('Kalender', `KW ${isoWeek(first)}`)}
+    <div class="week-nav">
+      <button class="glass circle pressable" data-week="-1" aria-label="Vorherige Woche"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="week-range">${esc(range)}</div>
+      <button class="glass circle pressable" data-week="1" aria-label="Nächste Woche"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+      ${weekStart !== defaultWeek() ? '<button class="today-pill glass pressable" data-week="0">Heute</button>' : ''}
+    </div>
     <div class="seg-bar"><div class="seg days glass" role="tablist" aria-label="Tag"><div class="thumb"></div>
       ${days.map((date) => {
         const dt = parseDay(date), dot = (dayOf(date)?.changes.length ? 'var(--orange)' : '') || (D.db.events.some((e) => Recur.occursOn(e, date)) ? 'var(--purple)' : '');
@@ -422,7 +461,8 @@ function renderKalender() {
           <span>${esc(F.wdShort.format(dt).replace('.', ''))}</span><b>${dt.getDate()}</b>${dot ? `<i style="background:${dot}"></i>` : ''}</button>`;
       }).join('')}
     </div></div>
-    <div class="pager">${days.map((date) => `<div class="page">${dayPage(date)}</div>`).join('')}</div>`;
+    <div class="pager${emptyWeekend ? ' slim-weekend' : ''}">${days.map((date) => `<div class="page">${dayPage(date)}</div>`).join('')}</div>`;
+  loadWeek(weekStart);
   const pager = $('.pager', v);
   planSeg = Seg($('.days', v), (i) => pager.scrollTo({ left: pager.children[i].offsetLeft - pager.children[0].offsetLeft, behavior: reduceMotion.matches ? 'auto' : 'smooth' }));
   let settle;
@@ -435,7 +475,6 @@ function renderKalender() {
       const i = Math.round(pos);
       planDay = days[i] || planDay;
       planSeg.mark(i);
-      $('.eyebrow', v).textContent = `KW ${isoWeek(parseDay(planDay))}`;
     }, 90);
   }, { passive: true });
   syncPlan();
@@ -443,9 +482,12 @@ function renderKalender() {
 
 function syncPlan() {
   if (tab !== 'kalender' || !planSeg) return;
-  const pager = $('#view-kalender .pager'), i = Math.max(0, week().indexOf(planDay));
+  const pager = $('#view-kalender .pager'), i = Math.max(0, calWeek().indexOf(planDay));
   planSeg.measure();
-  pager.scrollLeft = pager.children[i].offsetLeft - pager.children[0].offsetLeft;
+  const page = pager.children[i], from = page.offsetLeft - pager.children[0].offsetLeft;
+  // PC (ohne Tagesleiste): Woche ab Montag zeigen und nur so weit scrollen, dass der Tag sichtbar ist
+  const desktop = getComputedStyle($('#view-kalender .seg-bar')).display === 'none';
+  pager.scrollLeft = desktop ? Math.max(0, from + page.offsetWidth - (pager.clientWidth - 64)) : from;
   planSeg.track(i);
   planSeg.mark(i);
 }
@@ -672,10 +714,9 @@ scrim.addEventListener('click', () => closeSheet());
 $('.sheet-close', sheet).addEventListener('click', () => closeSheet());
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') return closeSheet();
-  // Kalender am PC: Pfeiltasten blättern tageweise
+  // Kalender: Pfeiltasten wechseln die Woche
   if (tab !== 'kalender' || sheetOpen || !/^Arrow(Left|Right)$/.test(e.key) || e.target.closest?.('input, textarea')) return;
-  const pager = $('#view-kalender .pager'), step = (pager.children[1]?.offsetLeft - pager.children[0].offsetLeft) || pager.clientWidth;
-  pager.scrollBy({ left: e.key === 'ArrowRight' ? step : -step, behavior: reduceMotion.matches ? 'auto' : 'smooth' });
+  shiftWeek(e.key === 'ArrowRight' ? 1 : -1);
 });
 
 /* ---------------------------------------------------------------- Formulare für eigene Einträge */
@@ -1297,12 +1338,13 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (el.id === 'me' || 'settings' in ds) return openSettings();
   if (el.id === 'add') return ADD[tab]();
   if (el.id === 'search') return openSearch();
+  if (ds.week !== undefined) return shiftWeek(Number(ds.week));
   if (ds.star) return toggleStar(ds.star, el);
   if (ds.teacher) return openTeacher(ds.teacher);
   if (ds.pick) { composeTo.set(ds.pick, (S().people || []).find((p) => p.id === ds.pick)?.name || ''); return drawRecipients(); }
@@ -1324,7 +1366,7 @@ document.addEventListener('click', async (e) => {
   if (ds.subject) return openSubject(ds.subject);
   if (ds.grade) return gradeForm(D.db.grades.find((x) => x.id === ds.grade));
   if (ds.newGrade) return gradeForm(null, ds.newGrade);
-  if (ds.planDay) { closeSheet(); planDay = ds.planDay; selectTab('kalender'); return syncPlan(); }
+  if (ds.planDay) { closeSheet(); planDay = ds.planDay; weekStart = mondayOf(ds.planDay); renderKalender(); selectTab('kalender'); return syncPlan(); }
   if ('toggleDone' in ds) { showDone = !showDone; return renderTaskList(); }
   if ('editEdu' in ds) { sheet.dataset.editEdu = '1'; $('#edu-section').innerHTML = edupageSection(); return wireEduForm(); }
   if ('disconnect' in ds) {
@@ -1345,7 +1387,7 @@ document.addEventListener('click', async (e) => {
 function route() {
   if (!D) return;
   const [name, arg] = decodeURIComponent(location.hash.slice(1)).split('/');
-  if (name === 'kalender' && arg && week().includes(arg)) planDay = arg;
+  if (name === 'kalender' && /^\d{4}-\d{2}-\d{2}$/.test(arg || '')) { planDay = arg; weekStart = mondayOf(arg); renderKalender(); }
   if (VIEWS.includes(name)) selectTab(name);
   if (name === 'kalender') syncPlan();
   if (name === 'schule' && arg) { schoolSeg = 'nachrichten'; renderSchule(); openMessage(arg); }
