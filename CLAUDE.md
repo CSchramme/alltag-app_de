@@ -7,8 +7,10 @@ Web-App/PWA „Alltag“ für Schule (EduPage) + Privates (Erinnerungen, Termine
 - `app.js` – Server + Plesk-Startdatei (Node ≥ 20, keine npm-Abhängigkeiten – auf diesem Plesk landet `npm install` nicht bei der laufenden Node-Version). Auth über `APP_PASSWORD` (Env), signiertes Cookie. Daten als JSON in `data/` (außerhalb von `public/`): config (EduPage-Zugang), db (eigene Einträge), state (Push-Abos, gesehene Schlüssel), snapshot, session (EduPage-Cookies), tokens (Widget-Lesezugriff, Cron-Schlüssel), vapid.
 - `edupage.js` – EduPage-Zugriff, übertragen aus Python `edupage-api` 0.13.3: RPC-Login (+ Formular-Fallback), `/user`-Refresh mit gespeicherten Cookies statt Neu-Login (Captcha-Schutz), Stundenplan per `/gcall`, Timeline. Vertretungen NUR aus dem persönlichen Stundenplan (Wunsch des Nutzers: der Schul-Vertretungsplan nach Klasse passte nicht – Kurse/Gruppen).
 - `push.js` – Web-Push (RFC 8291 aes128gcm + RFC 8292 VAPID) mit `crypto`; gegen http_ece/web-push gegengeprüft, Schlüsselformat kompatibel zu web-push.
-- `public/` – Vanilla-JS-Frontend (`app.js`), `sw.js`, `widget.js` (Scriptable, Platzhalter `__SERVER__`/`__TOKEN__`).
-- Abgleich: Plesk-„URL abrufen“ alle 15 Min. auf `/api/cron?key=…`, zusätzlich interner Timer, solange der Prozess läuft.
+- `public/` – Vanilla-JS-Frontend (`app.js`), `sw.js`, `widget.js` (Scriptable, Platzhalter `__SERVER__`/`__TOKEN__`), `recur.js` (Wiederholungsregeln, auch vom Server per require genutzt), `theme.js` (Hell/Dunkel + Glas klar/getönt vor dem ersten Zeichnen, localStorage pro Gerät).
+- EduPage-Schreibzugriffe (aus `timeline/pics/js/timelineViewer.js` bzw. Python-Bibliothek): `createItem` (neue Nachricht, selectedUser `Ucitel<id>`), `createReply` {groupid, text}, `setUserProp` {propsToStore: {groupid: {done|starred: '1'|'0'}}} – alle an `/timeline/?=&akcia=…&eqav=1&maxEqav=7` mit kodiertem Body. Lehrer-Stundenplan: `currenttt.js curentttGetData` table=teachers.
+- Lernplan wird nicht gespeichert, sondern aus Prüfungen berechnet (`study()` in app.js, IDs `learn:<examId>:<7|3|1>`, Haken in state.done).
+- Abgleich: interner Timer; der Hoster hat keine geplanten Aufgaben → App pingt sich alle 2 Min. selbst (`/api/ping`, Adresse aus angemeldetem `/api/data` in `data/origin.json`). Optional `/api/cron?key=…` (z. B. cron-job.org).
 - `main.py` = ursprüngliches Python-CLI-Skript (nicht mehr Teil der App).
 - Demo: `npm run demo` (DEMO=1, Passwort `demo`, Daten in `data-demo/`). Tests: `npm test`.
 
@@ -27,5 +29,6 @@ Web-App/PWA „Alltag“ für Schule (EduPage) + Privates (Erinnerungen, Termine
 
 ## Offene Punkte
 1. Eine echte Lehrer-/Raum-Vertretung war in den Rohdaten noch nicht dabei – Erkennung beruht auf dem beobachteten `changes`-Format
-2. Nachrichten schreiben (Bibliothek: timeline createItem typ=sprava) – noch nicht eingebaut, Nutzer gefragt
+2. „Gefällt mir“ und Lesebestätigung wichtiger Nachrichten: Endpunkte unbekannt (nicht in timelineViewer.js). Vorübergehend liefert `/api/diagnose/scripts?key=<cron>` die Skript-Adressen der angemeldeten EduPage-Seite + Feldnamen von Nachrichten → danach Endpunkt wieder entfernen
+4. Senden/Antworten/Haken in EduPage sind nur gegen den EduPage-Code gebaut, noch nicht mit echtem Konto ausgelöst
 3. Push und Scriptable-Widget noch nicht auf einem echten iPhone geprüft

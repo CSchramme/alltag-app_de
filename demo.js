@@ -57,6 +57,8 @@ function snapshot(now = new Date()) {
         text: 'Der Elternsprechtag findet am Donnerstag ab 15 Uhr statt. Die Anmeldung ist ab sofort über das Sekretariat möglich.' },
       { id: 'm3', kind: 'message', author: 'Hr. Schulz', time: ago(52), replies: [], attachments: [], text: 'Sport findet diese Woche draußen statt – bitte an wetterfeste Kleidung denken.' },
     ],
+    missing: [{ id: 'x1', title: 'Arbeitsblatt Zellatmung', subject: 'Biologie', date: isoDay(addDays(now, -3)), comment: '' }],
+    people: [...new Set(Object.values(T).map(([name]) => name))].map((name, i) => ({ id: `-${i + 1}`, name })),
     errors: [],
   };
 }

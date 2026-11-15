@@ -164,6 +164,7 @@ class Edupage {
         teachers: (l.teacherids || []).map((id) => this.person('teachers', id)).filter(Boolean),
         rooms: (l.classroomids || []).map((id) => this.room(id)).filter(Boolean),
         groups: (l.groupnames || []).filter(Boolean),
+        classes: (l.classids || []).map((id) => this.dbi('classes', id)).filter(Boolean).map((c) => c.short || c.name),
         topic: (event ? subj?.name : (subj && headText) || dp.note_wd || l.flags?.event?.name) || null,
         cancelled, event, allday,
         online: l.ol_url || dp.ol_url || null,
@@ -192,9 +193,44 @@ class Edupage {
         replyTo: e.reakcia_na ? String(e.reakcia_na) : null,
         removed: String(e.removed) === '1',
         done: !!props[e.timelineid]?.doneMaxCas,
+        starred: props[e.timelineid]?.starred === '1',
       });
     }
     return out;
+  }
+
+  // Timeline-Aktionen wie im EduPage-Webclient (timelineViewer.js) bzw. der Python-Bibliothek (createItem)
+  async timelineAction(akcia, data) {
+    const r = await this.req(`/timeline/?=&akcia=${akcia}&eqav=1&maxEqav=7`, { method: 'POST', body: encodeRequestBody(data) });
+    const text = decodeResponse(r.text);
+    if (r.status !== 200 || text === '0') throw new Error(`EduPage hat „${akcia}“ abgelehnt`);
+    try { return JSON.parse(text); } catch { throw new Error(`EduPage-Antwort auf „${akcia}“ war unlesbar`); }
+  }
+  async sendMessage(to, text) {
+    const r = await this.timelineAction('createItem', { selectedUser: to.join(';'), text, attachements: '{}', receipt: '0', typ: 'sprava' });
+    if (!r.changes?.length) throw new Error('EduPage hat die Nachricht nicht angenommen');
+  }
+  async reply(groupid, text) {
+    const r = await this.timelineAction('createReply', { groupid, text });
+    if (r.status && r.status !== 'ok') throw new Error('EduPage hat die Antwort nicht angenommen');
+  }
+  async setProp(groupid, prop, val) {
+    await this.timelineAction('setUserProp', { propsToStore: JSON.stringify({ [groupid]: { [prop]: val } }) });
+  }
+
+  // Stundenplan einer Lehrkraft (wie get_timetable() der Python-Bibliothek)
+  async teacherPlan(id, date) {
+    const r = await this.req('/timetable/server/currenttt.js?__func=curentttGetData', {
+      method: 'POST',
+      json: { __args: [null, { year: this.data?.dp?.year, datefrom: date, dateto: date, table: 'teachers', id: String(id), showColors: true, showIgroupsInClasses: true, showOrig: true, log_module: 'CurrentTTView' }], __gsh: this.gsh },
+    });
+    const j = JSON.parse(r.text).r || {};
+    if (j.error) throw new Error(/insuf/i.test(j.error) ? 'Deine Schule erlaubt keinen Einblick in Lehrer-Stundenpläne.' : String(j.error));
+    return this.lessons(j.ttitems || []);
+  }
+  teachers() {
+    return Object.entries(this.data?.dbi?.teachers || {}).map(([id, p]) => ({ id, name: `${p.firstname || ''} ${p.lastname || ''}`.trim() }))
+      .filter((t) => t.name).sort((a, b) => a.name.localeCompare(b.name, 'de'));
   }
 
   whoami() {
@@ -210,7 +246,11 @@ const TASK_KINDS = {
   homework: ['homework', 'Hausaufgabe'], bexam: ['exam', 'Klassenarbeit'], sexam: ['exam', 'Test'], testing: ['exam', 'Test'],
   oexam: ['exam', 'Mündliche Prüfung'], rexam: ['exam', 'Referat'], pexam: ['exam', 'Projekt'],
 }; // Termine/Feiertage nicht aus der Timeline – die stehen schon im persönlichen Stundenplan
-const SNAPSHOT_VERSION = 3; // erhöhen, wenn sich die Auswertung ändert → Server gleicht nach dem Update sofort neu ab
+const SNAPSHOT_VERSION = 4;
+// Prüfungen kündigt EduPage als Timeline-Termin an („Udalosť: 1.Deutsch-SchA - 16.11.2026“) – daraus entsteht der Lernplan
+const EXAM_RE = /SchA|Schulaufgabe|Stegreif|\bEx\b|Klassenarbeit|Klausur|Kurzarbeit|\bTest\b/i;
+const examLabel = (t) => (/SchA|Schulaufgabe/i.test(t) ? 'Schulaufgabe' : /Stegreif|\bEx\b/i.test(t) ? 'Stegreifaufgabe'
+  : /Kurzarbeit/i.test(t) ? 'Kurzarbeit' : /Klassenarbeit/i.test(t) ? 'Klassenarbeit' : 'Prüfung'); // erhöhen, wenn sich die Auswertung ändert → Server gleicht nach dem Update sofort neu ab
 const MESSAGE_KINDS = { sprava: 'message', news: 'news', chat: 'chat' };
 const KEEP_DAYS = 14;
 
@@ -242,27 +282,39 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
 
   const items = (await attempt('Timeline', () => ep.timeline(), [])).sort((a, b) => a.time.localeCompare(b.time));
   const cutoff = isoDay(addDays(now, -KEEP_DAYS));
-  const today = isoDay(now), tasks = new Map(), messages = new Map();
+  const today = isoDay(now), tasks = new Map(), messages = new Map(), missing = new Map();
+  const subjectIn = (t) => Object.values(subjects).find((s) => s.name && t.includes(s.name))?.name || '';
   for (const n of items) {
-    if (TASK_KINDS[n.type]) {
+    const exam = n.type === 'event' && EXAM_RE.test(n.text) && !TASK_KINDS[n.type];
+    if (TASK_KINDS[n.type] || exam) {
       // Ändert die Lehrkraft eine Hausaufgabe, legt EduPage einen neuen Eintrag mit derselben data.id an („Geändert: …“) → der neueste gilt
       const key = String(n.data.id || n.id), prev = tasks.get(key);
       tasks.delete(key);
       const due = n.eventTime ? n.eventTime.slice(0, 10) : n.data.date || null;
       if (n.removed || (due ? due < today : n.time.slice(0, 10) < cutoff)) continue; // Vergangenes ausblenden
-      const [kind, label] = TASK_KINDS[n.type];
+      const [kind, label] = exam ? ['exam', examLabel(n.text)] : TASK_KINDS[n.type];
+      const title = exam ? n.text.replace(/^[^:]{1,20}:\s*/, '').replace(/\s*-\s*\d{1,2}\.\d{1,2}\.\d{4}\s*$/, '')
+        : String(n.data.nazov || n.text || label).replace(/^Geändert:\s*/, '');
       tasks.set(key, {
-        id: key, kind, label, title: String(n.data.nazov || n.text || label).replace(/^Geändert:\s*/, '').trim(),
-        details: String(n.data.popis || '').trim(),
-        subject: subjects[String(n.data.predmetid ?? n.data.subjectid ?? '')]?.name || '',
+        id: key, tid: n.id, kind, label, title: title.trim(), details: String(n.data.popis || '').trim(),
+        subject: subjects[String(n.data.predmetid ?? n.data.subjectid ?? '')]?.name || subjectIn(title),
         due, created: n.time.replace(' ', 'T'), author: n.author, done: n.done || !!prev?.done,
       });
+    } else if (n.type === 'homeworkstudentstav') { // Lehrkraft hat eine Hausaufgabe als „fehlt“ markiert
+      const key = String(n.data.id || n.id);
+      missing.delete(key);
+      if (n.data.stav === 'missing' && String(n.data.date || '') >= isoDay(addDays(now, -30))) {
+        missing.set(key, {
+          id: key, title: String(n.data.nazov || 'Hausaufgabe').trim(), date: n.data.date, comment: n.data.comment || '',
+          subject: subjects[String(n.data.predmetid ?? '')]?.name || String(n.data.planNazov || '').split(' · ').pop(),
+        });
+      }
     } else if (n.removed) {
       continue;
     } else if (MESSAGE_KINDS[n.type]) {
       const att = n.data.attachements && typeof n.data.attachements === 'object' ? n.data.attachements : {};
       const m = {
-        id: n.id, kind: MESSAGE_KINDS[n.type], author: n.author, text: n.text, time: n.time.replace(' ', 'T'), replies: [],
+        id: n.id, kind: MESSAGE_KINDS[n.type], author: n.author, text: n.text, time: n.time.replace(' ', 'T'), replies: [], starred: n.starred,
         attachments: Object.entries(att).map(([url, name]) => ({ name: String(name), url: url.startsWith('/') ? `https://${school}.edupage.org${url}` : url })),
       };
       const parent = n.replyTo && messages.get(n.replyTo);
@@ -273,7 +325,8 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
     v: SNAPSHOT_VERSION,
     updated: new Date().toISOString(),
     student: { name: who.name, class: who.cls },
-    days, tasks: [...tasks.values()],
+    days, tasks: [...tasks.values()], missing: [...missing.values()].reverse(),
+    people: await attempt('Lehrkräfte', () => ep.teachers(), []),
     messages: [...messages.values()].sort((a, b) => (b.last || b.time).localeCompare(a.last || a.time)).slice(0, 100),
     errors,
   };

@@ -1,6 +1,6 @@
 // Service Worker (Alltag): immer zuerst frisch vom eigenen Server, offline der letzte Stand. Dazu Push-Mitteilungen.
-const CACHE = 'alltag-v1';
-const SHELL = ['/', '/app.css', '/app.js', '/manifest.webmanifest', '/icon-192.png', '/apple-touch-icon.png'];
+const CACHE = 'alltag-v2';
+const SHELL = ['/', '/app.css', '/app.js', '/recur.js', '/theme.js', '/manifest.webmanifest', '/icon-192.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));

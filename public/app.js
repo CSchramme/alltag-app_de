@@ -195,7 +195,7 @@ function agenda(date) {
   lessonsOn(date).forEach((l, i) => items.push(l.allday
     ? { type: 'allday', start: '', t: { id: '', kind: 'event', label: 'Ganztägig', title: l.subject, subject: '' } }
     : { type: 'lesson', start: l.start, end: l.end, l, i }));
-  D.db.events.filter((e) => e.date === date).forEach((e) => items.push({ type: 'event', start: e.start, end: e.end, e }));
+  D.db.events.filter((e) => Recur.occursOn(e, date)).forEach((e) => items.push({ type: 'event', start: e.start, end: e.end, e: { ...e, date } }));
   return items.sort((a, b) => (a.start || '').localeCompare(b.start || ''));
 }
 const endMin = (a) => (a.end ? toMin(a.end) : toMin(a.start) + 60);
@@ -206,7 +206,7 @@ function tasks() {
     key: `e:${t.id}`, src: 'edu', id: t.id, title: t.title, subject: t.subject, due: t.due, time: '', done: t.done, kind: t.kind, label: t.label, category: 'schule',
   }));
   const own = D.db.reminders.map((r) => ({
-    key: `o:${r.id}`, src: 'own', id: r.id, title: r.title, subject: r.subject, due: r.due || null, time: r.time, done: r.done, kind: 'reminder', label: 'Erinnerung', category: r.category,
+    key: `o:${r.id}`, src: 'own', id: r.id, title: r.title, subject: r.subject, due: r.due || null, time: r.time, done: r.done, kind: 'reminder', label: 'Erinnerung', category: r.category, repeat: r.repeat,
   }));
   return [...edu, ...own];
 }
@@ -246,10 +246,11 @@ function lessonRow(l, date, i) {
 }
 function eventRow(e) {
   const isNow = e.date === today() && e.start && toMin(e.start) <= nowMin() && nowMin() < endMin(e);
-  return `<button class="row lesson event${isNow ? ' now' : ''}" style="--c:${CAT[e.category] || CAT.privat}" data-event="${esc(e.id)}">
+  const sub = [e.location, e.repeat && `↻ ${repeatLabel(e.repeat)}`].filter(Boolean).join(' · ');
+  return `<button class="row lesson event${isNow ? ' now' : ''}${e.id === justAdded ? ' appear' : ''}" style="--c:${CAT[e.category] || CAT.privat}" data-event="${esc(e.id)}">
     <div class="time"><b>${esc(e.start || 'ganzt.')}</b><span>${esc(e.end)}</span></div>
     <div class="bar"></div>
-    <div class="main"><div class="title">${esc(e.title)}</div>${e.location ? `<div class="sub">${esc(e.location)}</div>` : ''}</div>
+    <div class="main"><div class="title">${esc(e.title)}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ''}</div>
     <div class="num">${chip(e.category === 'schule' ? 'Schule' : 'Privat', CAT[e.category] || CAT.privat)}</div></button>`;
 }
 function alldayRow(t) {
@@ -290,12 +291,14 @@ function taskRow(x) {
   const c = x.subject ? colorOf(x.subject) : CAT[x.category];
   const n = x.due ? daysBetween(today(), x.due) : null;
   const cls = n === null || x.done ? '' : n < 0 ? 'late' : n <= 1 ? 'soon' : '';
-  const kindChip = x.kind === 'exam' ? chip(x.label, 'var(--red)', true) : x.src === 'own' && x.category === 'privat' ? chip('Privat', CAT.privat) : '';
-  return `<div class="row task${x.done ? ' done' : ''}" style="--c:${c}" data-key="${esc(x.key)}">
+  const kindChip = x.kind === 'exam' ? chip(x.label, 'var(--red)', true) : x.kind === 'study' ? chip('Lernen', 'var(--teal)', true)
+    : x.src === 'own' && x.category === 'privat' ? chip('Privat', CAT.privat) : '';
+  const rep = x.repeat ? `<span class="due">↻ ${esc(repeatLabel(x.repeat))}</span>` : '';
+  return `<div class="row task${x.done ? ' done' : ''}${x.id === justAdded ? ' appear' : ''}" style="--c:${c}" data-key="${esc(x.key)}">
     <button class="check" role="checkbox" aria-checked="${x.done}" aria-label="${esc(x.title)} erledigt"></button>
     <button class="main" data-open-key="${esc(x.key)}">
       <div class="title clamp2">${esc(x.title)}</div>
-      <div class="meta-line">${x.subject ? chip(x.subject, c) : ''}${kindChip}${x.due ? `<span class="due ${cls}">${esc(dueText(x))}</span>` : ''}</div>
+      <div class="meta-line">${x.subject ? chip(x.subject, c) : ''}${kindChip}${x.due ? `<span class="due ${cls}">${esc(dueText(x))}</span>` : ''}${rep}</div>
     </button></div>`;
 }
 
@@ -303,7 +306,7 @@ function msgRow(m) {
   const extra = [m.replies.length && `${m.replies.length} ${m.replies.length === 1 ? 'Antwort' : 'Antworten'}`, m.attachments.length && `${m.attachments.length} Anhang`].filter(Boolean);
   return `<button class="row msg${read.has(m.id) ? '' : ' unread'}" data-msg="${esc(m.id)}">
     <div class="avatar" style="--c:${colorOf(m.author)}">${esc(initials(m.author))}</div>
-    <div class="main"><div class="head"><div class="title">${esc(m.author || 'EduPage')}</div><time>${esc(stamp(m.last || m.time))}</time></div>
+    <div class="main"><div class="head"><div class="title">${m.starred ? '<span class="star">★</span> ' : ''}${esc(m.author || 'EduPage')}</div><time>${esc(stamp(m.last || m.time))}</time></div>
       <div class="sub clamp2">${esc(m.text)}</div>
       ${extra.length ? `<div class="meta-line">${extra.map((x) => chip(x, 'var(--blue)')).join('')}</div>` : ''}</div></button>`;
 }
@@ -414,7 +417,7 @@ function renderKalender() {
     ${largeTitle('Kalender', `KW ${isoWeek(parseDay(planDay))}`)}
     <div class="seg-bar"><div class="seg days glass" role="tablist" aria-label="Tag"><div class="thumb"></div>
       ${days.map((date) => {
-        const dt = parseDay(date), dot = (dayOf(date)?.changes.length ? 'var(--orange)' : '') || (D.db.events.some((e) => e.date === date) ? 'var(--purple)' : '');
+        const dt = parseDay(date), dot = (dayOf(date)?.changes.length ? 'var(--orange)' : '') || (D.db.events.some((e) => Recur.occursOn(e, date)) ? 'var(--purple)' : '');
         return `<button role="tab" class="${date === today() ? 'today' : ''}" aria-selected="${date === planDay}" aria-label="${esc(F.long.format(dt))}">
           <span>${esc(F.wdShort.format(dt).replace('.', ''))}</span><b>${dt.getDate()}</b>${dot ? `<i style="background:${dot}"></i>` : ''}</button>`;
       }).join('')}
@@ -468,7 +471,12 @@ function renderTaskList() {
   list.filter((x) => !x.done).sort((a, b) => key(a).localeCompare(key(b))).forEach((x) => groups[bucket(x)].push(x));
   const done = list.filter((x) => x.done);
   const body = groups.map((g, i) => (g.length ? `<p class="label-sm">${names[i]}</p><div class="list card">${g.map(taskRow).join('')}</div>` : '')).join('');
-  $('#task-list').innerHTML = (body || emptyCard('check', 'Nichts offen. Tippe auf +, um eine Erinnerung anzulegen.')) +
+  const missing = taskFilter === 'privat' ? [] : S().missing || [];
+  const miss = missing.length ? `<p class="label-sm warn-label">Als fehlend markiert</p><div class="list card">${missing.map((m) => `
+    <div class="row"><div class="main"><div class="title">${esc(m.title)}</div>
+      <div class="meta-line">${m.subject ? chip(m.subject, colorOf(m.subject)) : ''}${chip('fehlt', 'var(--red)', true)}${m.date ? `<span class="due">${esc(F.date.format(parseDay(m.date)))}</span>` : ''}</div>
+      ${m.comment ? `<div class="sub">${esc(m.comment)}</div>` : ''}</div></div>`).join('')}</div>` : '';
+  $('#task-list').innerHTML = miss + (body || emptyCard('check', 'Nichts offen. Tippe auf +, um eine Erinnerung anzulegen.')) +
     (done.length ? `<button class="disclosure" data-toggle-done>${showDone ? 'Erledigte ausblenden' : `Erledigte einblenden (${done.length})`}</button>` : '') +
     (showDone && done.length ? `<div class="list card" style="margin-top:10px">${done.map(taskRow).join('')}</div>` : '');
 }
@@ -478,6 +486,15 @@ async function toggleTask(key, btn) {
   if (!x) return;
   const done = !x.done;
   const target = x.src === 'edu' ? S().tasks.find((t) => t.id === x.id) : D.db.reminders.find((r) => r.id === x.id);
+  const next = x.src === 'own' && done && target.repeat ? Recur.nextOccurrence(target, target.due || today()) : null;
+  if (next) { // wiederkehrend: Abhaken schiebt auf den nächsten Termin – wie in der Erinnerungen-App
+    haptic();
+    btn?.closest('.task')?.classList.add('leaving');
+    target.due = next;
+    setTimeout(() => { renderTaskList(); renderHeute(); renderBadges(); }, 800);
+    toast(`Erledigt · nächstes Mal ${dayName(next)}`);
+    return api(`/api/items/reminders/${encodeURIComponent(x.id)}`, { method: 'PUT', body: { due: next, done: false } }).catch(() => toast('Nicht gespeichert'));
+  }
   target.done = done;
   $$(`.task[data-key="${CSS.escape(key)}"] .check`).forEach((b) => b.setAttribute('aria-checked', String(done)));
   haptic();
@@ -485,7 +502,10 @@ async function toggleTask(key, btn) {
   if (leaving) btn?.closest('.task')?.classList.add('leaving');
   setTimeout(() => { renderTaskList(); renderHeute(); renderBadges(); }, leaving ? 800 : 0);
   try {
-    if (x.src === 'edu') await api(`/api/tasks/${encodeURIComponent(x.id)}`, { method: 'POST', body: { done } });
+    if (x.src === 'edu') {
+      const r = await api(`/api/tasks/${encodeURIComponent(x.id)}`, { method: 'POST', body: { done } });
+      if (r.synced && done) toast('Auch in EduPage abgehakt');
+    }
     else await api(`/api/items/reminders/${encodeURIComponent(x.id)}`, { method: 'PUT', body: { done } });
   } catch { target.done = !done; renderTaskList(); renderHeute(); renderBadges(); }
 }
@@ -496,7 +516,7 @@ function renderNotizen() {
   $('#view-notizen').innerHTML = `
     ${largeTitle('Notizen', notes.length ? `${notes.length} ${notes.length === 1 ? 'Notiz' : 'Notizen'}` : 'Leer')}
     ${notes.length ? `<div class="notes-grid">${notes.map((n) => `
-      <button class="card note pressable" data-note="${esc(n.id)}">
+      <button class="card note pressable${n.id === justAdded ? ' appear' : ''}" data-note="${esc(n.id)}">
         <div class="title">${n.pinned ? ICON.pin : ''}${esc(n.title || n.body.split('\n')[0] || 'Neue Notiz')}</div>
         <div class="body">${esc(n.title ? n.body : n.body.split('\n').slice(1).join('\n'))}</div>
         <div class="meta-line">${n.subject ? chip(n.subject, colorOf(n.subject)) : ''}<span class="due">${esc(stamp(n.updated))}</span></div>
@@ -504,7 +524,7 @@ function renderNotizen() {
 }
 
 /* ---------------------------------------------------------------- Schule: Nachrichten + Noten */
-const SCHOOL = [['nachrichten', 'Nachrichten'], ['noten', 'Noten']];
+const SCHOOL = [['nachrichten', 'Nachrichten'], ['noten', 'Noten'], ['lehrer', 'Lehrkräfte']];
 let schoolSegCtl = null;
 function renderSchule() {
   const s = S().student;
@@ -516,6 +536,7 @@ function renderSchule() {
 
 function renderSchoolBody() {
   const el = $('#school-body');
+  if (schoolSeg === 'lehrer') return renderTeachers(el);
   if (schoolSeg === 'nachrichten') {
     const msgs = S().messages;
     el.innerHTML = !D.edupage.connected
@@ -543,7 +564,7 @@ function renderSchoolBody() {
 function renderBadges() {
   const t = today(), unread = S().messages.filter((m) => !read.has(m.id)).length;
   const subs = S().days.filter((d) => d.date >= t).reduce((n, d) => n + d.changes.length, 0);
-  for (const [name, n] of [['schule', unread], ['aufgaben', dueSoon().length], ['kalender', subs]]) {
+  for (const [name, n] of [['schule', unread], ['aufgaben', dueSoon().length + (S().missing?.length || 0)], ['kalender', subs]]) {
     const b = $(`#tabbar [data-tab="${name}"] .badge`);
     b.hidden = !n;
     b.textContent = n > 99 ? '99+' : n;
@@ -571,7 +592,7 @@ function openSheet(title, html) {
   $('#sheet-title').textContent = title;
   sheetBody.innerHTML = html;
   sheetBody.scrollTop = 0;
-  if (sheetOpen) return;
+  if (sheetOpen) { sheetBody.classList.remove('swap'); void sheetBody.offsetWidth; sheetBody.classList.add('swap'); return; }
   sheetOpen = true;
   lastFocus = document.activeElement;
   sheet.hidden = scrim.hidden = false;
@@ -664,6 +685,11 @@ const fRow = (label, input) => `<label class="field inline"><span>${label}</span
 const fChoice = (name, opts, v) => `<div class="choice" role="radiogroup">${opts.map(([val, lab]) => `<label><input type="radio" name="${name}" value="${val}"${String(val) === String(v) ? ' checked' : ''}><span>${lab}</span></label>`).join('')}</div>`;
 const group = (...rows) => `<div class="list card form-group">${rows.filter(Boolean).join('')}</div>`;
 const CATS = [['privat', 'Privat'], ['schule', 'Schule']];
+const repeatLabel = (v) => (Recur.REPEAT.find(([k]) => k === v) || ['', ''])[1];
+const fRepeat = (it) => group(
+  fRow('Wiederholen', `<select name="repeat">${Recur.REPEAT.map(([v, l]) => `<option value="${v}"${(it?.repeat || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`),
+  fRow('Endet', `<input type="date" name="until" value="${esc(it?.until)}">`));
+let justAdded = null; // frisch angelegter Eintrag federt in die Liste
 
 function formSheet(kind, item, title, fields) {
   openSheet(title, `<form class="form" novalidate>${fields}
@@ -671,6 +697,8 @@ function formSheet(kind, item, title, fields) {
     <button class="btn-primary pressable" type="submit">${item ? 'Sichern' : 'Hinzufügen'}</button>
     ${item ? '<button class="btn-plain danger del" type="button">Löschen</button>' : ''}</form>`);
   const f = $('#sheet form'), err = $('.form-error', f);
+  const rep = $('select[name=repeat]', f);
+  if (rep) { const upd = () => { $('input[name=until]', f).closest('.field').hidden = !rep.value; }; rep.onchange = upd; upd(); }
   if (!item && matchMedia('(hover: hover)').matches) f.elements[0]?.focus();
   f.onsubmit = async (e) => {
     e.preventDefault();
@@ -679,6 +707,7 @@ function formSheet(kind, item, title, fields) {
     try {
       const saved = await api(item ? `/api/items/${kind}/${encodeURIComponent(item.id)}` : `/api/items/${kind}`, { method: item ? 'PUT' : 'POST', body });
       D.db[kind] = [...D.db[kind].filter((x) => x.id !== saved.id), saved];
+      if (!item) { justAdded = saved.id; setTimeout(() => { justAdded = null; }, 1200); }
       haptic();
       closeSheet();
       renderAll();
@@ -698,6 +727,7 @@ function reminderForm(r) {
   formSheet('reminders', r, r ? 'Erinnerung' : 'Neue Erinnerung', `
     ${group(fText('title', 'Titel', r?.title, 'required maxlength="200"'), fArea('notes', 'Notiz', r?.notes))}
     ${group(fRow('Datum', `<input type="date" name="due" value="${esc(r?.due || (r ? '' : today()))}">`), fRow('Uhrzeit', `<input type="time" name="time" value="${esc(r?.time)}">`))}
+    ${fRepeat(r)}
     ${fChoice('category', CATS, r?.category || 'privat')}
     ${group(fText('subject', 'Fach (optional)', r?.subject, 'list="subjects" maxlength="80"'))}
     <p class="footnote" style="text-align:left;margin:6px 4px 0">Mit Uhrzeit kommt zu diesem Zeitpunkt eine Mitteilung (auf etwa 15 Minuten genau).</p>`);
@@ -708,6 +738,7 @@ function eventForm(e, date) {
     ${group(fText('title', 'Titel', e?.title, 'required maxlength="200"'), fText('location', 'Ort', e?.location, 'maxlength="120"'))}
     ${group(fRow('Datum', `<input type="date" name="date" required value="${esc(e?.date || date || today())}">`),
       fRow('Beginn', `<input type="time" name="start" value="${esc(e?.start)}">`), fRow('Ende', `<input type="time" name="end" value="${esc(e?.end)}">`))}
+    ${fRepeat(e)}
     ${fChoice('category', CATS, e?.category || 'privat')}
     ${group(fArea('notes', 'Notiz', e?.notes))}`);
 }
@@ -734,8 +765,9 @@ function newChooser() {
   openSheet('Neu', `<div class="new-grid">${tiles.map(([k, l, i]) => `<button class="card new-tile pressable" data-new="${k}">${i}<span>${l}</span></button>`).join('')}</div>`);
 }
 const NEW = { reminder: () => reminderForm(), event: () => eventForm(null, planDay), note: () => noteForm(), grade: () => gradeForm() };
-const ADD = { heute: newChooser, kalender: () => eventForm(null, planDay), aufgaben: () => reminderForm(), notizen: () => noteForm(), schule: () => gradeForm() };
-const updateAdd = () => { $('#add').hidden = tab === 'schule' && schoolSeg !== 'noten'; };
+const ADD = { heute: newChooser, kalender: () => eventForm(null, planDay), aufgaben: () => reminderForm(), notizen: () => noteForm(),
+  schule: () => (schoolSeg === 'noten' ? gradeForm() : composeMessage()) };
+const updateAdd = () => { $('#add').hidden = tab === 'schule' && (schoolSeg === 'lehrer' || (schoolSeg === 'nachrichten' && !D.edupage.connected)); };
 
 /* ---------------------------------------------------------------- Detail-Sheets */
 function openLesson(date, i) {
@@ -769,10 +801,15 @@ function openMessage(id) {
   if (!read.has(id)) { read.add(id); store.set('read', [...read]); renderSchoolBody(); renderHeute(); renderBadges(); }
   const kind = { news: 'Mitteilung', chat: 'Chat', message: 'Nachricht' }[m.kind] || 'Nachricht';
   openSheet(m.author || 'Nachricht', `
-    <div class="meta-line" style="margin:0 4px">${chip(kind, 'var(--blue)')}<span class="due">${esc(F.full.format(new Date(m.time)))}</span></div>
+    <div class="meta-line" style="margin:0 4px">${chip(kind, 'var(--blue)')}<span class="due">${esc(F.full.format(new Date(m.time)))}</span>
+      <button class="pill pressable${m.starred ? ' on' : ''}" data-star="${esc(m.id)}" aria-pressed="${!!m.starred}">${m.starred ? '★ Markiert' : '☆ Markieren'}</button></div>
     <div class="card bubble">${linkify(m.text)}</div>
     ${m.attachments.length ? `<div class="list card">${m.attachments.map((a) => `<a class="row attach" href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener">${ICON.clip}<span class="main">${esc(a.name)}</span>${ICON.chev}</a>`).join('')}</div>` : ''}
-    ${m.replies.length ? `<p class="label-sm">Antworten</p><div class="thread">${m.replies.map((r) => `<div class="reply bubble"><b>${esc(r.author)} · ${esc(stamp(r.time))}</b>${linkify(r.text)}</div>`).join('')}</div>` : ''}`);
+    ${m.replies.length ? `<p class="label-sm">Antworten (${m.replies.length})</p><div class="thread">${m.replies.map((r) => `<div class="reply bubble${r.author === S().student?.name ? ' mine' : ''}"><b>${esc(r.author)} · ${esc(stamp(r.time))}</b>${linkify(r.text)}</div>`).join('')}</div>` : ''}
+    ${D.edupage.connected ? `<form class="composer" data-reply="${esc(m.id)}">
+      ${group(fArea('text', `Antwort an ${m.author || 'alle'}`, '', 3))}
+      <p class="form-error" role="alert"></p>
+      <button class="btn-primary pressable" type="submit">Antworten</button></form>` : ''}`);
 }
 
 function openSubject(name) {
@@ -780,11 +817,201 @@ function openSubject(name) {
   const avg = average(gs);
   openSheet(name, `
     <div class="card row" style="padding:18px 20px"><div class="main"><div class="sub">Durchschnitt</div><div class="big-num">${avg == null ? '–' : F.num.format(avg)}</div></div><div class="trail">${gs.length} Noten</div></div>
+    ${gs.length ? `<div class="card calc">
+      <div class="title">Zielrechner</div><div class="sub">Welche Note brauchst du in der nächsten Prüfung?</div>
+      ${group(fRow('Wunsch-Schnitt', `<input id="calc-target" inputmode="decimal" autocomplete="off" placeholder="${isPoints(gs) ? 'z. B. 10' : 'z. B. 2,0'}">`))}
+      <p class="label-sm">Gewichtung der nächsten Note</p>
+      ${fChoice('calc-weight', [[0.5, '×½'], [1, '×1'], [2, '×2'], [3, '×3']], 2)}
+      <p class="calc-out" id="calc-out" aria-live="polite"></p></div>` : ''}
     <div class="list card">${gs.map((g) => `
       <button class="row" data-grade="${esc(g.id)}"><div class="main"><div class="title">${esc(g.title || 'Note')}</div>
         <div class="sub">${g.date ? esc(F.date.format(parseDay(g.date))) : ''}${Number(g.weight) !== 1 ? ` · Gewichtung ×${esc(F.num.format(g.weight))}` : ''}</div></div>
         <div class="avg">${esc(g.value)}</div>${ICON.chev}</button>`).join('')}</div>
     <button class="btn-plain pressable" data-new-grade="${esc(name)}">+ Note in ${esc(name)}</button>`);
+  if (gs.length) wireCalc(gs);
+}
+
+/* ---------------------------------------------------------------- Noten-Zielrechner */
+const isPoints = (gs) => gs.some((g) => (gradeNum(g.value) ?? 0) > 6); // Oberstufe 0–15 Punkte: höher ist besser
+function gradeText(need, points) {
+  if (points) return `${Math.max(0, Math.ceil(need - 1e-9))} Punkte`;
+  const opts = [];
+  for (let n = 1; n <= 6; n++) opts.push([n - 0.25, `${n}+`], [n, `${n}`], [n + 0.25, `${n}−`]);
+  return (opts.filter(([v]) => v >= 1 && v <= 6 && v <= need + 1e-9).at(-1) || [1, '1'])[1]; // schlechteste Note, die noch reicht
+}
+function wireCalc(gs) {
+  const w = gs.map((g) => [gradeNum(g.value), Number(g.weight) || 0]).filter(([n, k]) => n != null && k > 0);
+  const sum = w.reduce((a, [n, k]) => a + n * k, 0), W = w.reduce((a, [, k]) => a + k, 0), points = isPoints(gs);
+  const out = $('#calc-out'), inp = $('#calc-target');
+  const run = () => {
+    const target = parseFloat(inp.value.replace(',', '.')), k = Number($('input[name="calc-weight"]:checked').value);
+    out.className = 'calc-out';
+    if (!Number.isFinite(target)) { out.textContent = ''; return; }
+    const need = (target * (W + k) - sum) / k, [best, worst] = points ? [15, 0] : [1, 6];
+    if (points ? need > best : need < best) { out.classList.add('bad'); out.textContent = `Nicht erreichbar – selbst eine ${best} reicht nicht.`; }
+    else if (points ? need <= worst : need >= worst) { out.classList.add('good'); out.textContent = 'Geschafft – das klappt mit jeder Note.'; }
+    else out.innerHTML = `Du brauchst mindestens eine <b>${esc(gradeText(need, points))}</b> <span>(rechnerisch ${esc(F.num.format(need))})</span>`;
+  };
+  inp.oninput = run;
+  $$('input[name="calc-weight"]').forEach((r) => { r.onchange = run; });
+}
+
+/* ---------------------------------------------------------------- Nachrichten schreiben, antworten, markieren */
+const composeTo = new Map();
+function composeMessage() {
+  composeTo.clear();
+  openSheet('Neue Nachricht', `<form class="composer" data-new-msg>
+    <div class="card to-card"><div class="to-chips" id="to-chips"></div>
+      <input id="to-search" placeholder="An: Lehrkraft suchen" autocomplete="off" aria-label="Empfänger suchen"></div>
+    <div class="list card" id="to-results" hidden></div>
+    ${group(fArea('text', 'Nachricht', '', 8))}
+    <div id="msg-preview"></div>
+    <p class="form-error" role="alert"></p>
+    <button class="btn-primary pressable" type="submit">Weiter</button></form>`);
+  const inp = $('#to-search'), res = $('#to-results');
+  inp.oninput = () => {
+    const q = inp.value.trim().toLowerCase(), hits = q ? (S().people || []).filter((p) => p.name.toLowerCase().includes(q) && !composeTo.has(p.id)).slice(0, 6) : [];
+    res.hidden = !hits.length;
+    res.innerHTML = hits.map((p) => `<button type="button" class="row" data-pick="${esc(p.id)}"><div class="avatar small" style="--c:${colorOf(p.name)}">${esc(initials(p.name))}</div><div class="main"><div class="title">${esc(p.name)}</div></div></button>`).join('');
+  };
+  drawRecipients();
+}
+function drawRecipients() {
+  const box = $('#to-chips');
+  if (!box) return;
+  box.innerHTML = [...composeTo].map(([id, name]) => `<button type="button" class="to-chip pressable" data-unpick="${esc(id)}" aria-label="${esc(name)} entfernen">${esc(name)} <span aria-hidden="true">×</span></button>`).join('');
+  $('#to-search').value = '';
+  $('#to-results').hidden = true;
+  delete $('#sheet form').dataset.sure; // Empfänger geändert → Vorschau neu bestätigen
+  $('#msg-preview').innerHTML = '';
+  $('#sheet form button[type=submit]').textContent = 'Weiter';
+}
+
+// Senden geht an echte Lehrkräfte: erst Vorschau, dann ausdrücklich bestätigen
+document.addEventListener('submit', async (e) => {
+  const f = e.target.closest('form.composer');
+  if (!f) return;
+  e.preventDefault();
+  const text = f.text.value.trim(), btn = $('button[type=submit]', f), err = $('.form-error', f);
+  err.textContent = '';
+  if (!text) { err.textContent = 'Bitte einen Text eingeben.'; return; }
+  const isNew = 'newMsg' in f.dataset;
+  if (isNew && !composeTo.size) { err.textContent = 'Bitte mindestens eine Lehrkraft auswählen.'; return; }
+  if (!f.dataset.sure) {
+    f.dataset.sure = '1';
+    if (isNew) $('#msg-preview').innerHTML = `<div class="card preview"><div class="sub">An ${esc([...composeTo.values()].join(', '))}</div><div class="bubble">${esc(text)}</div></div>`;
+    btn.textContent = isNew ? 'Jetzt senden' : 'Antwort wirklich senden?';
+    haptic();
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Wird gesendet …';
+  try {
+    const r = await api(isNew ? '/api/messages' : `/api/messages/${encodeURIComponent(f.dataset.reply)}/reply`, { method: 'POST', body: isNew ? { to: [...composeTo.keys()], text } : { text } });
+    setData(r);
+    haptic();
+    toast(r.demo ? 'Demo – nicht wirklich gesendet' : isNew ? 'Nachricht gesendet' : 'Antwort gesendet');
+    if (isNew) closeSheet(); else openMessage(f.dataset.reply);
+  } catch (x) {
+    err.textContent = x.message;
+    btn.disabled = false;
+    btn.textContent = isNew ? 'Jetzt senden' : 'Antwort wirklich senden?';
+  }
+});
+document.addEventListener('input', (e) => { // Text geändert → Vorschau neu bestätigen
+  const f = e.target.closest('form.composer');
+  if (f?.dataset.sure && e.target.name === 'text') { delete f.dataset.sure; $('button[type=submit]', f).textContent = 'newMsg' in f.dataset ? 'Weiter' : 'Antworten'; const p = $('#msg-preview'); if (p) p.innerHTML = ''; }
+});
+
+async function toggleStar(id, btn) {
+  const m = S().messages.find((x) => x.id === id);
+  if (!m) return;
+  m.starred = !m.starred;
+  btn.classList.toggle('on', m.starred);
+  btn.setAttribute('aria-pressed', String(m.starred));
+  btn.textContent = m.starred ? '★ Markiert' : '☆ Markieren';
+  haptic();
+  renderSchoolBody();
+  api(`/api/messages/${encodeURIComponent(id)}/star`, { method: 'POST', body: { starred: m.starred } }).catch(() => toast('Nicht gespeichert'));
+}
+
+/* ---------------------------------------------------------------- Wo ist Lehrkraft X gerade? */
+function teacherRow(p, mine) {
+  return `<button class="row" data-teacher="${esc(p.id)}"><div class="avatar small" style="--c:${colorOf(p.name)}">${esc(initials(p.name))}</div>
+    <div class="main"><div class="title">${esc(p.name)}</div>${mine ? `<div class="meta-line">${chip('unterrichtet dich', 'var(--blue)')}</div>` : ''}</div>${ICON.chev}</button>`;
+}
+function renderTeachers(el) {
+  if (!D.edupage.connected) { el.innerHTML = `<button class="card empty" data-settings>${ICON.cap}Verbinde EduPage im Profil, um Lehrkräfte zu finden.</button>`; return; }
+  const mine = new Set(S().days.flatMap((d) => d.lessons.flatMap((l) => l.teachers)));
+  const people = [...(S().people || [])].sort((a, b) => mine.has(b.name) - mine.has(a.name));
+  el.innerHTML = `<div class="search-field card"><input id="teacher-q" type="search" placeholder="Lehrkraft suchen" autocomplete="off" aria-label="Lehrkraft suchen"></div><div class="list card" id="teacher-list"></div>`;
+  const inp = $('#teacher-q'), list = $('#teacher-list');
+  const draw = () => {
+    const q = inp.value.trim().toLowerCase(), ps = people.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 80);
+    list.innerHTML = ps.length ? ps.map((p) => teacherRow(p, mine.has(p.name))).join('') : '<div class="empty">Niemand gefunden.</div>';
+  };
+  inp.oninput = draw;
+  draw();
+}
+async function openTeacher(id) {
+  const p = (S().people || []).find((x) => x.id === id);
+  if (!p) return;
+  openSheet(p.name, '<div class="card empty slim"><div class="spinner"></div></div>');
+  let lessons;
+  try { ({ lessons } = await api(`/api/teacher/${encodeURIComponent(id)}`)); } catch (e) {
+    if ($('#sheet-title').textContent === p.name) sheetBody.innerHTML = `<div class="card banner warn"><div><b>Nicht verfügbar</b>${esc(e.message)}</div></div>`;
+    return;
+  }
+  if (!sheetOpen || $('#sheet-title').textContent !== p.name) return;
+  const m = nowMin(), act = lessons.filter((l) => l.start && !l.cancelled && !l.allday);
+  const cur = act.find((l) => toMin(l.start) <= m && m < toMin(l.end)), next = act.find((l) => toMin(l.start) > m);
+  const info = (l) => [l.classes?.join(', '), l.subject].filter(Boolean).join(' · ');
+  const state = cur ? ['Jetzt · bis ' + cur.end, cur.rooms.map(room).join(', ') || 'Unterricht', info(cur)]
+    : next ? [`Gerade frei · ab ${next.start}`, next.rooms.map(room).join(', ') || next.subject, info(next)]
+      : ['Heute', act.length ? 'Kein Unterricht mehr' : 'Kein Unterricht', ''];
+  sheetBody.innerHTML = `<div class="hero glass" style="--c:${colorOf(p.name)}"><div class="kicker">${esc(state[0])}</div><div class="subject">${esc(state[1])}</div>${state[2] ? `<div class="where">${esc(state[2])}</div>` : ''}</div>
+    ${lessons.length ? `<p class="label-sm">Heute</p><div class="list card">${lessons.map((l) => `
+      <div class="row lesson${l === cur ? ' now' : ''}${l.cancelled ? ' cancelled' : ''}" style="--c:${colorOf(l.subject)}">
+        <div class="time"><b>${esc(l.start || 'ganzt.')}</b><span>${esc(l.end)}</span></div><div class="bar"></div>
+        <div class="main"><div class="title">${esc(l.subject)}</div><div class="sub">${esc([l.rooms.map(room).join(', '), l.classes?.join(', ')].filter(Boolean).join(' · '))}</div></div></div>`).join('')}</div>` : ''}`;
+  sheetBody.classList.remove('swap'); void sheetBody.offsetWidth; sheetBody.classList.add('swap');
+}
+
+/* ---------------------------------------------------------------- Suche */
+function openSearch() {
+  openSheet('Suchen', `<div class="search-field card"><input id="q" type="search" placeholder="Aufgaben, Termine, Notizen, Nachrichten …" autocomplete="off" enterkeyhint="search" aria-label="Suchbegriff"></div><div id="results"><p class="footnote">Durchsucht Aufgaben, Termine, Notizen, Nachrichten, Stundenplan und Lehrkräfte.</p></div>`);
+  const q = $('#q');
+  q.focus({ preventScroll: true }); // noch in der Tipp-Geste, sonst öffnet iOS keine Tastatur
+  q.oninput = () => { $('#results').innerHTML = searchResults(q.value); };
+}
+function searchResults(raw) {
+  const q = raw.trim().toLowerCase();
+  if (q.length < 2) return '<p class="footnote">Mindestens zwei Buchstaben eingeben.</p>';
+  const has = (...s) => s.some((x) => String(x || '').toLowerCase().includes(q));
+  const note = (n) => `<button class="row" data-note="${esc(n.id)}"><div class="main"><div class="title">${esc(n.title || n.body.split('\n')[0] || 'Notiz')}</div><div class="sub clamp2">${esc(n.body)}</div></div>${ICON.chev}</button>`;
+  const groups = [
+    ['Aufgaben', tasks().filter((x) => has(x.title, x.subject)).slice(0, 8).map(taskRow)],
+    ['Termine', D.db.events.filter((e) => has(e.title, e.location, e.notes)).slice(0, 8).map((e) => eventRow(e))],
+    ['Notizen', D.db.notes.filter((n) => has(n.title, n.body, n.subject)).slice(0, 8).map(note)],
+    ['Nachrichten', S().messages.filter((m) => has(m.author, m.text, ...m.replies.map((r) => r.text))).slice(0, 8).map(msgRow)],
+    ['Stundenplan', S().days.flatMap((d) => d.lessons.map((l, i) => [d.date, l, i])).filter(([, l]) => has(l.subject, l.teachers.join(' '), l.rooms.join(' '))).slice(0, 8).map(([d, l, i]) => lessonRow(l, d, i))],
+    ['Lehrkräfte', (S().people || []).filter((p) => has(p.name)).slice(0, 6).map((p) => teacherRow(p))],
+  ].filter(([, rows]) => rows.length);
+  return groups.length ? groups.map(([t, rows]) => `<p class="label-sm">${t}</p><div class="list card">${rows.join('')}</div>`).join('')
+    : `<div class="card empty slim">Nichts gefunden für „${esc(raw.trim())}“.</div>`;
+}
+
+/* ---------------------------------------------------------------- Hinweis-Kapsel (wie iOS-Systemmeldungen) */
+let toastTimer;
+function toast(text) {
+  let t = $('#toast');
+  if (!t) { t = document.createElement('div'); t.id = 'toast'; t.className = 'glass'; t.setAttribute('role', 'status'); document.body.append(t); }
+  t.textContent = text;
+  t.classList.remove('show');
+  void t.offsetWidth;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2400);
 }
 
 /* ---------------------------------------------------------------- Profil: EduPage, Mitteilungen, Widget, Plesk */
@@ -845,6 +1072,14 @@ async function openSettings() {
       <div class="avatar" style="--c:var(--blue);width:58px;height:58px;font-size:21px">${esc(initials(s.name || 'Ich'))}</div>
       <div class="main"><div class="title">${esc(s.name || 'Alltag')}</div><div class="sub">${s.class ? `Klasse ${esc(s.class)}` : 'Schule und Privates'}</div></div>
     </div>
+    <p class="label-sm">Darstellung</p>
+    <div class="card" style="padding:14px 16px">
+      <div class="sub" style="margin-bottom:8px">Erscheinungsbild</div>
+      ${fChoice('look', [['auto', 'Automatisch'], ['light', 'Hell'], ['dark', 'Dunkel']], store.get('look-ui', 'auto'))}
+      <div class="sub" style="margin:14px 0 8px">Liquid Glass</div>
+      ${fChoice('glass', [['tinted', 'Getönt'], ['clear', 'Klar']], store.get('glass-ui', 'tinted'))}
+      <p class="look-hint">„Klar“ ist durchsichtiger und lässt mehr vom Hintergrund durchscheinen, „Getönt“ ist besser lesbar.</p>
+    </div>
     <p class="label-sm">EduPage</p>
     <div id="edu-section">${edupageSection()}</div>
     <p class="label-sm">Mitteilungen</p>
@@ -860,6 +1095,13 @@ async function openSettings() {
       <button class="row" id="widget-copy" disabled><span class="btn-plain">Widget-Skript kopieren</span></button>
     </div>
     <p class="footnote" id="widget-hint" style="margin-top:8px;text-align:left">Das Skript enthält einen eigenen Lese-Schlüssel – nicht weitergeben.</p>
+    <p class="label-sm">Kurzbefehle (Siri)</p>
+    <div class="list card">
+      <div class="row"><div class="main"><div class="sub">In der App „Kurzbefehle“: neuer Kurzbefehl → Aktion „Inhalte von URL abrufen“ mit dieser Adresse → danach „Text sprechen“ oder „Ergebnis anzeigen“. Nenn ihn z. B. „Schule morgen“ – dann reicht „Hey Siri, Schule morgen“.</div></div></div>
+      <button class="row" id="sc-today" disabled><span class="btn-plain">Adresse für „Heute“ kopieren</span></button>
+      <button class="row" id="sc-tomorrow" disabled><span class="btn-plain">Adresse für „Morgen“ kopieren</span></button>
+    </div>
+    <p class="footnote" id="sc-hint" style="margin-top:8px;text-align:left">Die Adresse enthält deinen Lese-Schlüssel – nicht weitergeben.</p>
     <p class="label-sm">Hintergrund-Abgleich</p>
     <div class="list card">
       <div class="row"><div class="main"><div class="sub">Die App hält sich auf dem Server selbst wach und gleicht alle 15 Minuten ab. Nach einem Server-Neustart startet sie erst wieder, wenn du sie öffnest. Noch zuverlässiger: diese Adresse beim kostenlosen Dienst cron-job.org alle 15 Minuten aufrufen lassen.</div></div></div>
@@ -869,6 +1111,14 @@ async function openSettings() {
     <div class="list card" style="margin-top:22px"><button class="row" id="logout"><span class="btn-plain danger">Abmelden</span></button></div>`);
 
   $('#logout').onclick = logout;
+  $$('#sheet input[name=look], #sheet input[name=glass]').forEach((r) => {
+    r.onchange = () => { // weicher Übergang statt hartem Helligkeitssprung
+      try { localStorage.setItem(r.name, r.value); } catch { /* privater Modus */ }
+      store.set(`${r.name}-ui`, r.value);
+      haptic();
+      if (document.startViewTransition && !reduceMotion.matches) document.startViewTransition(applyLook); else applyLook();
+    };
+  });
   wireEduForm();
   api('/api/tokens').then(async ({ widget, cron }) => {
     // vorher laden: Safari erlaubt das Kopieren nur direkt in der Tipp-Geste
@@ -877,6 +1127,9 @@ async function openSettings() {
     const cronUrl = `${location.origin}/api/cron?key=${cron}`;
     $('#widget-copy').disabled = $('#cron-copy').disabled = false;
     $('#widget-copy').onclick = () => copy(script, $('#widget-hint'));
+    $('#sc-today').disabled = $('#sc-tomorrow').disabled = false;
+    $('#sc-today').onclick = () => copy(`${location.origin}/api/summary?day=heute&key=${widget}`, $('#sc-hint'));
+    $('#sc-tomorrow').onclick = () => copy(`${location.origin}/api/summary?day=morgen&key=${widget}`, $('#sc-hint'));
     $('#cron-copy').onclick = () => copy(cronUrl, $('#cron-hint'));
   }).catch(() => {});
 
@@ -1044,11 +1297,16 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
+  const el = e.target.closest('#me,#add,#search,[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (el.id === 'me' || 'settings' in ds) return openSettings();
   if (el.id === 'add') return ADD[tab]();
+  if (el.id === 'search') return openSearch();
+  if (ds.star) return toggleStar(ds.star, el);
+  if (ds.teacher) return openTeacher(ds.teacher);
+  if (ds.pick) { composeTo.set(ds.pick, (S().people || []).find((p) => p.id === ds.pick)?.name || ''); return drawRecipients(); }
+  if (ds.unpick) { composeTo.delete(ds.unpick); return drawRecipients(); }
   if (el.matches('.check')) return toggleTask(el.closest('.task').dataset.key, el);
   if (ds.toggleKey) { toggleTask(ds.toggleKey); return closeSheet(); }
   if (ds.openKey) {

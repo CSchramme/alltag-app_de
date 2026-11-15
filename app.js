@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const { generateVapidKeys, sendPush } = require('./push');
 const { Edupage, EduError, snapshot, SNAPSHOT_VERSION, isoDay, addDays } = require('./edupage');
 const demo = require('./demo');
+const { occursOn } = require('./public/recur');
 
 const APP = 'Alltag';
 const DEMO = process.env.DEMO === '1';
@@ -86,9 +87,10 @@ const F = {
   num: (min, max, def) => (v) => { const n = Number(v); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def; },
   pick: (...opts) => (v) => (opts.includes(v) ? v : opts[0]),
 };
+const REPEAT = F.pick('', 'daily', 'weekdays', 'weekly', 'biweekly', 'monthly');
 const KINDS = {
-  reminders: { title: F.text(200, true), notes: F.text(4000), due: F.date(), time: F.time(), category: F.pick('privat', 'schule'), subject: F.text(80), done: F.bool() },
-  events: { title: F.text(200, true), date: F.date(true), start: F.time(), end: F.time(), location: F.text(120), notes: F.text(4000), category: F.pick('privat', 'schule') },
+  reminders: { title: F.text(200, true), notes: F.text(4000), due: F.date(), time: F.time(), category: F.pick('privat', 'schule'), subject: F.text(80), done: F.bool(), repeat: REPEAT, until: F.date() },
+  events: { title: F.text(200, true), date: F.date(true), start: F.time(), end: F.time(), location: F.text(120), notes: F.text(4000), category: F.pick('privat', 'schule'), repeat: REPEAT, until: F.date() },
   notes: { title: F.text(200), body: F.text(50000), subject: F.text(80), pinned: F.bool() },
   grades: { subject: F.text(80, true), value: F.text(12, true), weight: F.num(0, 10, 1), title: F.text(120), date: F.date() },
 };
@@ -128,16 +130,16 @@ function news(snap, data, done, now) {
       out.push([`rem|${r.id}|${r.due}|${r.time}`, { title: 'Erinnerung', body: r.title, url: '/#aufgaben', tag: `rem-${r.id}` }]);
     }
   }
-  for (const e of data.events) { // Termin: etwa 30 Minuten vorher
-    if (e.date === today && e.start) {
+  for (const e of data.events) { // Termin (auch wiederkehrend): etwa 30 Minuten vorher
+    if (occursOn(e, today) && e.start) {
       const mins = toMin(e.start) - (now.getHours() * 60 + now.getMinutes());
-      if (mins >= 0 && mins <= 35) out.push([`evt|${e.id}|${e.date}|${e.start}`, { title: `${e.title} · ${e.start} Uhr`, body: e.location || 'Gleich geht’s los', url: `/#kalender/${e.date}`, tag: `evt-${e.id}` }]);
+      if (mins >= 0 && mins <= 35) out.push([`evt|${e.id}|${today}|${e.start}`, { title: `${e.title} · ${e.start} Uhr`, body: e.location || 'Gleich geht’s los', url: `/#kalender/${today}`, tag: `evt-${e.id}` }]);
     }
   }
   if (now.getHours() >= 17) { // Abendübersicht für morgen
     const due = [...(snap?.tasks || []).filter((t) => t.kind !== 'event' && t.due === tomorrow && !(done[t.id] ?? t.done)),
       ...data.reminders.filter((r) => r.due === tomorrow && !r.done)];
-    const evs = data.events.filter((e) => e.date === tomorrow);
+    const evs = data.events.filter((e) => occursOn(e, tomorrow));
     if (due.length || evs.length) {
       out.push([`eve|${tomorrow}`, { title: 'Morgen', url: '/#heute', tag: 'evening',
         body: [due.length && `${due.length} fällig: ${due.slice(0, 3).map((t) => t.subject || t.title).join(', ')}`, evs.length && `${evs.length} Termin${evs.length > 1 ? 'e' : ''}: ${evs.slice(0, 2).map((e) => e.title).join(', ')}`].filter(Boolean).join(' · ') }]);
@@ -150,7 +152,7 @@ const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
 
 async function notify(snap) {
   const st = state();
-  const items = news(snap, db(), st.done, new Date());
+  const items = news(snap && { ...snap, tasks: [...snap.tasks, ...study(snap, st.done)] }, db(), st.done, new Date());
   const seen = new Set(st.seen), quiet = !st.eduSeeded; // erster EduPage-Abgleich: Bestand still übernehmen
   let fresh = items.filter(([k]) => !seen.has(k));
   st.seen = [...st.seen, ...fresh.map(([k]) => k)].slice(-4000);
@@ -175,6 +177,42 @@ async function connect(cfg) {
   return ep;
 }
 
+
+async function edupageDo(fn) {
+  const cfg = load('config.json', {}).edupage;
+  if (!cfg) throw bad('EduPage ist nicht verbunden');
+  try { return await fn(await connect(cfg)); } catch (e) { throw e.status ? e : bad(e.message); }
+}
+
+// Lernplan: zu jeder anstehenden Prüfung Lern-Erinnerungen 7, 3 und 1 Tag vorher
+function study(snap, done, now = new Date()) {
+  const today = isoDay(now), out = [];
+  for (const t of snap?.tasks || []) {
+    if (t.kind !== 'exam' || !t.due) continue;
+    for (const n of [7, 3, 1]) {
+      const due = isoDay(addDays(new Date(`${t.due}T12:00`), -n)), id = `learn:${t.id}:${n}`;
+      if (due >= today) out.push({ id, kind: 'study', label: 'Lernen', title: `${n === 1 ? 'Wiederholen' : 'Lernen'}: ${t.title}`, subject: t.subject, due, created: t.created, author: '', done: !!done[id], exam: t.id });
+    }
+  }
+  return out;
+}
+
+// Kurzbefehle/Siri: der Tag in zwei, drei Sätzen
+function summary(which) {
+  const p = payload(), date = isoDay(addDays(new Date(), which === 'morgen' ? 1 : 0)), name = which === 'morgen' ? 'Morgen' : 'Heute';
+  const lessons = p.snap?.days.find((d) => d.date === date)?.lessons || [];
+  const active = lessons.filter((l) => !l.cancelled && !l.allday && l.start);
+  const lines = [active.length ? `${name} hast du ${active.length} Stunden, von ${active[0].start} bis ${active.at(-1).end} Uhr.` : `${name} hast du keinen Unterricht.`];
+  const ch = lessons.filter((l) => l.cancelled || l.changes?.length);
+  if (ch.length) lines.push(`Änderungen: ${ch.map((l) => (l.cancelled ? `${l.subject} entfällt` : `${l.subject}, ${l.changes.join(', ')}`)).join('; ')}.`);
+  const special = lessons.filter((l) => l.allday || l.event).map((l) => l.subject);
+  if (special.length) lines.push(`Außerdem: ${[...new Set(special)].join(', ')}.`);
+  const evs = p.db.events.filter((e) => occursOn(e, date));
+  if (evs.length) lines.push(`Termine: ${evs.map((e) => `${e.start ? `${e.start} ` : ''}${e.title}`).join(', ')}.`);
+  const due = [...(p.snap?.tasks || []).filter((t) => !t.done && t.due === date), ...p.db.reminders.filter((r) => !r.done && r.due === date)];
+  if (due.length) lines.push(`Fällig: ${due.map((t) => t.subject ? `${t.subject} (${t.title})` : t.title).join(', ')}.`);
+  return lines.join(' ');
+}
 
 async function syncEdupage() {
   if (DEMO) { const s = demo.snapshot(); save('snapshot.json', s); return s; }
@@ -226,11 +264,16 @@ function payload() {
   return {
     app: APP, demo: DEMO, status: load('status.json', {}),
     edupage: DEMO ? { connected: true, school: 'demo', user: 'demo' } : cfg ? { connected: true, school: cfg.school, user: cfg.user } : { connected: false },
-    snap: snap && { ...snap, tasks: snap.tasks.map((t) => ({ ...t, done: st.done[t.id] ?? t.done })) },
+    snap: snap && {
+      ...snap,
+      tasks: [...snap.tasks.map((t) => ({ ...t, done: st.done[t.id] ?? t.done })), ...study(snap, st.done)],
+      messages: (snap.messages || []).map((m) => ({ ...m, starred: st.starred?.[m.id] ?? m.starred })),
+    },
     db: db(),
   };
 }
 
+const teacherCache = new Map();
 const routes = {
   'POST /api/login': async (req, res) => {
     const now = Date.now();
@@ -255,8 +298,52 @@ const routes = {
   'POST /api/tasks/:id': async (req, res, id) => {
     const { done } = await readJson(req);
     const st = state(); st.done[id] = done === true; save('state.json', st);
-    send(res, 200, { ok: true });
+    // Hausaufgabe auch in EduPage abhaken (wie der Haken im EduPage-Webclient)
+    const t = load('snapshot.json', null)?.tasks.find((x) => x.id === id);
+    const synced = t?.tid && !DEMO ? await edupageDo((ep) => ep.setProp(t.tid, 'done', done === true ? '1' : '0')).then(() => true, () => false) : false;
+    send(res, 200, { ok: true, synced });
   },
+
+  // Nachrichten – gehen an echte Lehrkräfte, die App fragt vorher nach
+  'POST /api/messages': async (req, res) => {
+    const { to, text } = await readJson(req);
+    const known = new Set((load('snapshot.json', null)?.people || []).map((p) => p.id));
+    const ids = [].concat(to || []).map(String).filter((x) => known.has(x));
+    if (!ids.length || !String(text || '').trim()) throw bad('Bitte Empfänger und Text angeben.');
+    if (DEMO) return send(res, 200, { ...payload(), demo: true });
+    await edupageDo((ep) => ep.sendMessage(ids.map((x) => `Ucitel${x}`), String(text).trim().slice(0, 5000)));
+    await sync(0);
+    send(res, 200, payload());
+  },
+  'POST /api/messages/:id/reply': async (req, res, id) => {
+    const { text } = await readJson(req);
+    if (!String(text || '').trim()) throw bad('Bitte einen Text eingeben.');
+    if (!(load('snapshot.json', null)?.messages || []).some((m) => m.id === id)) throw bad('Nachricht nicht gefunden');
+    if (DEMO) return send(res, 200, { ...payload(), demo: true });
+    await edupageDo((ep) => ep.reply(id, String(text).trim().slice(0, 5000)));
+    await sync(0);
+    send(res, 200, payload());
+  },
+  'POST /api/messages/:id/star': async (req, res, id) => {
+    const { starred } = await readJson(req);
+    const st = state(); st.starred = { ...st.starred, [id]: starred === true }; save('state.json', st);
+    const synced = DEMO ? false : await edupageDo((ep) => ep.setProp(id, 'starred', starred === true ? '1' : '0')).then(() => true, () => false);
+    send(res, 200, { ok: true, synced });
+  },
+
+  // Wo ist Lehrkraft X gerade? (Stundenplan der Lehrkraft für heute, 5 Minuten zwischengespeichert)
+  'GET /api/teacher/:id': async (req, res, id) => {
+    const date = isoDay(new Date()), key = `${id}|${date}`, hit = teacherCache.get(key);
+    if (hit && Date.now() - hit.at < 5 * 60e3) return send(res, 200, { date, lessons: hit.lessons });
+    let lessons;
+    if (DEMO) {
+      const name = (load('snapshot.json', null)?.people || []).find((p) => p.id === id)?.name;
+      lessons = (demo.snapshot().days[0]?.lessons || []).filter((l) => l.teachers.includes(name)).map((l) => ({ ...l, classes: ['8b'] }));
+    } else lessons = await edupageDo((ep) => ep.teacherPlan(id, date));
+    teacherCache.set(key, { at: Date.now(), lessons });
+    send(res, 200, { date, lessons });
+  },
+  'GET /api/summary': (req, res) => send(res, 200, summary(new URL(req.url, 'http://x').searchParams.get('day'))),
 
   'POST /api/items/:kind': async (req, res, kind) => {
     if (!KINDS[kind]) return send(res, 404, { error: 'unbekannt' });
@@ -352,13 +439,21 @@ const server = http.createServer(async (req, res) => {
       return serveStatic(req, res, url.pathname);
     }
     if (url.pathname === '/api/ping') return send(res, 200, 'ok'); // Selbst-Wachhalten, verrät nichts
+    if (url.pathname === '/api/diagnose/scripts') { // vorübergehend, nur Skript-Adressen und Feldnamen, keine Inhalte
+      if (!same(url.searchParams.get('key') || '', TOKENS.cron)) return send(res, 403, { error: 'falscher Schlüssel' });
+      return send(res, 200, await edupageDo(async (ep) => {
+        const html = (await ep.req('/user')).text;
+        const msgKeys = (ep.data?.items || []).filter((x) => x.typ === 'sprava').slice(0, 8).map((x) => { try { return Object.keys(JSON.parse(x.data || '{}')); } catch { return []; } });
+        return { scripts: [...new Set([...html.matchAll(/src=["']([^"']+\.js[^"']*)["']/g)].map((m) => m[1]))], msgKeys, itemKeys: Object.keys(ep.data?.items?.[0] || {}) };
+      }));
+    }
     if (url.pathname === '/api/cron') { // geplante Aufgabe in Plesk bzw. cron-job.org ("URL abrufen")
       if (!same(url.searchParams.get('key') || '', TOKENS.cron)) return send(res, 403, { error: 'falscher Schlüssel' });
       await sync(10 * 60e3);
       return send(res, 200, { ok: true, status: load('status.json', {}) });
     }
-    const bearer = (req.headers.authorization || '').replace(/^Bearer /, '');
-    const widgetRead = req.method === 'GET' && url.pathname === '/api/data' && bearer && same(bearer, TOKENS.widget);
+    const bearer = (req.headers.authorization || '').replace(/^Bearer /, '') || url.searchParams.get('key') || '';
+    const widgetRead = req.method === 'GET' && ['/api/data', '/api/summary'].includes(url.pathname) && bearer && same(bearer, TOKENS.widget);
     if (url.pathname !== '/api/login' && !loggedIn(req) && !widgetRead) return send(res, 401, { error: 'login' });
     const parts = url.pathname.split('/').filter(Boolean); // ['api', 'items', 'notes', '<id>']
     for (const [key, fn] of Object.entries(routes)) {

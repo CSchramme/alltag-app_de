@@ -6,7 +6,7 @@
 <title>Alltag</title>
 <meta name="description" content="Schule und Privates an einem Ort: Stundenplan, Vertretungen, Termine, Erinnerungen, Notizen und Noten">
 <meta name="theme-color" content="#EEF1F8">
-<meta name="color-scheme" content="light">
+<meta name="color-scheme" content="light dark">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Alltag">
@@ -15,6 +15,8 @@
 <link rel="icon" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/app.css">
+<script src="/theme.js"></script>
+<script src="/recur.js" defer></script>
 <script src="/app.js" defer></script>
 </head>
 <body>
@@ -24,6 +26,9 @@
   <header id="topbar">
     <div class="edge" aria-hidden="true"></div>
     <span id="compact-title" aria-hidden="true"></span>
+    <button id="search" class="glass circle pressable" aria-label="Suchen">
+      <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/></svg>
+    </button>
     <button id="add" class="glass circle pressable" aria-label="Neu">
       <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
     </button>

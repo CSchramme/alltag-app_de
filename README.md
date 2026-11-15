@@ -2,15 +2,17 @@
 
 Schule und Privates an einem Ort, als Web-App im Stil von iOS Liquid Glass für iPhone und PC.
 
-- **Schule (EduPage):** Stundenplan, Vertretungen, Hausaufgaben, Prüfungen und Nachrichten
-- **Privat:** Erinnerungen, Termine und Notizen
-- **Noten:** trägst du selbst ein; der Durchschnitt wird mit Gewichtung berechnet
+- **Schule (EduPage):** Stundenplan mit Vertretung/Entfall an der Stunde, Hausaufgaben (Abhaken landet auch in EduPage), Prüfungen, als „fehlt“ markierte Hausaufgaben, Nachrichten lesen, schreiben, beantworten und markieren, „Wo ist Lehrkraft X gerade?“
+- **Lernplan:** zu jeder angekündigten Prüfung automatisch Lern-Erinnerungen 7, 3 und 1 Tag vorher
+- **Privat:** Erinnerungen und Termine (auch wiederkehrend: täglich, werktags, wöchentlich, alle 2 Wochen, monatlich), Notizen
+- **Noten:** trägst du selbst ein; Durchschnitt mit Gewichtung und Zielrechner („Welche Note brauche ich?“)
+- **Suche** über alles, **Kurzbefehle/Siri** („Hey Siri, Schule morgen“), **Dunkelmodus** und **Liquid Glass klar/getönt** einstellbar
 - **Mitteilungen:** bei neuen Vertretungen und Nachrichten, zur Uhrzeit einer Erinnerung, 30 Minuten vor einem Termin und abends ein Ausblick auf morgen
 - **Widget** für Home- und Sperrbildschirm über die kostenlose App Scriptable
 
 ```
 app.js        Server und Startdatei für Plesk (Node.js ≥ 20, keine npm-Pakete nötig)
-edupage.js    EduPage-Zugriff (übertragen aus der Python-Bibliothek edupage-api 0.13.3)
+edupage.js    EduPage-Zugriff (übertragen aus der Python-Bibliothek edupage-api 0.13.3 und dem EduPage-Webclient)
 push.js       Web-Push (RFC 8291/8292) mit Node-Bordmitteln
 demo.js       Beispieldaten
 public/       die Web-App (Dokumentenstamm), dazu widget.js für Scriptable

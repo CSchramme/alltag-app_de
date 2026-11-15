@@ -44,6 +44,8 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
       { timelineid: '4', typ: 'homework', text: '', timestamp: '2026-11-10 10:00:00', cas_udalosti: '2026-11-13 00:00:00', data: '{"nazov":"überfällig"}', vlastnik_meno: 'Fr. X' },
       { timelineid: '6', typ: 'homework', text: '', timestamp: '2026-11-14 09:00:00', cas_udalosti: '2026-11-18 00:00:00', data: '{"id":"HW7","predmetid":"1","nazov":"alt"}', vlastnik_meno: 'Fr. X' },
       { timelineid: '7', typ: 'homework', text: 'Geändert: S. 40', timestamp: '2026-11-15 09:00:00', cas_udalosti: '2026-11-19 00:00:00', data: '{"id":"HW7","predmetid":"1","nazov":"S. 40"}', vlastnik_meno: 'Fr. X' },
+      { timelineid: '9', typ: 'homeworkstudentstav', text: '', timestamp: '2026-11-14 08:00:00', data: '{"id":"superid:1","predmetid":"1","date":"2026-11-14","nazov":"AB Zellatmung","stav":"missing"}', vlastnik_meno: 'Fr. X' },
+      { timelineid: '10', typ: 'homeworkstudentstav', text: '', timestamp: '2026-11-14 08:00:00', data: '{"id":"superid:2","predmetid":"1","date":"2026-11-14","nazov":"erledigt","stav":"done"}', vlastnik_meno: 'Fr. X' },
       { timelineid: '8', typ: 'event', text: 'Udalosť: 1.Deutsch-SchA', timestamp: '2026-11-15 09:00:00', cas_udalosti: '2026-11-16 00:00:00', data: '{}', vlastnik_meno: 'Fr. X' },
       { timelineid: '5', typ: 'homework', text: 'weg', timestamp: '2026-11-15 10:00:00', data: '{}', removed: '1' },
     ],
@@ -84,8 +86,23 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
   assert.deepEqual(d0.lessons[3].teachers, ['Tom Tal']);
   // überfällig und Timeline-Termine fallen weg, die geänderte Hausaufgabe ersetzt ihr Original
   assert.deepEqual(snap.tasks.map((t) => [t.id, t.title, t.details, t.subject, t.due, t.done]).sort(), [
-    ['1', 'S. 12', 'mit Rechenweg', 'Mathematik', '2026-11-17', true], ['HW7', 'S. 40', '', 'Mathematik', '2026-11-19', false]]);
-  assert.equal(snap.v, 3);
+    ['1', 'S. 12', 'mit Rechenweg', 'Mathematik', '2026-11-17', true],
+    ['8', '1.Deutsch-SchA', '', 'Deutsch', '2026-11-16', false], // Prüfungs-Ankündigung aus der Timeline, Fach aus dem Titel
+    ['HW7', 'S. 40', '', 'Mathematik', '2026-11-19', false]]);
+  assert.equal(snap.tasks.find((t) => t.id === '8').label, 'Schulaufgabe');
+  assert.equal(snap.tasks.find((t) => t.id === 'HW7').tid, '7'); // Timeline-ID für den Haken in EduPage
+  assert.deepEqual(snap.missing.map((m) => [m.title, m.subject]), [['AB Zellatmung', 'Mathematik']]);
+  assert.equal(snap.v, 4);
+
+  // Wiederholungen (gemeinsam für Server und App)
+  const R = require('./public/recur');
+  assert.ok(R.occursOn({ date: '2026-11-17', repeat: 'weekly' }, '2026-11-24'));
+  assert.ok(!R.occursOn({ date: '2026-11-17', repeat: 'weekly' }, '2026-11-25'));
+  assert.ok(!R.occursOn({ date: '2026-11-17', repeat: 'weekly', until: '2026-11-20' }, '2026-11-24'));
+  assert.ok(!R.occursOn({ date: '2026-11-17', repeat: 'weekly' }, '2026-11-10'));
+  assert.equal(R.nextOccurrence({ due: '2026-11-20', repeat: 'weekdays' }, '2026-11-20'), '2026-11-23');
+  assert.equal(R.nextOccurrence({ due: '2026-01-31', repeat: 'monthly' }, '2026-01-31'), '2026-03-31');
+  assert.equal(R.nextOccurrence({ due: '2026-11-20', repeat: '' }, '2026-11-20'), null);
   assert.equal(snap.messages.length, 1);
   assert.equal(snap.messages[0].text, 'Hallo');
   assert.equal(snap.messages[0].replies[0].text, 'Antwort');
@@ -149,6 +166,22 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
     assert.equal((await call(`/api/diagnose?key=${cron}`)).status, 401); // vorübergehende Diagnose ist wieder entfernt
     // Selbst-Wachhalten: Ping ohne Anmeldung, eigene Adresse nur aus angemeldetem Aufruf gemerkt
     assert.equal(await (await call('/api/ping')).text(), 'ok');
+    // Lernplan zur Demo-Klassenarbeit, Kurzbefehl-Text mit Lese-Schlüssel, Nachrichten nur an bekannte Lehrkräfte
+    const d2 = await (await auth('/api/data')).json();
+    assert.ok(d2.snap.tasks.some((t) => t.kind === 'study' && t.title.includes('Klassenarbeit')));
+    assert.ok(d2.snap.people.length > 3 && d2.snap.missing.length === 1);
+    const sum = await call(`/api/summary?day=morgen&key=${widget}`);
+    assert.equal(sum.status, 200);
+    assert.match(await sum.text(), /^Morgen /);
+    assert.equal((await call('/api/summary?day=morgen&key=falsch')).status, 401);
+    assert.equal((await auth('/api/messages', { method: 'POST', body: JSON.stringify({ to: ['unbekannt'], text: 'Hallo' }) })).status, 400);
+    assert.equal((await auth('/api/messages', { method: 'POST', body: JSON.stringify({ to: [d2.snap.people[0].id], text: 'Hallo' }) })).status, 200);
+    const tp = await (await auth(`/api/teacher/${encodeURIComponent(d2.snap.people[0].id)}`)).json();
+    assert.ok(Array.isArray(tp.lessons));
+    // wiederkehrender Termin wird mit Regel gespeichert
+    const ev = await (await auth('/api/items/events', { method: 'POST', body: JSON.stringify({ title: 'Training', date: '2026-11-17', repeat: 'weekly', until: '2026-12-31' }) })).json();
+    assert.deepEqual([ev.repeat, ev.until], ['weekly', '2026-12-31']);
+    assert.equal((await (await auth('/api/items/events', { method: 'POST', body: JSON.stringify({ title: 'X', date: '2026-11-17', repeat: 'stündlich' }) })).json()).repeat, '');
     assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'origin.json'), 'utf8')), `http://localhost:${port}`);
     assert.equal((await call('/api/push/subscribe', { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify({ endpoint: 'http://x' }) })).status, 400);
 
