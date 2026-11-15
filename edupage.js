@@ -214,6 +214,10 @@ class Edupage {
     const r = await this.timelineAction('createReply', { groupid, text });
     if (r.status && r.status !== 'ok') throw new Error('EduPage hat die Antwort nicht angenommen');
   }
+  // Lesebestätigung (type 'receipt', val '') und „Gefällt mir“ (type 'like', val '1'/'0') – wie Message.markAsSeen/markAsLiked der Node-Bibliothek
+  async confirm(groupid, type, val) {
+    await this.timelineAction('createConfirmation', { groupid, confirmType: type, val });
+  }
   async setProp(groupid, prop, val) {
     await this.timelineAction('setUserProp', { propsToStore: JSON.stringify({ [groupid]: { [prop]: val } }) });
   }
@@ -246,7 +250,7 @@ const TASK_KINDS = {
   homework: ['homework', 'Hausaufgabe'], bexam: ['exam', 'Klassenarbeit'], sexam: ['exam', 'Test'], testing: ['exam', 'Test'],
   oexam: ['exam', 'Mündliche Prüfung'], rexam: ['exam', 'Referat'], pexam: ['exam', 'Projekt'],
 }; // Termine/Feiertage nicht aus der Timeline – die stehen schon im persönlichen Stundenplan
-const SNAPSHOT_VERSION = 4;
+const SNAPSHOT_VERSION = 5;
 // Prüfungen kündigt EduPage als Timeline-Termin an („Udalosť: 1.Deutsch-SchA - 16.11.2026“) – daraus entsteht der Lernplan
 const EXAM_RE = /SchA|Schulaufgabe|Stegreif|\bEx\b|Klassenarbeit|Klausur|Kurzarbeit|\bTest\b/i;
 const examLabel = (t) => (/SchA|Schulaufgabe/i.test(t) ? 'Schulaufgabe' : /Stegreif|\bEx\b/i.test(t) ? 'Stegreifaufgabe'
@@ -319,6 +323,8 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
       const att = n.data.attachements && typeof n.data.attachements === 'object' ? n.data.attachements : {};
       const m = {
         id: n.id, kind: MESSAGE_KINDS[n.type], author: n.author, text: n.text, time: n.time.replace(' ', 'T'), replies: [], starred: n.starred,
+        important: !!+n.data.receipt || !!+n.data.importantReply, confirmed: n.data.myConfirmations?.receipt || null,
+        likes: +(n.data.confirmations?.like || 0), liked: !!n.data.myConfirmations?.like,
         attachments: Object.entries(att).map(([url, name]) => ({ name: String(name), url: url.startsWith('/') ? `https://${school}.edupage.org${url}` : url })),
       };
       const parent = n.replyTo && messages.get(n.replyTo);

@@ -39,7 +39,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
     },
     items: [
       { timelineid: '1', typ: 'homework', text: '', timestamp: '2026-11-15 10:00:00', cas_udalosti: '2026-11-17 00:00:00', data: '{"predmetid":"1","nazov":"S. 12","popis":"mit Rechenweg"}', vlastnik_meno: 'Fr. X' },
-      { timelineid: '2', typ: 'sprava', text: '', timestamp: '2026-11-15 11:00:00', data: '{"messageContent":"Hallo","attachements":{"/x/a.pdf":"a.pdf"}}', vlastnik_meno: 'Fr. X' },
+      { timelineid: '2', typ: 'sprava', text: '', timestamp: '2026-11-15 11:00:00', data: '{"messageContent":"Hallo","attachements":{"/x/a.pdf":"a.pdf"},"receipt":"1","confirmations":{"like":"2","receipt":35},"myConfirmations":{"receipt":"2026-11-15 12:00:00"}}', vlastnik_meno: 'Fr. X' },
       { timelineid: '3', typ: 'sprava', text: 'Antwort', timestamp: '2026-11-15 12:00:00', data: '', reakcia_na: '2', vlastnik_meno: 'Max M' },
       { timelineid: '4', typ: 'homework', text: '', timestamp: '2026-11-10 10:00:00', cas_udalosti: '2026-11-13 00:00:00', data: '{"nazov":"überfällig"}', vlastnik_meno: 'Fr. X' },
       { timelineid: '6', typ: 'homework', text: '', timestamp: '2026-11-14 09:00:00', cas_udalosti: '2026-11-18 00:00:00', data: '{"id":"HW7","predmetid":"1","nazov":"alt"}', vlastnik_meno: 'Fr. X' },
@@ -92,7 +92,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
   assert.equal(snap.tasks.find((t) => t.id === '8').label, 'Schulaufgabe');
   assert.equal(snap.tasks.find((t) => t.id === 'HW7').tid, '7'); // Timeline-ID für den Haken in EduPage
   assert.deepEqual(snap.missing.map((m) => [m.title, m.subject]), [['AB Zellatmung', 'Mathematik']]);
-  assert.equal(snap.v, 4);
+  assert.equal(snap.v, 5);
 
   // Wiederholungen (gemeinsam für Server und App)
   const R = require('./public/recur');
@@ -107,6 +107,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
   assert.equal(snap.messages[0].text, 'Hallo');
   assert.equal(snap.messages[0].replies[0].text, 'Antwort');
   assert.equal(snap.messages[0].attachments[0].url, 'https://schule.edupage.org/x/a.pdf');
+  assert.deepEqual([snap.messages[0].important, snap.messages[0].confirmed, snap.messages[0].likes, snap.messages[0].liked], [true, '2026-11-15 12:00:00', 2, false]);
 
   // 4. Web-Push: Empfänger-Seite nachgebaut (RFC 8291) entschlüsselt, VAPID-Signatur prüfbar
   const { encrypt, vapidHeader, generateVapidKeys } = require('./push');
@@ -179,6 +180,12 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
     // Kalender: beliebige Woche ab Montag nachladen
     assert.equal((await auth('/api/week?start=2026-11-17')).status, 400); // kein Montag
     assert.equal((await (await auth('/api/week?start=2026-11-23')).json()).days.length, 5);
+    // Gefällt mir und Lesebestätigung (Demo: ohne EduPage), Zähler und Bestätigung kommen zurück
+    assert.equal((await auth('/api/messages/m1/like', { method: 'POST', body: JSON.stringify({ liked: true }) })).status, 200);
+    assert.equal((await auth('/api/messages/m2/confirm', { method: 'POST', body: '{}' })).status, 200);
+    const d3 = await (await auth('/api/data')).json();
+    assert.deepEqual([d3.snap.messages.find((m) => m.id === 'm1').liked, d3.snap.messages.find((m) => m.id === 'm1').likes], [true, 4]);
+    assert.ok(d3.snap.messages.find((m) => m.id === 'm2').confirmed);
     const tp = await (await auth(`/api/teacher/${encodeURIComponent(d2.snap.people[0].id)}`)).json();
     assert.ok(Array.isArray(tp.lessons));
     // wiederkehrender Termin wird mit Regel gespeichert

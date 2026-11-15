@@ -123,7 +123,7 @@ function news(snap, data, done, now) {
     }
   }
   for (const m of snap?.messages || []) for (const x of [m, ...m.replies]) {
-    out.push([`msg|${x.id}`, { title: x.author || 'Neue Nachricht', body: x.text.slice(0, 180), url: `/#schule/${m.id}`, tag: `msg-${x.id}` }]);
+    out.push([`msg|${x.id}`, { title: `${x.important ? 'Wichtig · ' : ''}${x.author || 'Neue Nachricht'}`, body: x.text.slice(0, 180), url: `/#schule/${m.id}`, tag: `msg-${x.id}` }]);
   }
   for (const r of data.reminders) { // eigene Erinnerung zur eingestellten Uhrzeit
     if (!r.done && r.due && r.time && (r.due < today || (r.due === today && r.time <= hm))) {
@@ -267,7 +267,11 @@ function payload() {
     snap: snap && {
       ...snap,
       tasks: [...snap.tasks.map((t) => ({ ...t, done: st.done[t.id] ?? t.done })), ...study(snap, st.done)],
-      messages: (snap.messages || []).map((m) => ({ ...m, starred: st.starred?.[m.id] ?? m.starred })),
+      messages: (snap.messages || []).map((m) => {
+        const liked = st.liked?.[m.id] ?? m.liked;
+        return { ...m, starred: st.starred?.[m.id] ?? m.starred, confirmed: m.confirmed || st.confirmed?.[m.id] || null,
+          liked, likes: Math.max(0, (m.likes || 0) + (liked === !!m.liked ? 0 : liked ? 1 : -1)) };
+      }),
     },
     db: db(),
   };
@@ -329,6 +333,18 @@ const routes = {
     const st = state(); st.starred = { ...st.starred, [id]: starred === true }; save('state.json', st);
     const synced = DEMO ? false : await edupageDo((ep) => ep.setProp(id, 'starred', starred === true ? '1' : '0')).then(() => true, () => false);
     send(res, 200, { ok: true, synced });
+  },
+
+  'POST /api/messages/:id/like': async (req, res, id) => {
+    const { liked } = await readJson(req);
+    if (!DEMO) await edupageDo((ep) => ep.confirm(id, 'like', liked === true ? '1' : '0'));
+    const st = state(); st.liked = { ...st.liked, [id]: liked === true }; save('state.json', st);
+    send(res, 200, { ok: true });
+  },
+  'POST /api/messages/:id/confirm': async (req, res, id) => {
+    if (!DEMO) await edupageDo((ep) => ep.confirm(id, 'receipt', ''));
+    const st = state(); st.confirmed = { ...st.confirmed, [id]: new Date().toISOString() }; save('state.json', st);
+    send(res, 200, { ok: true });
   },
 
   // Wo ist Lehrkraft X gerade? (Stundenplan der Lehrkraft für heute, 5 Minuten zwischengespeichert)
@@ -457,22 +473,6 @@ const server = http.createServer(async (req, res) => {
       return serveStatic(req, res, url.pathname);
     }
     if (url.pathname === '/api/ping') return send(res, 200, 'ok'); // Selbst-Wachhalten, verrät nichts
-    if (url.pathname === '/api/diagnose/scripts') { // vorübergehend, nur Skript-Adressen und Feldnamen, keine Inhalte
-      if (!same(url.searchParams.get('key') || '', TOKENS.cron)) return send(res, 403, { error: 'falscher Schlüssel' });
-      return send(res, 200, await edupageDo(async (ep) => {
-        const html = (await ep.req('/user')).text;
-        const msgKeys = (ep.data?.items || []).filter((x) => x.typ === 'sprava').slice(0, 8).map((x) => { try { return Object.keys(JSON.parse(x.data || '{}')); } catch { return []; } });
-        const msgs = (ep.data?.items || []).filter((x) => x.typ === 'sprava').map((x) => { try { return JSON.parse(x.data || '{}'); } catch { return {}; } });
-        const cut = (v) => JSON.stringify(v ?? null).slice(0, 300);
-        return {
-          scripts: [...new Set([...html.matchAll(/src=["']([^"']+\.js[^"']*)["']/g)].map((m) => m[1]))], msgKeys, itemKeys: Object.keys(ep.data?.items?.[0] || {}),
-          // nachgeladene Module und Form der Bestätigungs-Felder (für Lesebestätigung und „Gefällt mir“)
-          modules: [...new Set([...html.matchAll(/["']([\w/.-]*(?:timeline|message|sprava|confirm|bundle|react)[\w/.-]*)["']/gi)].map((m) => m[1]))].slice(0, 80),
-          fields: msgs.filter((d) => d.receipt !== undefined || d.confirmations || d.myConfirmations).slice(0, 6)
-            .map((d) => ({ receipt: cut(d.receipt), confirmations: cut(d.confirmations), myConfirmations: cut(d.myConfirmations), importantReply: cut(d.importantReply), repliesByUser: cut(d.repliesByUser) })),
-        };
-      }));
-    }
     if (url.pathname === '/api/cron') { // geplante Aufgabe in Plesk bzw. cron-job.org ("URL abrufen")
       if (!same(url.searchParams.get('key') || '', TOKENS.cron)) return send(res, 403, { error: 'falscher Schlüssel' });
       await sync(10 * 60e3);

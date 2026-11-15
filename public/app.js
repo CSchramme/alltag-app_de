@@ -312,12 +312,13 @@ function taskRow(x) {
 }
 
 function msgRow(m) {
-  const extra = [m.replies.length && `${m.replies.length} ${m.replies.length === 1 ? 'Antwort' : 'Antworten'}`, m.attachments.length && `${m.attachments.length} Anhang`].filter(Boolean);
+  const extra = [m.replies.length && `${m.replies.length} ${m.replies.length === 1 ? 'Antwort' : 'Antworten'}`, m.attachments.length && `${m.attachments.length} Anhang`, m.likes && `♥ ${m.likes}`].filter(Boolean);
+  const confirm = m.important && !m.confirmed ? chip('Bestätigen', 'var(--orange)', true) : '';
   return `<button class="row msg${read.has(m.id) ? '' : ' unread'}" data-msg="${esc(m.id)}">
     <div class="avatar" style="--c:${colorOf(m.author)}">${esc(initials(m.author))}</div>
     <div class="main"><div class="head"><div class="title">${m.starred ? '<span class="star">★</span> ' : ''}${esc(m.author || 'EduPage')}</div><time>${esc(stamp(m.last || m.time))}</time></div>
       <div class="sub clamp2">${esc(m.text)}</div>
-      ${extra.length ? `<div class="meta-line">${extra.map((x) => chip(x, 'var(--blue)')).join('')}</div>` : ''}</div></button>`;
+      ${extra.length || confirm ? `<div class="meta-line">${confirm}${extra.map((x) => chip(x, 'var(--blue)')).join('')}</div>` : ''}</div></button>`;
 }
 
 /* ---------------------------------------------------------------- Heute */
@@ -604,7 +605,7 @@ function renderSchoolBody() {
 }
 
 function renderBadges() {
-  const t = today(), unread = S().messages.filter((m) => !read.has(m.id)).length;
+  const t = today(), unread = S().messages.filter((m) => !read.has(m.id) || (m.important && !m.confirmed)).length;
   const subs = S().days.filter((d) => d.date >= t).reduce((n, d) => n + d.changes.length, 0);
   for (const [name, n] of [['schule', unread], ['aufgaben', dueSoon().length + (S().missing?.length || 0)], ['kalender', subs]]) {
     const b = $(`#tabbar [data-tab="${name}"] .badge`);
@@ -842,9 +843,14 @@ function openMessage(id) {
   if (!read.has(id)) { read.add(id); store.set('read', [...read]); renderSchoolBody(); renderHeute(); renderBadges(); }
   const kind = { news: 'Mitteilung', chat: 'Chat', message: 'Nachricht' }[m.kind] || 'Nachricht';
   openSheet(m.author || 'Nachricht', `
-    <div class="meta-line" style="margin:0 4px">${chip(kind, 'var(--blue)')}<span class="due">${esc(F.full.format(new Date(m.time)))}</span>
-      <button class="pill pressable${m.starred ? ' on' : ''}" data-star="${esc(m.id)}" aria-pressed="${!!m.starred}">${m.starred ? '★ Markiert' : '☆ Markieren'}</button></div>
+    <div class="meta-line" style="margin:0 4px">${chip(kind, 'var(--blue)')}<span class="due">${esc(F.full.format(new Date(m.time)))}</span></div>
+    ${m.important ? (m.confirmed
+      ? `<p class="footnote" style="text-align:left;margin:0 4px">✓ Gelesen bestätigt am ${esc(F.full.format(new Date(String(m.confirmed).replace(' ', 'T'))))}</p>`
+      : `<div class="card banner warn"><div><b>Lesebestätigung erbeten</b>Die Lehrkraft möchte wissen, dass du die Nachricht gelesen hast.</div></div>
+         <button class="btn-primary pressable" data-confirm="${esc(m.id)}">Gelesen bestätigen</button>`) : ''}
     <div class="card bubble">${linkify(m.text)}</div>
+    <div class="msg-actions"><button class="pill like pressable${m.liked ? ' on' : ''}" data-like="${esc(m.id)}" aria-pressed="${!!m.liked}">${m.liked ? '♥' : '♡'} Gefällt mir${m.likes ? ` · ${m.likes}` : ''}</button>
+      <button class="pill pressable${m.starred ? ' on' : ''}" data-star="${esc(m.id)}" aria-pressed="${!!m.starred}">${m.starred ? '★ Markiert' : '☆ Markieren'}</button></div>
     ${m.attachments.length ? `<div class="list card">${m.attachments.map((a) => `<a class="row attach" href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener">${ICON.clip}<span class="main">${esc(a.name)}</span>${ICON.chev}</a>`).join('')}</div>` : ''}
     ${m.replies.length ? `<p class="label-sm">Antworten (${m.replies.length})</p><div class="thread">${m.replies.map((r) => `<div class="reply bubble${r.author === S().student?.name ? ' mine' : ''}"><b>${esc(r.author)} · ${esc(stamp(r.time))}</b>${linkify(r.text)}</div>`).join('')}</div>` : ''}
     ${D.edupage.connected ? `<form class="composer" data-reply="${esc(m.id)}">
@@ -963,6 +969,32 @@ document.addEventListener('input', (e) => { // Text geändert → Vorschau neu b
   const f = e.target.closest('form.composer');
   if (f?.dataset.sure && e.target.name === 'text') { delete f.dataset.sure; $('button[type=submit]', f).textContent = 'newMsg' in f.dataset ? 'Weiter' : 'Antworten'; const p = $('#msg-preview'); if (p) p.innerHTML = ''; }
 });
+
+async function toggleLike(id) {
+  const m = S().messages.find((x) => x.id === id);
+  if (!m) return;
+  m.liked = !m.liked;
+  m.likes = Math.max(0, (m.likes || 0) + (m.liked ? 1 : -1));
+  haptic();
+  openMessage(id);
+  renderSchoolBody();
+  try { await api(`/api/messages/${encodeURIComponent(id)}/like`, { method: 'POST', body: { liked: m.liked } }); }
+  catch (e) { m.liked = !m.liked; m.likes = Math.max(0, m.likes + (m.liked ? 1 : -1)); toast(e.message); if (sheetOpen) openMessage(id); renderSchoolBody(); }
+}
+async function confirmRead(id, btn) {
+  const m = S().messages.find((x) => x.id === id);
+  if (!m) return;
+  btn.disabled = true;
+  btn.textContent = 'Wird bestätigt …';
+  try {
+    await api(`/api/messages/${encodeURIComponent(id)}/confirm`, { method: 'POST' });
+    m.confirmed = new Date().toISOString();
+    haptic();
+    toast('Gelesen bestätigt');
+    openMessage(id);
+    renderSchoolBody(); renderHeute(); renderBadges();
+  } catch (e) { btn.disabled = false; btn.textContent = 'Gelesen bestätigen'; toast(e.message); }
+}
 
 async function toggleStar(id, btn) {
   const m = S().messages.find((x) => x.id === id);
@@ -1338,7 +1370,7 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-week],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-like],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (el.id === 'me' || 'settings' in ds) return openSettings();
@@ -1346,6 +1378,8 @@ document.addEventListener('click', async (e) => {
   if (el.id === 'search') return openSearch();
   if (ds.week !== undefined) return shiftWeek(Number(ds.week));
   if (ds.star) return toggleStar(ds.star, el);
+  if (ds.like) return toggleLike(ds.like);
+  if (ds.confirm) return confirmRead(ds.confirm, el);
   if (ds.teacher) return openTeacher(ds.teacher);
   if (ds.pick) { composeTo.set(ds.pick, (S().people || []).find((p) => p.id === ds.pick)?.name || ''); return drawRecipients(); }
   if (ds.unpick) { composeTo.delete(ds.unpick); return drawRecipients(); }

@@ -52,8 +52,9 @@ function snapshot(now = new Date()) {
     messages: [
       { id: 'm1', kind: 'message', author: 'Fr. Schneider', time: ago(1.5), attachments: [], last: ago(1),
         text: 'Liebe 8b,\nmorgen bitte unbedingt die Lektüre „Tschick“ mitbringen. Wir beginnen mit der Analyse des dritten Kapitels.\n\nViele Grüße\nS. Schneider',
+        likes: 3, liked: false,
         replies: [{ id: 'm1r', kind: 'message', author: 'Alex Beispiel', text: 'Alles klar, danke!', time: ago(1), replies: [], attachments: [] }] },
-      { id: 'm2', kind: 'news', author: 'Schulleitung', time: ago(26), replies: [], attachments: [{ name: 'Elternbrief_Sprechtag.pdf', url: '#' }],
+      { id: 'm2', kind: 'news', author: 'Schulleitung', time: ago(26), replies: [], important: true, confirmed: null, likes: 0, attachments: [{ name: 'Elternbrief_Sprechtag.pdf', url: '#' }],
         text: 'Der Elternsprechtag findet am Donnerstag ab 15 Uhr statt. Die Anmeldung ist ab sofort über das Sekretariat möglich.' },
       { id: 'm3', kind: 'message', author: 'Hr. Schulz', time: ago(52), replies: [], attachments: [], text: 'Sport findet diese Woche draußen statt – bitte an wetterfeste Kleidung denken.' },
     ],

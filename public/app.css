@@ -486,9 +486,12 @@ button.banner { display: flex; text-align: left; }
 /* ---------------------------------------------------------------- Neue Bausteine */
 .field select { flex: 1; min-width: 0; padding: 14px 0; border: 0; outline: 0; background: transparent; -webkit-appearance: none; appearance: none; text-align: right; text-align-last: right; font: 17px var(--font); color: var(--blue); cursor: pointer; }
 .field[hidden] { display: none; }
-.pill { margin-left: auto; padding: 5px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--orange); background: color-mix(in srgb, var(--orange) 12%, transparent); }
+.pill { margin-left: 0; padding: 5px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--orange); background: color-mix(in srgb, var(--orange) 12%, transparent); }
 .pill.on { color: #fff; background: var(--orange); }
 .star { color: var(--orange); }
+.msg-actions { display: flex; gap: 8px; }
+.pill.like { margin-left: 0; color: var(--pink); background: color-mix(in srgb, var(--pink) 12%, transparent); }
+.pill.like.on { color: #fff; background: var(--pink); }
 .reply.mine { background: color-mix(in srgb, var(--blue) 14%, transparent); }
 .composer { margin-top: 18px; }
 .composer > * + * { margin-top: 12px; }

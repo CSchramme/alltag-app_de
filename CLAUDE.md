@@ -30,6 +30,6 @@ Web-App/PWA „Alltag“ für Schule (EduPage) + Privates (Erinnerungen, Termine
 
 ## Offene Punkte
 1. Eine echte Lehrer-/Raum-Vertretung war in den Rohdaten noch nicht dabei – Erkennung beruht auf dem beobachteten `changes`-Format
-2. „Gefällt mir“ und Lesebestätigung wichtiger Nachrichten: Endpunkte unbekannt (nicht in timelineViewer.js). Vorübergehend liefert `/api/diagnose/scripts?key=<cron>` die Skript-Adressen der angemeldeten EduPage-Seite + Feldnamen von Nachrichten → danach Endpunkt wieder entfernen
+2. „Gefällt mir“/Lesebestätigung: `createConfirmation` {groupid, confirmType: like ('1'/'0') | receipt ('')} (aus der Node-Bibliothek edupage-api 0.8.3); Felder `receipt`, `importantReply`, `confirmations {like, receipt}`, `myConfirmations {like, receipt: Zeit}` – noch nicht mit echtem Konto ausgelöst
 4. Senden/Antworten/Haken in EduPage sind nur gegen den EduPage-Code gebaut, noch nicht mit echtem Konto ausgelöst
 3. Push und Scriptable-Widget noch nicht auf einem echten iPhone geprüft
