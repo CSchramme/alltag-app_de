@@ -649,7 +649,13 @@ sheetBody.addEventListener('touchend', touchEnd);
 sheetBody.addEventListener('touchcancel', touchEnd);
 scrim.addEventListener('click', () => closeSheet());
 $('.sheet-close', sheet).addEventListener('click', () => closeSheet());
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') return closeSheet();
+  // Kalender am PC: Pfeiltasten blättern tageweise
+  if (tab !== 'kalender' || sheetOpen || !/^Arrow(Left|Right)$/.test(e.key) || e.target.closest?.('input, textarea')) return;
+  const pager = $('#view-kalender .pager'), step = (pager.children[1]?.offsetLeft - pager.children[0].offsetLeft) || pager.clientWidth;
+  pager.scrollBy({ left: e.key === 'ArrowRight' ? step : -step, behavior: reduceMotion.matches ? 'auto' : 'smooth' });
+});
 
 /* ---------------------------------------------------------------- Formulare für eigene Einträge */
 const fText = (name, ph, v, attrs = '') => `<label class="field"><input name="${name}" placeholder="${ph}" value="${esc(v)}" ${attrs}></label>`;

@@ -487,7 +487,7 @@ button.banner { display: flex; text-align: left; }
   .large-title h1 { font-size: 40px; line-height: 46px; }
   .today-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 0 28px; align-items: start; }
   .today-grid .col > .section-title:first-child { margin-top: 0; }
-  #view-kalender .seg-bar { display: none; }
+  #view-kalender .seg-bar { max-width: 760px; margin-left: max(0px, calc((100% - 1180px) / 2)); } /* Tagesleiste: Klick springt zur Spalte */
   #view-kalender .pager {
     display: grid; grid-auto-flow: column; grid-auto-columns: minmax(250px, 1fr); gap: 14px;
     max-width: none; margin: 0 -32px; padding: 0 32px 10px; scroll-padding: 0 32px;
