@@ -102,6 +102,7 @@ const initials = (name) => {
   const w = String(name || '?').split(/\s+/).filter((x) => x && !x.endsWith('.'));
   return ((w[0]?.[0] || '?') + (w.length > 1 ? w.at(-1)[0] : '')).toUpperCase();
 };
+const EXAM = /SchA|Schulaufgabe|Stegreif|\bEx\b|Klassenarbeit|Klausur|Test/i;
 const room = (r) => (/^\d/.test(r) ? `Raum ${r}` : r);
 const where = (l) => [l.rooms.map(room).join(', '), l.teachers.join(', ')].filter(Boolean).join(' · ');
 const chip = (text, c, solid) => `<span class="chip${solid ? ' solid' : ''}" style="--c:${c}">${esc(text)}</span>`;
@@ -192,7 +193,9 @@ const subjects = () => [...new Set([...S().days.flatMap((d) => d.lessons.map((l)
 function agenda(date) {
   const items = [];
   S().tasks.filter((t) => t.due === date && (t.kind === 'event' || t.kind === 'exam')).forEach((t) => items.push({ type: 'allday', start: '', t }));
-  lessonsOn(date).forEach((l, i) => items.push({ type: 'lesson', start: l.start, end: l.end, l, i }));
+  lessonsOn(date).forEach((l, i) => items.push(l.allday
+    ? { type: 'allday', start: '', t: { id: '', kind: 'event', label: 'Ganztägig', title: l.subject, subject: '' } }
+    : { type: 'lesson', start: l.start, end: l.end, l, i }));
   D.db.events.filter((e) => e.date === date).forEach((e) => items.push({ type: 'event', start: e.start, end: e.end, e }));
   return items.sort((a, b) => (a.start || '').localeCompare(b.start || ''));
 }
@@ -226,12 +229,14 @@ function banners() {
 
 function lessonRow(l, date, i) {
   const isNow = date === today() && l.start && toMin(l.start) <= nowMin() && nowMin() < toMin(l.end);
-  const note = l.changes.length ? l.changes.join(' · ') : l.cancelled ? 'Entfällt' : '';
+  const note = l.cancelled ? 'Entfällt' : l.changes.join(' · ');
+  const exam = l.event && EXAM.test(l.subject);
   return `<button class="row lesson${l.cancelled ? ' cancelled' : ''}${isNow ? ' now' : ''}" style="--c:${colorOf(l.subject)}" data-day="${date}" data-i="${i}">
     <div class="time"><b>${esc(l.start)}</b><span>${esc(l.end)}</span></div>
     <div class="bar"></div>
     <div class="main"><div class="title">${esc(l.subject)}</div>${where(l) ? `<div class="sub">${esc(where(l))}</div>` : ''}
-      ${note ? `<div class="change-text">${esc(note)}</div>` : ''}</div>
+      ${note ? `<div class="change-text">${esc(note)}</div>` : ''}
+      ${l.event || l.homework?.length ? `<div class="meta-line">${l.event ? chip(exam ? 'Prüfung' : 'Termin', exam ? 'var(--red)' : 'var(--indigo)', true) : ''}${l.homework?.length ? chip('Hausaufgabe fällig', 'var(--blue)') : ''}</div>` : ''}</div>
     <div class="num">${l.period ?? ''}</div></button>`;
 }
 function eventRow(e) {
@@ -731,6 +736,7 @@ function openLesson(date, i) {
   openSheet(l.subject, `
     ${l.changes.length || l.cancelled ? `<div class="card banner warn"><div><b>${l.cancelled ? 'Entfällt' : 'Vertretung'}</b>${esc(l.changes.join(' · '))}</div></div>` : ''}
     <div class="card"><dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl></div>
+    ${l.homework?.length ? `<p class="label-sm">Hausaufgabe fällig</p>${l.homework.map((h) => `<div class="card bubble">${linkify(h)}</div>`).join('')}` : ''}
     ${l.online ? `<a class="btn-primary pressable" style="line-height:52px" href="${esc(safeUrl(l.online))}" target="_blank" rel="noopener">Online-Stunde öffnen</a>` : ''}
     ${hw.length ? `<p class="label-sm">Fällig in dieser Stunde</p><div class="list card">${hw.map(taskRow).join('')}</div>` : ''}`);
 }
@@ -740,7 +746,7 @@ function openEduTask(id) {
   if (!t) return;
   const kv = [['Fach', t.subject], ['Fällig', t.due && F.long.format(parseDay(t.due))], ['Eingetragen', t.created && F.full.format(new Date(t.created))], ['Von', t.author]].filter(([, v]) => v);
   openSheet(t.label, `
-    <div class="card bubble">${linkify(t.title)}</div>
+    <div class="card bubble">${linkify(t.title)}${t.details ? `\n\n${linkify(t.details)}` : ''}</div>
     <div class="card"><dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl></div>
     ${t.kind !== 'event' ? `<button class="btn-primary pressable" data-toggle-key="e:${esc(t.id)}">${t.done ? 'Als offen markieren' : 'Als erledigt markieren'}</button>` : ''}
     <p class="footnote">Aus EduPage – ändern kannst du den Eintrag nur dort.</p>`);
@@ -808,7 +814,6 @@ function edupageSection() {
       `<div class="row"><div class="main">Letzter Abgleich</div><div class="trail">${esc(ago(D.snap?.updated))}</div></div>`,
       `<button class="row" data-refresh><span class="btn-plain">Jetzt aktualisieren</span></button>`,
       `<button class="row" data-edit-edu><span class="btn-plain">Zugang ändern</span></button>`,
-      `<button class="row" id="diag-copy"><span class="btn-plain">Diagnose-Link kopieren</span></button>`,
       `<button class="row" data-disconnect><span class="btn-plain danger">Verbindung trennen</span></button>`)}
       ${D.status?.ok === false ? `<p class="footnote warn-text">${esc(D.status.error)}</p>` : ''}`;
   }
@@ -859,8 +864,6 @@ async function openSettings() {
     const tpl = await fetch('/widget.js').then((r) => r.text());
     const script = tpl.replace('__SERVER__', location.origin).replace('__TOKEN__', widget);
     const cronUrl = `${location.origin}/api/cron?key=${cron}`;
-    const diag = $('#diag-copy');
-    if (diag) diag.onclick = () => copy(`${location.origin}/api/diagnose?key=${cron}`, $('#cron-hint'));
     $('#widget-copy').disabled = $('#cron-copy').disabled = false;
     $('#widget-copy').onclick = () => copy(script, $('#widget-hint'));
     $('#cron-copy').onclick = () => copy(cronUrl, $('#cron-hint'));

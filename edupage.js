@@ -125,27 +125,49 @@ class Edupage {
     return JSON.parse(body.slice(0, body.lastIndexOf(',['))).dates?.[date]?.plan ?? [];
   }
 
+  // Persönlicher Tagesplan (Format aus echten Daten): Stunden, Termine/Prüfungen, Ausfall als eigener
+  // Eintrag mit „Entfällt“, Vertretung über flags.dp0.changes [{column, old}], fällige Hausaufgaben in infos.
   lessons(plan) {
+    const times = {}; // Einträge ohne Uhrzeit (z. B. Entfall) bekommen die Zeit derselben Stunde
+    for (const l of plan) if (l.starttime && l.uniperiod) times[l.uniperiod] ??= [l.starttime, l.endtime];
     const out = [];
     for (const l of plan) {
-      if ('header' in l && (!l.header?.length || l.header[0]?.cmd === 'addlesson_t')) continue;
-      const subj = this.dbi('subjects', l.subjectid);
+      if (l.type === 'period' || ('header' in l && (!l.header?.length || l.header[0]?.cmd === 'addlesson_t'))) continue;
+      const dp = l.flags?.dp0 && typeof l.flags.dp0 === 'object' ? l.flags.dp0 : {};
+      const head = (l.header || []).map((h) => h.item || h);
+      const subj = this.dbi('subjects', l.subjectid ?? dp.subjectid ?? head.find((h) => h.subjectid)?.subjectid);
+      const headText = head.map((h) => h.text).filter((t) => t && t.trim() !== '·').join(' · ');
+      const texts = (l.infos || []).flatMap((i) => (i.texts || []).map((t) => ({ type: i.type, ...t })));
       const event = !!(l.type === 'event' || l.type === 'out' || l.main);
-      let topic = l.flags?.dp0?.note_wd || l.flags?.event?.name || null;
-      if (!topic && event && !subj && typeof l.name === 'string' && l.name.trim()) topic = l.name;
+      const allday = !!(dp.allday || l.allday || l.uniperiod === 'ad');
+      const cancelled = !!(dp.cancelled || l.removed || l.type === 'absent' || l.type === '' || texts.some((t) => /^Entfällt/.test(t.text || '')));
+      const [start, end] = allday ? ['', ''] : l.starttime ? [l.starttime, l.endtime] : times[l.uniperiod] || ['', ''];
+      // Vertretung = anderer Lehrer, Raum oder anderes Fach als im regulären Plan; geänderte Klassenlisten betreffen dich nicht
+      const old = (col) => [...new Set((dp.changes || []).filter((c) => c.column === col).flatMap((c) => [].concat(c.old)).map(String))];
+      const notes = [];
+      if (!cancelled) {
+        const t = old('teacherids').map((id) => this.person('teachers', id)).filter(Boolean);
+        const r = old('classroomids').map((id) => this.dbi('classrooms', id)?.name).filter(Boolean);
+        const s = old('subjectid').filter((id) => id !== String(subj?.id)).map((id) => this.dbi('subjects', id)?.name).filter(Boolean);
+        if (t.length) notes.push(`Vertretung für ${t.join(', ')}`);
+        if (r.length) notes.push(`Raumänderung, sonst ${r.join(', ')}`);
+        if (s.length) notes.push(`statt ${s.join(', ')}`);
+        if (!notes.length && dp.substids?.length) notes.push('Vertretung');
+      }
       out.push({
         period: /^\d+$/.test(l.uniperiod) ? Number(l.uniperiod) : null,
-        start: (l.starttime || '').replace('24:00', '23:59'),
-        end: (l.endtime || '').replace('24:00', '23:59'),
-        subject: subj?.name || topic || 'Veranstaltung',
+        start: start.replace('24:00', '23:59'),
+        end: end.replace('24:00', '23:59'),
+        subject: (event ? headText || subj?.name : subj?.name || headText) || 'Unterricht',
         short: subj?.short || '',
         teachers: (l.teacherids || []).map((id) => this.person('teachers', id)).filter(Boolean),
         rooms: (l.classroomids || []).map((id) => this.dbi('classrooms', id)?.name).filter(Boolean),
         groups: (l.groupnames || []).filter(Boolean),
-        topic: subj ? topic : null,
-        cancelled: !!(l.removed || l.type === 'absent' || l.type === ''),
-        event,
-        online: l.ol_url || null,
+        topic: (event ? subj?.name : (subj && headText) || dp.note_wd || l.flags?.event?.name) || null,
+        cancelled, event, allday,
+        online: l.ol_url || dp.ol_url || null,
+        changes: notes,
+        homework: texts.filter((t) => t.type === 'homework').map((t) => String(t.item?.text || t.text || '').trim()).filter(Boolean),
       });
     }
     return out;
@@ -210,9 +232,10 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
     const dt = addDays(now, i), date = isoDay(dt);
     if (dt.getDay() === 0 || dt.getDay() === 6) continue;
     // Nur der persönliche Stundenplan zählt – der Vertretungsplan der ganzen Schule passt nicht zu Kursen/Gruppen
-    const lessons = (await attempt(`Stundenplan ${date}`, async () => ep.lessons(await ep.plan(date)), [])).map((l) => ({ ...l, changes: [] }));
-    const changes = lessons.filter((l) => l.cancelled).map((l) => ({
-      periods: l.period ? [l.period] : [], label: l.period ? `${l.period}.` : '', text: `${l.subject} – Entfall`, kind: 'cancel',
+    const lessons = await attempt(`Stundenplan ${date}`, async () => ep.lessons(await ep.plan(date)), []);
+    const changes = lessons.filter((l) => l.cancelled || l.changes.length).map((l) => ({
+      periods: l.period ? [l.period] : [], label: l.period ? `${l.period}.` : '',
+      text: l.cancelled ? `${l.subject} – Entfall` : `${l.subject}: ${l.changes.join(', ')}`, kind: l.cancelled ? 'cancel' : 'change',
     }));
     days.push({ date, lessons, changes });
   }
@@ -227,7 +250,7 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
       if ((due || n.time.slice(0, 10)) < cutoff) continue;
       const [kind, label] = TASK_KINDS[n.type];
       tasks.push({
-        id: n.id, kind, label, title: n.text || n.data.nazov || label,
+        id: n.id, kind, label, title: n.text || n.data.nazov || label, details: String(n.data.popis || '').trim(),
         subject: subjects[String(n.data.predmetid ?? n.data.subjectid ?? '')]?.name || '',
         due, created: n.time.replace(' ', 'T'), author: n.author, done: n.done,
       });

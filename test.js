@@ -34,10 +34,11 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
     userid: 'Student42',
     dbi: {
       students: { 42: { firstname: 'Max', lastname: 'M', classid: '7' } }, classes: { 7: { name: '7.A', short: '7A' } },
-      subjects: { 1: { name: 'Mathematik', short: 'M' } }, teachers: { 9: { firstname: 'Bea', lastname: 'Becker' } }, classrooms: { 5: { name: '104', short: '104' } },
+      subjects: { 1: { id: 1, name: 'Mathematik', short: 'M' }, '-8': { id: -8, name: 'Deutsch', short: 'D' }, '-145': { id: -145, name: 'Geographie', short: 'Geo' }, 6: { id: 6, name: 'Interessengruppe', short: 'IG' } },
+      teachers: { 9: { firstname: 'Bea', lastname: 'Becker' }, 10: { firstname: 'Tom', lastname: 'Tal' } }, classrooms: { 5: { name: '104', short: '104' }, 7: { name: '205', short: '205' } },
     },
     items: [
-      { timelineid: '1', typ: 'homework', text: 'S. 12', timestamp: '2026-11-15 10:00:00', cas_udalosti: '2026-11-17 00:00:00', data: '{"predmetid":"1"}', vlastnik_meno: 'Fr. X' },
+      { timelineid: '1', typ: 'homework', text: '', timestamp: '2026-11-15 10:00:00', cas_udalosti: '2026-11-17 00:00:00', data: '{"predmetid":"1","nazov":"S. 12","popis":"mit Rechenweg"}', vlastnik_meno: 'Fr. X' },
       { timelineid: '2', typ: 'sprava', text: '', timestamp: '2026-11-15 11:00:00', data: '{"messageContent":"Hallo","attachements":{"/x/a.pdf":"a.pdf"}}', vlastnik_meno: 'Fr. X' },
       { timelineid: '3', typ: 'sprava', text: 'Antwort', timestamp: '2026-11-15 12:00:00', data: '', reakcia_na: '2', vlastnik_meno: 'Max M' },
       { timelineid: '4', typ: 'homework', text: 'uralt', timestamp: '2020-01-01 10:00:00', data: '{}', vlastnik_meno: 'Fr. X' },
@@ -45,18 +46,40 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
     ],
     userProps: { 1: { doneMaxCas: '2026-11-15 13:00:00' } },
   };
-  ep.plan = async () => [{ uniperiod: '3', starttime: '09:45', endtime: '10:30', subjectid: '1', teacherids: ['9'], classroomids: ['5'], groupnames: [''], type: 'card' },
-    { header: [] }, { uniperiod: '4', starttime: '10:35', endtime: '11:20', subjectid: '1', type: 'absent' }];
+  const card = (p, sid, extra = {}, dp = {}) => ({ uniperiod: p, type: 'lesson', starttime: '09:45', endtime: '10:30', subjectid: sid, teacherids: ['9'], classroomids: ['5'], groupnames: [''],
+    header: [{ item: { subjectid: sid, changes: [] } }], infos: [], flags: { dp0: { type: 'card', cancelled: false, allday: false, ...dp } }, ...extra });
+  ep.plan = async () => [
+    card('3', '1', { infos: [{ type: 'homework', texts: [{ text: 'Fällige Hausaufgabe (<- Freitag, 13.11.): ', item: { text: 'S. 12 Nr. 4\n' } }] }] },
+      { changes: [{ column: 'classids', old: '-58' }] }), // geänderte Klassenliste: keine Vertretung für mich
+    { uniperiod: '4', type: 'event', starttime: '10:50', endtime: '11:30', subjectid: '-8', teacherids: [], classroomids: [], groupnames: [''],
+      header: [{ icon: 'x.svg', text: 'SchA: 1.Deutsch-SchA' }], flags: { dp0: { type: 'event', cancelled: false, allday: false } } },
+    { uniperiod: '4', type: '', header: [{ item: { subjectid: '-145', changes: [{ column: 'subjectid', old: '-145' }] } }], infos: [{ texts: [{ text: 'Entfällt' }] }],
+      flags: [], classids: [], teacherids: [], classroomids: [], groupnames: [], starttime: '', endtime: '', period: '4' },
+    card('5', '1', { teacherids: ['10'], classroomids: ['7'] }, { changes: [{ column: 'teacherids', old: '9' }, { column: 'classroomids', old: '5' }] }),
+    card('7', '6', { header: [{ item: { text: 'Percussion, 6-10' } }, { item: { text: '·' } }, { item: { subjectid: '6', changes: [] } }] }, { type: 'tcard' }),
+    { type: 'period', uniperiod: '8', header: [], flags: [], classids: [], teacherids: [], classroomids: [], groupnames: [] },
+    { uniperiod: 'ad', type: 'event', starttime: '00:00', endtime: '24:00', header: [{ text: 'Feiertag: Buß- und Bettag' }], teacherids: [], classroomids: [], groupnames: [''], flags: { dp0: { type: 'event', allday: true } } },
+  ];
   const snap = await snapshot(ep, { school: 'schule', now: new Date(2026, 10, 16, 8) });
   assert.deepEqual(snap.errors, []);
   assert.deepEqual(snap.student, { name: 'Max M', class: '7.A' });
   assert.equal(snap.days.length, 5); // Mo–Fr innerhalb von 7 Tagen
   const d0 = snap.days[0];
-  // Entfall kommt aus dem persönlichen Stundenplan, nicht aus dem Vertretungsplan der Schule
-  assert.deepEqual(d0.changes, [{ periods: [4], label: '4.', text: 'Mathematik – Entfall', kind: 'cancel' }]);
-  assert.deepEqual(d0.lessons.map((l) => [l.subject, l.teachers[0], l.rooms[0], l.cancelled]), [
-    ['Mathematik', 'Bea Becker', '104', false], ['Mathematik', undefined, undefined, true]]);
-  assert.deepEqual(snap.tasks.map((t) => [t.title, t.subject, t.due, t.done]), [['S. 12', 'Mathematik', '2026-11-17', true]]);
+  // Entfall und Vertretung kommen aus dem persönlichen Stundenplan, nicht aus dem Vertretungsplan der Schule
+  assert.deepEqual(d0.changes, [
+    { periods: [4], label: '4.', text: 'Geographie – Entfall', kind: 'cancel' },
+    { periods: [5], label: '5.', text: 'Mathematik: Vertretung für Bea Becker, Raumänderung, sonst 104', kind: 'change' }]);
+  assert.deepEqual(d0.lessons.map((l) => [l.period, l.start, l.subject, l.topic, l.cancelled, l.event, l.allday]), [
+    [3, '09:45', 'Mathematik', null, false, false, false],
+    [4, '10:50', 'SchA: 1.Deutsch-SchA', 'Deutsch', false, true, false],
+    [4, '10:50', 'Geographie', null, true, false, false], // Zeit von derselben Stunde übernommen
+    [5, '09:45', 'Mathematik', null, false, false, false],
+    [7, '09:45', 'Interessengruppe', 'Percussion, 6-10', false, false, false],
+    [null, '', 'Feiertag: Buß- und Bettag', null, false, true, true]]);
+  assert.deepEqual(d0.lessons[0].homework, ['S. 12 Nr. 4']);
+  assert.deepEqual(d0.lessons[0].changes, []);
+  assert.deepEqual(d0.lessons[3].teachers, ['Tom Tal']);
+  assert.deepEqual(snap.tasks.map((t) => [t.title, t.details, t.subject, t.due, t.done]), [['S. 12', 'mit Rechenweg', 'Mathematik', '2026-11-17', true]]);
   assert.equal(snap.messages.length, 1);
   assert.equal(snap.messages[0].text, 'Hallo');
   assert.equal(snap.messages[0].replies[0].text, 'Antwort');
@@ -117,8 +140,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
     assert.equal((await call('/api/tokens', { headers: { Authorization: `Bearer ${widget}` } })).status, 401);
     assert.equal((await call('/api/cron?key=falsch')).status, 403);
     assert.equal((await call(`/api/cron?key=${cron}`)).status, 200);
-    assert.equal((await call('/api/diagnose?key=falsch')).status, 403);
-    assert.equal((await (await call(`/api/diagnose?key=${cron}`)).json()).error, 'EduPage nicht verbunden');
+    assert.equal((await call(`/api/diagnose?key=${cron}`)).status, 401); // vorübergehende Diagnose ist wieder entfernt
     assert.equal((await call('/api/push/subscribe', { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify({ endpoint: 'http://x' }) })).status, 400);
 
     // statische Dateien, kein Ausbruch aus public/

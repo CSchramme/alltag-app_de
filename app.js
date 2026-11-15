@@ -175,25 +175,6 @@ async function connect(cfg) {
   return ep;
 }
 
-// Vorübergehend: rohe EduPage-Daten zum Auswerten der echten Feldnamen (wird danach wieder entfernt)
-async function diagnose() {
-  const cfg = load('config.json', {}).edupage;
-  if (!cfg) return { error: 'EduPage nicht verbunden' };
-  const ep = await connect(cfg), plans = {};
-  for (let i = 0, n = 0; i < 10 && n < 3; i++) {
-    const d = addDays(new Date(), i);
-    if (d.getDay() === 0 || d.getDay() === 6) continue;
-    n++;
-    try { plans[isoDay(d)] = await ep.plan(isoDay(d)); } catch (e) { plans[isoDay(d)] = `Fehler: ${e.message}`; }
-  }
-  const items = ep.data?.items || [], types = {};
-  items.forEach((x) => { types[x.typ] = (types[x.typ] || 0) + 1; });
-  const school = ['homework', 'bexam', 'sexam', 'oexam', 'rexam', 'pexam', 'testing', 'etesthw', 'homeworkstudentstav', 'substitution', 'changeroom'];
-  return {
-    userid: ep.data?.userid, dataKeys: Object.keys(ep.data || {}), timelineTypes: types,
-    timelineSchool: items.filter((x) => school.includes(x.typ)).slice(0, 25), plans, subjects: ep.data?.dbi?.subjects,
-  };
-}
 
 async function syncEdupage() {
   if (DEMO) { const s = demo.snapshot(); save('snapshot.json', s); return s; }
@@ -356,10 +337,6 @@ const server = http.createServer(async (req, res) => {
     if (!url.pathname.startsWith('/api/')) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method Not Allowed');
       return serveStatic(req, res, url.pathname);
-    }
-    if (url.pathname === '/api/diagnose') { // vorübergehend, Zugang mit Anmeldung oder Cron-Schlüssel
-      if (!loggedIn(req) && !same(url.searchParams.get('key') || '', TOKENS.cron)) return send(res, 403, { error: 'falscher Schlüssel' });
-      return send(res, 200, await diagnose());
     }
     if (url.pathname === '/api/cron') { // geplante Aufgabe in Plesk ("URL abrufen")
       if (!same(url.searchParams.get('key') || '', TOKENS.cron)) return send(res, 403, { error: 'falscher Schlüssel' });

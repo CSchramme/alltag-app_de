@@ -18,7 +18,14 @@ Web-App/PWA „Alltag“ für Schule (EduPage) + Privates (Erinnerungen, Termine
 - Nicht oft einloggen (Captcha) – nach Captcha 1 h Pause, nach falschem Passwort Stopp bis Neueintrag in der App
 - Die Schule nutzt EduPage-Noten nicht → Noten nur manuell
 
+## Format des persönlichen Tagesplans (/gcall, aus echten Daten 11/2026)
+- Einträge: `type` lesson/event/period/'' ; `header[].item.subjectid` bzw. `header[].text` (Termine: „SchA: 1.Deutsch-SchA“, Feiertage: „Feiertag: …“, `uniperiod: 'ad'`, `flags.dp0.allday`)
+- Entfall = eigener Eintrag mit `type: ''`, ohne Uhrzeit, `infos` „Entfällt“, Fach nur im Header
+- Vertretung = `flags.dp0.changes` [{column, old}] mit column teacherids/classroomids/subjectid; `classids`-Änderungen (zusammengelegte Klassen) ignorieren
+- Fällige Hausaufgaben stehen in `infos` mit `type: 'homework'` (`item.text`); Timeline-Hausaufgaben: `text` leer, Titel `data.nazov`, Fach `data.predmetid`, Fälligkeit `cas_udalosti`/`data.date`, Details `data.popis`
+- userid z. B. `Student-3330`, Lehrer-IDs `Ucitel-…`
+
 ## Offene Punkte
-1. Erster echter Lauf gegen EduPage – bisher nur gegen nachgebaute Daten getestet (Feldnamen: Hausaufgaben-Fach `predmetid`, Fälligkeit `cas_udalosti`, Klasse über `dbi.students[userid]`)
-2. Wie EduPage im persönlichen Plan eine Vertretung (nicht nur Entfall) kennzeichnet, ist noch unbekannt → `/api/diagnose?key=<cron>` (vorübergehend) liefert Rohdaten; danach Endpunkt wieder entfernen
+1. Eine echte Lehrer-/Raum-Vertretung war in den Rohdaten noch nicht dabei – Erkennung beruht auf dem beobachteten `changes`-Format
+2. Nachrichten schreiben (Bibliothek: timeline createItem typ=sprava) – noch nicht eingebaut, Nutzer gefragt
 3. Push und Scriptable-Widget noch nicht auf einem echten iPhone geprüft
