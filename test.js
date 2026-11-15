@@ -5,7 +5,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = require('./edupage');
+const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay } = require('./edupage');
 
 (async () => {
   // 1. Anfrage-Kodierung gleichwertig zur Python-Bibliothek. Node-zlib packt andere Bytes als Python-zlib,
@@ -115,6 +115,11 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
   assert.ok(!R.occursOn({ date: '2026-11-17', repeat: 'weekly' }, '2026-11-25'));
   assert.ok(!R.occursOn({ date: '2026-11-17', repeat: 'weekly', until: '2026-11-20' }, '2026-11-24'));
   assert.ok(!R.occursOn({ date: '2026-11-17', repeat: 'weekly' }, '2026-11-10'));
+  // Geburtstage: jedes Jahr, 29.2. sonst am 28.2., Alter nur mit bekanntem Jahr
+  assert.ok(R.birthdayOn({ date: '2010-03-05' }, '2027-03-05'));
+  assert.ok(R.birthdayOn({ date: '2008-02-29' }, '2027-02-28') && !R.birthdayOn({ date: '2008-02-29' }, '2028-02-28') && R.birthdayOn({ date: '2008-02-29' }, '2028-02-29'));
+  assert.equal(R.ageOn({ date: '2010-03-05' }, '2027-03-05'), 17);
+  assert.equal(R.ageOn({ date: '1900-03-05' }, '2027-03-05'), null);
   assert.equal(R.nextOccurrence({ due: '2026-11-20', repeat: 'weekdays' }, '2026-11-20'), '2026-11-23');
   assert.equal(R.nextOccurrence({ due: '2026-01-31', repeat: 'monthly' }, '2026-01-31'), '2026-03-31');
   assert.equal(R.nextOccurrence({ due: '2026-11-20', repeat: '' }, '2026-11-20'), null);
@@ -192,6 +197,23 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
     // Einstellungen: Stunden-Mitteilungen an, unbekanntes Bundesland abgelehnt
     assert.equal((await (await auth('/api/settings', { method: 'POST', body: JSON.stringify({ lessonPush: true }) })).json()).lessonPush, true);
     assert.equal((await auth('/api/settings', { method: 'POST', body: JSON.stringify({ state: 'XX' }) })).status, 400);
+    // Schulweg: Haltestellen, Ort, Vorlauf; Verbindungen (Demo); Wecker und Fokus für Kurzbefehle
+    assert.equal((await auth('/api/settings', { method: 'POST', body: JSON.stringify({ place: { name: 'X', lat: 200, lon: 0 } }) })).status, 400);
+    assert.equal((await auth('/api/settings', { method: 'POST', body: JSON.stringify({ stops: { home: { id: 'a b<', name: 'X' } } }) })).status, 400);
+    const sw = await (await auth('/api/settings', { method: 'POST', body: JSON.stringify({ stops: { home: { id: 'de:1:1', name: 'Rathaus' }, school: { id: 'de:1:2', name: 'Schule' } }, wakeLead: 45 }) })).json();
+    assert.equal(sw.stops.school.name, 'Schule');
+    assert.equal(sw.wakeLead, 45);
+    assert.ok(sw.weather.length > 24);
+    const tr = await (await auth(`/api/trips?to=school&date=${isoDay(new Date())}&time=07:50`)).json();
+    assert.ok(tr.configured && tr.trips.length && tr.trips.every((x) => x.arr <= '07:50'));
+    const wake = await (await call(`/api/wake?key=${widget}`)).text();
+    const tmr = d2.snap.days.find((d) => d.date === isoDay(new Date(Date.now() + 864e5)));
+    assert.equal(wake, tmr?.lessons.some((l) => !l.cancelled) ? '06:43' : ''); // Demo: Abfahrt 07:28 (52 → 22 Min. vor 07:50) minus 45 Min.
+    assert.match(await (await call(`/api/focus?day=morgen&key=${widget}`)).text(), tmr ? /^\d{2}:\d{2}$/ : /^$/);
+    assert.equal((await call('/api/wake?key=falsch')).status, 401);
+    const bd = await (await auth('/api/items/birthdays', { method: 'POST', body: JSON.stringify({ name: 'Oma', date: '1950-07-01', before: 99 }) })).json();
+    assert.equal(bd.before, 30);
+    assert.equal((await auth('/api/items/birthdays', { method: 'POST', body: JSON.stringify({ name: 'Ohne Datum' }) })).status, 400);
     // Siri schreibt Schul-Kürzel aus
     const td = new Date(); const tdIso = `${td.getFullYear()}-${String(td.getMonth() + 1).padStart(2, '0')}-${String(td.getDate()).padStart(2, '0')}`;
     await auth('/api/items/events', { method: 'POST', body: JSON.stringify({ title: 'SchA Mathe und PLN Physik', date: tdIso }) });

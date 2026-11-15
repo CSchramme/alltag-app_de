@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const { generateVapidKeys, sendPush } = require('./push');
 const { Edupage, EduError, snapshot, schoolDay, regularDay, SNAPSHOT_VERSION, isoDay, addDays } = require('./edupage');
 const demo = require('./demo');
-const { occursOn } = require('./public/recur');
+const { occursOn, birthdayOn, ageOn } = require('./public/recur');
 
 const APP = 'Alltag';
 const DEMO = process.env.DEMO === '1';
@@ -40,7 +40,7 @@ const VAPID = once('vapid.json', generateVapidKeys);
 if (DEMO && !load('db.json', null)) save('db.json', demo.db());
 
 const state = () => ({ seen: [], subs: [], done: {}, eduSeeded: false, ...load('state.json', {}) });
-const db = () => ({ reminders: [], events: [], notes: [], grades: [], ...load('db.json', {}) });
+const db = () => ({ reminders: [], events: [], notes: [], grades: [], birthdays: [], ...load('db.json', {}) });
 
 /* ------------------------------------------------------------------ Hilfen */
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
@@ -93,6 +93,7 @@ const KINDS = {
   events: { title: F.text(200, true), date: F.date(true), start: F.time(), end: F.time(), location: F.text(120), notes: F.text(4000), category: F.pick('privat', 'schule'), repeat: REPEAT, until: F.date() },
   notes: { title: F.text(200), body: F.text(50000), subject: F.text(80), pinned: F.bool() },
   grades: { subject: F.text(80, true), value: F.text(12, true), weight: F.num(0, 10, 1), title: F.text(120), date: F.date() },
+  birthdays: { name: F.text(120, true), date: F.date(true), before: F.num(0, 30, 3), notes: F.text(1000) },
 };
 const clean = (kind, body) => Object.fromEntries(Object.entries(KINDS[kind]).map(([k, f]) => [k, f(body[k])]));
 
@@ -145,6 +146,15 @@ function news(snap, data, done, now) {
     if (occursOn(e, today) && e.start) {
       const mins = toMin(e.start) - (now.getHours() * 60 + now.getMinutes());
       if (mins >= 0 && mins <= 35) out.push([`evt|${e.id}|${today}|${e.start}`, { title: `${e.title} · ${e.start} Uhr`, body: e.location || 'Gleich geht’s los', url: `/#kalender/${today}`, tag: `evt-${e.id}` }]);
+    }
+  }
+  if (now.getHours() >= 8) for (const b of data.birthdays) {
+    for (const n of new Set([0, b.before || 0])) {
+      const d = isoDay(addDays(now, n)), age = ageOn(b, d);
+      if (!birthdayOn(b, d)) continue;
+      out.push([`bday|${b.id}|${d}|${n}`, n
+        ? { title: `Bald Geburtstag: ${b.name}`, body: `${dayLabel(d, now)}${age ? ` · wird ${age}` : ''} – an ein Geschenk denken?`, url: '/#heute', tag: `bday-${b.id}` }
+        : { title: `${b.name} hat heute Geburtstag`, body: age ? `wird ${age} – Glückwünsche nicht vergessen!` : 'Glückwünsche nicht vergessen!', url: '/#heute', tag: `bday-${b.id}` }]);
     }
   }
   if (now.getHours() >= 17) { // Abendübersicht für morgen
@@ -233,6 +243,71 @@ function summary(which) {
   return speakable(lines.join(' '));
 }
 
+/* ------------------------------------------------------------------ Schulweg: Wetter (Open-Meteo) und Fahrplan (EFA Bayern, mit Echtzeit) */
+const getJson = async (url) => {
+  const r = await fetch(url, { signal: AbortSignal.timeout(12000), headers: { 'User-Agent': 'Alltag' } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+};
+async function refreshWeather(force) {
+  const place = load('config.json', {}).place, cached = load('weather.json', null);
+  if (!place || DEMO || (!force && cached?.lat === place.lat && cached?.lon === place.lon && Date.now() - cached.at < 3600e3)) return;
+  try {
+    const h = (await getJson(`https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lon}&hourly=temperature_2m,precipitation_probability,weather_code&forecast_days=3&timezone=Europe%2FBerlin`)).hourly;
+    save('weather.json', { lat: place.lat, lon: place.lon, at: Date.now(),
+      hours: h.time.map((t, i) => ({ t, temp: Math.round(h.temperature_2m[i]), rain: h.precipitation_probability[i] ?? 0, code: h.weather_code[i] })) });
+  } catch (e) { console.warn('Wetter nicht abrufbar:', e.message); }
+}
+
+const EFA = 'https://bahnland-bayern.de/efa';
+const hhmm = (iso) => { const d = new Date(iso); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+// Verbindungen von Haltestelle zu Haltestelle; mode 'arr' = ankommen bis time, 'dep' = abfahren ab time
+async function trips(from, to, date, time, mode) {
+  if (DEMO) return demo.trips(time, mode);
+  const q = new URLSearchParams({ outputFormat: 'rapidJSON', type_origin: 'any', name_origin: from, type_destination: 'any', name_destination: to,
+    calcNumberOfTrips: '4', useRealtime: '1', itdDate: date.replace(/-/g, ''), itdTime: time.replace(':', ''), itdTripDateTimeDepArr: mode });
+  const list = ((await getJson(`${EFA}/XML_TRIP_REQUEST2?${q}`)).journeys || []).map((x) => {
+    const first = x.legs[0].origin, last = x.legs.at(-1).destination;
+    return {
+      dep: hhmm(first.departureTimePlanned), depRt: hhmm(first.departureTimeEstimated || first.departureTimePlanned),
+      arr: hhmm(last.arrivalTimePlanned), arrRt: hhmm(last.arrivalTimeEstimated || last.arrivalTimePlanned),
+      legs: x.legs.filter((l) => !(l.transportation?.product?.class >= 97)).map((l) => ({ // ohne Fußwege
+        line: String(l.transportation?.number || l.transportation?.name || ''), kind: l.transportation?.product?.name || '', dir: l.transportation?.destination?.name || '',
+        from: l.origin?.name || '', plat: l.origin?.properties?.platform || '', dep: hhmm(l.origin.departureTimePlanned),
+        depRt: hhmm(l.origin.departureTimeEstimated || l.origin.departureTimePlanned), cancelled: /CANCEL/.test(JSON.stringify(l.realtimeStatus || '')),
+      })),
+    };
+  }).filter((x) => x.legs.length);
+  return mode === 'arr' ? list.filter((x) => x.arr <= time).slice(-3) : list.filter((x) => x.dep >= time).slice(0, 3);
+}
+const tripCache = new Map();
+async function cachedTrips(dir, date, time) {
+  const s = load('config.json', {}).stops || {};
+  if (!s.home || !s.school) return null;
+  const [from, to, mode] = dir === 'school' ? [s.home.id, s.school.id, 'arr'] : [s.school.id, s.home.id, 'dep'];
+  const key = `${dir}|${date}|${time}`, hit = tripCache.get(key);
+  if (hit && Date.now() - hit.at < 60e3) return hit.list;
+  const list = await trips(from, to, date, time, mode);
+  if (tripCache.size > 50) tripCache.clear();
+  tripCache.set(key, { at: Date.now(), list });
+  return list;
+}
+
+// Erste und letzte Stunde eines Tages (ohne Entfall und Ganztägiges)
+function schoolTimes(date) {
+  const ls = (load('snapshot.json', null)?.days.find((d) => d.date === date)?.lessons || []).filter((l) => !l.cancelled && !l.allday && l.start && l.end);
+  return ls.length ? { start: ls.map((l) => l.start).sort()[0], end: ls.map((l) => l.end).sort().at(-1) } : null;
+}
+// Wecker: Abfahrt der passenden Verbindung (sonst Unterrichtsbeginn) minus Vorlauf – leer, wenn keine Schule ist
+async function wakeTime(date) {
+  const t = schoolTimes(date);
+  if (!t) return '';
+  let base = t.start;
+  try { const list = await cachedTrips('school', date, t.start); if (list?.length) base = list.at(-1).dep; } catch (e) { console.warn('Fahrplan:', e.message); }
+  const m = toMin(base) - (load('config.json', {}).wakeLead ?? 60);
+  return m < 0 ? '00:00' : `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
+}
+
 const STATES = ['BW', 'BY', 'BE', 'BB', 'HB', 'HH', 'HE', 'MV', 'NI', 'NW', 'RP', 'SL', 'SN', 'ST', 'SH', 'TH'];
 async function refreshHolidays(force) {
   const state = load('config.json', {}).state || 'BY', cached = load('holidays.json', null);
@@ -287,6 +362,7 @@ function sync(minAgeMs) {
   running = (async () => {
     save('lastrun.json', Date.now());
     await refreshHolidays();
+    await refreshWeather();
     await notify(await syncEdupage());
   })().catch((e) => console.error('Abgleich:', e)).finally(() => { running = null; });
   return running;
@@ -306,11 +382,16 @@ setInterval(() => { if (!running) notify(load('snapshot.json', null)).catch((e) 
 setTimeout(() => sync(load('snapshot.json', null)?.v === SNAPSHOT_VERSION ? 10 * 60e3 : 0), 3000);
 
 /* ------------------------------------------------------------------ API */
+function settings() {
+  const c = load('config.json', {});
+  return { state: c.state || 'BY', lessonPush: !!c.lessonPush, place: c.place || null, stops: c.stops || {}, wakeLead: c.wakeLead ?? 60 };
+}
 function payload() {
   const st = state(), snap = load('snapshot.json', null), cfg = load('config.json', {}).edupage;
   return {
     app: APP, demo: DEMO, status: load('status.json', {}),
-    state: load('config.json', {}).state || 'BY', lessonPush: !!load('config.json', {}).lessonPush, holidays: load('holidays.json', null)?.list || [],
+    ...settings(), holidays: load('holidays.json', null)?.list || [],
+    weather: DEMO ? demo.weather() : load('weather.json', null)?.hours || [],
     edupage: DEMO ? { connected: true, school: 'demo', user: 'demo' } : cfg ? { connected: true, school: cfg.school, user: cfg.user } : { connected: false },
     snap: snap && {
       ...snap,
@@ -488,12 +569,48 @@ const routes = {
   },
 
   'POST /api/settings': async (req, res) => {
-    const { state: st, lessonPush } = await readJson(req);
-    if (st !== undefined && !STATES.includes(st)) throw bad('Unbekanntes Bundesland');
-    save('config.json', { ...load('config.json', {}), ...(st ? { state: st } : {}), ...(typeof lessonPush === 'boolean' ? { lessonPush } : {}) });
-    if (st) await refreshHolidays(true);
+    const b = await readJson(req), c = load('config.json', {});
+    if (b.state !== undefined) { if (!STATES.includes(b.state)) throw bad('Unbekanntes Bundesland'); c.state = b.state; }
+    if (typeof b.lessonPush === 'boolean') c.lessonPush = b.lessonPush;
+    if (b.place !== undefined) {
+      const lat = Number(b.place?.lat), lon = Number(b.place?.lon);
+      if (b.place && !(Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) throw bad('Ungültiger Ort');
+      c.place = b.place ? { name: F.text(120, true)(b.place.name), lat: Math.round(lat * 1e4) / 1e4, lon: Math.round(lon * 1e4) / 1e4 } : null;
+    }
+    for (const k of ['home', 'school']) {
+      const s = b.stops?.[k];
+      if (s === undefined) continue;
+      if (s && !/^[\w:.-]{1,80}$/.test(String(s.id))) throw bad('Ungültige Haltestelle');
+      c.stops = { ...c.stops, [k]: s ? { id: String(s.id), name: F.text(120, true)(s.name) } : null };
+    }
+    if (b.wakeLead !== undefined) c.wakeLead = F.num(0, 240, 60)(b.wakeLead);
+    save('config.json', c);
+    if (b.state) await refreshHolidays(true);
+    if (b.place) await refreshWeather(true);
     send(res, 200, payload());
   },
+  'GET /api/places': async (req, res) => {
+    const q = (new URL(req.url, 'http://x').searchParams.get('q') || '').trim().slice(0, 80);
+    if (q.length < 2) return send(res, 200, []);
+    const j = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=de`).catch(() => { throw bad('Ortssuche gerade nicht erreichbar'); });
+    send(res, 200, (j.results || []).map((r) => ({ name: r.name, region: [r.admin1, r.country_code !== 'DE' && r.country].filter(Boolean).join(', '), lat: r.latitude, lon: r.longitude })));
+  },
+  'GET /api/stops': async (req, res) => {
+    const q = (new URL(req.url, 'http://x').searchParams.get('q') || '').trim().slice(0, 80);
+    if (q.length < 2) return send(res, 200, []);
+    const j = await getJson(`${EFA}/XML_STOPFINDER_REQUEST?outputFormat=rapidJSON&type_sf=any&name_sf=${encodeURIComponent(q)}`).catch(() => { throw bad('Haltestellensuche gerade nicht erreichbar'); });
+    send(res, 200, (j.locations || []).filter((l) => l.type === 'stop').slice(0, 8).map((l) => ({ id: l.id, name: l.name })));
+  },
+  'GET /api/trips': async (req, res) => {
+    const u = new URL(req.url, 'http://x').searchParams, dir = u.get('to') === 'home' ? 'home' : 'school';
+    const date = u.get('date') || isoDay(new Date()), time = u.get('time') || hhmm(new Date());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) throw bad('Datum/Uhrzeit ungültig');
+    const list = await cachedTrips(dir, date, time).catch(() => { throw bad('Fahrplan gerade nicht erreichbar'); });
+    send(res, 200, { trips: list || [], configured: !!list });
+  },
+  // Kurzbefehle: nur die Uhrzeit als Text (leer = keine Schule) – für „Wecker erstellen“ bzw. „Fokus … bis“
+  'GET /api/wake': async (req, res) => send(res, 200, await wakeTime(isoDay(addDays(new Date(), new URL(req.url, 'http://x').searchParams.get('day') === 'heute' ? 0 : 1)))),
+  'GET /api/focus': (req, res) => send(res, 200, schoolTimes(isoDay(addDays(new Date(), new URL(req.url, 'http://x').searchParams.get('day') === 'morgen' ? 1 : 0)))?.end || ''),
   'GET /api/push/key': (req, res) => send(res, 200, { key: VAPID.publicKey }),
   'POST /api/push/subscribe': async (req, res) => {
     const s = await readJson(req);
@@ -545,7 +662,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, status: load('status.json', {}) });
     }
     const bearer = (req.headers.authorization || '').replace(/^Bearer /, '') || url.searchParams.get('key') || '';
-    const widgetRead = req.method === 'GET' && ['/api/data', '/api/summary'].includes(url.pathname) && bearer && same(bearer, TOKENS.widget);
+    const widgetRead = req.method === 'GET' && ['/api/data', '/api/summary', '/api/wake', '/api/focus'].includes(url.pathname) && bearer && same(bearer, TOKENS.widget);
     if (url.pathname !== '/api/login' && !loggedIn(req) && !widgetRead) return send(res, 401, { error: 'login' });
     const parts = url.pathname.split('/').filter(Boolean); // ['api', 'items', 'notes', '<id>']
     for (const [key, fn] of Object.entries(routes)) {

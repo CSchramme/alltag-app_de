@@ -482,6 +482,29 @@ button.banner { display: flex; text-align: left; }
 .holiday .big { min-width: 44px; font-size: 34px; line-height: 38px; font-weight: 700; letter-spacing: -.022em; font-variant-numeric: tabular-nums; color: var(--indigo); }
 .holiday .title { font-weight: 600; }
 
+/* ---------------------------------------------------------------- Schulweg: Wetter und Verbindungen */
+.way { margin-top: 12px; padding-top: 14px; overflow: hidden; }
+.way-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 0 16px; }
+.way .kicker { font-size: 13px; font-weight: 600; letter-spacing: -.08px; color: var(--teal); text-transform: uppercase; }
+.wx-row { display: flex; gap: 10px; padding: 10px 16px 4px; }
+.wx { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.wx-icon { font-size: 28px; line-height: 1; }
+.wx b { font-size: 20px; font-weight: 600; letter-spacing: -.45px; font-variant-numeric: tabular-nums; }
+.wx-t { min-width: 0; }
+.wx-l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wx span { font-size: 15px; letter-spacing: -.24px; color: var(--label2); }
+.wx small { display: block; font-size: 12px; font-weight: 500; color: var(--label3); font-variant-numeric: tabular-nums; }
+.way-hint { margin: 8px 16px 0; padding: 8px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; letter-spacing: -.08px;
+  color: color-mix(in srgb, var(--blue) 80%, var(--ink)); background: color-mix(in srgb, var(--blue) 10%, transparent); }
+.way .list { margin-top: 6px; }
+.way .list .row:first-child::before { content: ""; position: absolute; top: 0; right: 0; left: 16px; height: 1px; background: var(--sep); transform: scaleY(.5); transform-origin: 0 0; }
+.trip .lines { flex: none; display: flex; align-items: center; gap: 3px; min-width: 44px; }
+.trip .line { padding: 2px 7px; border-radius: 7px; font-size: 13px; font-weight: 700; color: #fff; background: var(--teal); font-variant-numeric: tabular-nums; }
+.trip .via { font-size: 12px; color: var(--label3); }
+.trip .title { font-variant-numeric: tabular-nums; }
+.bday.today .title { color: var(--pink); }
+.bday .cake { font-size: 22px; }
+
 /* ---------------------------------------------------------------- Woche wechseln */
 .week-nav { display: flex; align-items: center; gap: 10px; margin: -4px 0 14px; }
 .week-nav .circle { width: 38px; height: 38px; color: var(--blue); }
@@ -643,3 +666,4 @@ button.banner { display: flex; text-align: left; }
   .glass, .card, #sheet { background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, .35); }
   .glass::after { display: none; }
 }
+.new-tile:last-child:nth-child(odd) { grid-column: 1 / -1; }

@@ -29,7 +29,16 @@
     return null;
   }
 
+  // Geburtstag: jedes Jahr am selben Tag (29.2. in Nicht-Schaltjahren am 28.2.)
+  function birthdayOn(b, date) {
+    const md = String(b.date || '').slice(5), y = Number(date.slice(0, 4));
+    const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+    return !!md && date.slice(5) === (md === '02-29' && !leap ? '02-28' : md);
+  }
+  // Alter an diesem Tag – nur wenn das Geburtsjahr bekannt ist (1900 = unbekannt)
+  const ageOn = (b, date) => { const y = Number(String(b.date).slice(0, 4)), n = Number(date.slice(0, 4)); return y > 1900 && y < n ? n - y : null; };
+
   const REPEAT = [['', 'Nie'], ['daily', 'Täglich'], ['weekdays', 'Werktags'], ['weekly', 'Wöchentlich'], ['biweekly', 'Alle 2 Wochen'], ['monthly', 'Monatlich']];
-  const api = { occursOn, nextOccurrence, REPEAT };
+  const api = { occursOn, nextOccurrence, birthdayOn, ageOn, REPEAT };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Recur = api;
 })(this);

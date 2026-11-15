@@ -84,6 +84,10 @@ function db(now = new Date()) {
       { id: id('n1'), title: 'Mathe: Formeln', body: 'Steigung m = (y2 − y1) / (x2 − x1)\nGerade: y = m·x + b', subject: 'Mathematik', pinned: true, updated: now.toISOString() },
       { id: id('n2'), title: 'Einkaufsliste', body: 'Hefte A4 kariert\nTextmarker\nUSB-Stick', subject: '', pinned: false, updated: now.toISOString() },
     ],
+    birthdays: [
+      { id: id('b1'), name: 'Mama', date: `1984-${isoDay(addDays(now, 2)).slice(5)}`, before: 3, notes: 'Konzertkarten?' },
+      { id: id('b2'), name: 'Ben', date: `2011-${isoDay(addDays(now, 9)).slice(5)}`, before: 3, notes: '' },
+    ],
     grades: [
       { id: id('g1'), subject: 'Mathematik', value: '2', weight: 2, title: 'Klassenarbeit Nr. 1', date: day(-24) },
       { id: id('g2'), subject: 'Mathematik', value: '3+', weight: 1, title: 'Test Brüche', date: day(-7) },
@@ -93,4 +97,22 @@ function db(now = new Date()) {
   };
 }
 
-module.exports = { snapshot, db };
+// Wetter für drei Tage: morgens kühl, mittags Regenschauer
+function weather(now = new Date()) {
+  const out = [], d0 = new Date(now); d0.setHours(0, 0, 0, 0);
+  for (let i = 0; i < 72; i++) {
+    const d = new Date(d0.getTime() + i * 3600e3), h = d.getHours();
+    out.push({ t: `${isoDay(d)}T${String(h).padStart(2, '0')}:00`, temp: Math.round(2 + 7 * Math.sin(((h - 8) / 24) * 2 * Math.PI)), rain: h >= 11 && h <= 15 ? 60 : 10, code: h >= 11 && h <= 15 ? 61 : h < 9 ? 3 : 2 });
+  }
+  return out;
+}
+// Verbindungen wie aus dem Fahrplan
+function trips(time, mode) {
+  const m = Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+  const t = (x) => `${String(Math.floor(x / 60)).padStart(2, '0')}:${String(x % 60).padStart(2, '0')}`;
+  const base = mode === 'arr' ? [m - 52, m - 22] : [m + 8, m + 38];
+  return base.map((dep, i) => ({ dep: t(dep), depRt: t(dep + (i === 0 ? 2 : 0)), arr: t(dep + 16), arrRt: t(dep + 16 + (i === 0 ? 2 : 0)),
+    legs: [{ line: '11', kind: 'Regionalbus', dir: mode === 'arr' ? 'Schulzentrum' : 'Bühl Alpsee', from: mode === 'arr' ? 'Rathaus' : 'Schulzentrum', plat: '2', dep: t(dep), depRt: t(dep + (i === 0 ? 2 : 0)), cancelled: false }] }));
+}
+
+module.exports = { snapshot, db, weather, trips };

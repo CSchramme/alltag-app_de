@@ -123,6 +123,7 @@ const ICON = {
   cap: '<svg viewBox="0 0 44 44"><path d="M5 17l17-8 17 8-17 8z"/><path d="M12 21v8c0 2.5 4.5 5 10 5s10-2.5 10-5v-8"/></svg>',
   note: '<svg viewBox="0 0 44 44"><path d="M13 7h13l8 8v20a3 3 0 01-3 3H13a3 3 0 01-3-3V10a3 3 0 013-3z"/><path d="M26 7v8h8M16 23h12M16 29h8"/></svg>',
   clip: '<svg viewBox="0 0 24 24"><path d="M20 11.5l-7.8 7.8a5 5 0 01-7.1-7.1l8.5-8.5a3.3 3.3 0 014.7 4.7l-8.5 8.5a1.7 1.7 0 01-2.4-2.4l7.8-7.8"/></svg>',
+  gift: '<svg viewBox="0 0 44 44"><rect x="8" y="17" width="28" height="8" rx="2"/><path d="M10 25v10a2 2 0 002 2h20a2 2 0 002-2V25M22 17v20M22 17c-3-6-10-6-10-1.5S19 17 22 17zm0 0c3-6 10-6 10-1.5S25 17 22 17z"/></svg>',
   pin: '<svg class="pin" viewBox="0 0 16 16"><path d="M10.5 1.5l4 4-2.5 1-3 3 .5 3.5-1 1L5 10.5 1.5 14l-.5-.5L4.5 10 1 6.5l1-1 3.5.5 3-3z"/></svg>',
 };
 
@@ -205,6 +206,7 @@ function agenda(date) {
     ? { type: 'allday', start: '', t: { id: '', kind: 'event', label: 'Ganztägig', title: l.subject, subject: '' } }
     : { type: 'lesson', start: l.start, end: l.end, l, i }));
   D.db.events.filter((e) => Recur.occursOn(e, date)).forEach((e) => items.push({ type: 'event', start: e.start, end: e.end, e: { ...e, date } }));
+  (D.db.birthdays || []).filter((b) => Recur.birthdayOn(b, date)).forEach((b) => items.push({ type: 'bday', start: '', b }));
   return items.sort((a, b) => (a.start || '').localeCompare(b.start || ''));
 }
 const endMin = (a) => (a.end ? toMin(a.end) : toMin(a.start) + 60);
@@ -268,6 +270,12 @@ function alldayRow(t) {
     <div class="time"><b>ganzt.</b></div><div class="bar"></div>
     <div class="main"><div class="title">${esc(t.title)}</div><div class="sub">${esc([t.label, t.subject].filter(Boolean).join(' · '))}</div></div></button>`;
 }
+function bdayRow(b, date) {
+  const age = Recur.ageOn(b, date);
+  return `<button class="row lesson allday" style="--c:var(--pink)" data-bday="${esc(b.id)}">
+    <div class="time"><b>ganzt.</b></div><div class="bar"></div>
+    <div class="main"><div class="title">${esc(b.name)}</div><div class="sub">Geburtstag${age ? ` · wird ${age}` : ''}</div></div></button>`;
+}
 function agendaList(date, items = agenda(date)) {
   let html = '', prev = null;
   for (const a of items) {
@@ -275,7 +283,7 @@ function agendaList(date, items = agenda(date)) {
       const gap = toMin(a.start) - toMin(prev.end);
       if (gap >= 15) html += `<div class="break">${gap >= 40 ? 'Mittagspause' : 'Pause'} · ${gap} Min.</div>`;
     }
-    html += a.type === 'lesson' ? lessonRow(a.l, date, a.i) : a.type === 'event' ? eventRow(a.e) : alldayRow(a.t);
+    html += a.type === 'lesson' ? lessonRow(a.l, date, a.i) : a.type === 'event' ? eventRow(a.e) : a.type === 'bday' ? bdayRow(a.b, date) : alldayRow(a.t);
     prev = a;
   }
   return html;
@@ -400,10 +408,87 @@ function holidayCard() {
   return `<div class="card holiday"><div class="big">${days}</div><div class="main"><div class="title">${days === 1 ? 'Schultag' : 'Schultage'} bis zu den ${esc(holidayLabel(next.name))}</div><div class="sub">ab ${esc(F.short.format(parseDay(next.start)))}</div></div></div>`;
 }
 
+/* ---------------------------------------------------------------- Schulweg: Wetter und Verbindungen */
+// Welcher Weg steht an? Heute vor der ersten Stunde: hin · bis 1 h nach Schulschluss: zurück · sonst der nächste Schultag
+function schoolTimes(date) {
+  const ls = lessonsOn(date).filter((l) => !l.cancelled && !l.allday && l.start && l.end);
+  return ls.length ? { start: ls.map((l) => l.start).sort()[0], end: ls.map((l) => l.end).sort().at(-1) } : null;
+}
+function nextWay() {
+  const t = today(), m = nowMin(), tt = schoolTimes(t), hm = `${pad(now().getHours())}:${pad(now().getMinutes())}`;
+  if (tt && m < toMin(tt.start)) return { date: t, dir: 'school', time: tt.start, back: tt.end };
+  if (tt && m < toMin(tt.end) + 60) return { date: t, dir: 'home', time: m > toMin(tt.end) ? hm : tt.end };
+  const nd = week().slice(1).find(schoolTimes);
+  return nd && { date: nd, dir: 'school', time: schoolTimes(nd).start, back: schoolTimes(nd).end };
+}
+const WX = [[0, '☀️', 'klar'], [2, '⛅', 'leicht bewölkt'], [3, '☁️', 'bewölkt'], [48, '🌫️', 'Nebel'], [57, '🌦️', 'Niesel'], [67, '🌧️', 'Regen'], [77, '🌨️', 'Schnee'], [82, '🌧️', 'Schauer'], [86, '🌨️', 'Schneeschauer'], [99, '⛈️', 'Gewitter']];
+function wxAt(date, time) {
+  const h = (D.weather || []).find((x) => x.t === `${date}T${time.slice(0, 2)}:00`);
+  if (!h) return null;
+  const [, icon, text] = WX.find(([max]) => h.code <= max) || WX[0], hour = Number(time.slice(0, 2));
+  return { ...h, icon: h.code <= 2 && (hour < 7 || hour >= 18) ? '🌙' : icon, text };
+}
+let wayTrips = { key: '', at: 0, list: null, error: '' };
+function loadTrips(w) {
+  const key = `${w.dir}|${w.date}|${w.time}`;
+  if (wayTrips.key === key && (wayTrips.pending || Date.now() - wayTrips.at < 120e3)) return;
+  wayTrips = { ...wayTrips, key, pending: true };
+  api(`/api/trips?to=${w.dir}&date=${w.date}&time=${w.time}`)
+    .then((r) => { wayTrips = { key, at: Date.now(), list: r.trips, error: '' }; })
+    .catch((x) => { wayTrips = { key, at: Date.now(), list: null, error: x.message }; })
+    .finally(() => { const el = $('#way'); if (el) el.outerHTML = wayCard(); });
+}
+function tripRow(x) {
+  const late = toMin(x.depRt) - toMin(x.dep), off = x.legs.some((l) => l.cancelled), l0 = x.legs[0];
+  const lines = x.legs.map((l) => `<b class="line">${esc(l.line)}</b>`).join('<span class="via">›</span>');
+  const sub = [`${l0.kind} → ${l0.dir}`, l0.plat && `Steig ${l0.plat}`, x.legs.length > 1 && `${x.legs.length - 1}× umsteigen`].filter(Boolean).join(' · ');
+  return `<div class="row trip"><div class="lines">${lines}</div><div class="main"><div class="title">${esc(x.dep)} → ${esc(x.arr)}</div><div class="sub">${esc(sub)}</div></div>
+    ${off ? chip('fällt aus', 'var(--red)', true) : late > 0 ? chip(`+${late}`, 'var(--orange)', true) : '<span class="due">pünktlich</span>'}</div>`;
+}
+function wayCard() {
+  const w = nextWay(), stops = D.stops || {};
+  if (!w || (!D.place && !(stops.home && stops.school))) return '';
+  const hasTrips = stops.home && stops.school;
+  if (hasTrips) loadTrips(w);
+  const key = `${w.dir}|${w.date}|${w.time}`, mine = wayTrips.key === key ? wayTrips : {};
+  const list = mine.list || [], pick = w.dir === 'school' ? list.at(-1) : list[0];
+  const go = pick?.dep || (w.dir === 'school' ? `${pad(Math.floor((toMin(w.time) - 30) / 60))}:${pad((toMin(w.time) - 30) % 60)}` : w.time);
+  const legs = [['Hin', w.dir === 'school' ? go : null], ['Zurück', w.dir === 'school' ? w.back : go]].filter(([, t]) => t)
+    .map(([label, t]) => [label, t, wxAt(w.date, t)]).filter(([, , x]) => x);
+  const hints = [legs.some(([, , x]) => x.rain >= 50) && 'Schirm einpacken', legs.some(([, , x]) => x.temp <= 0) && 'Frost – warm anziehen'].filter(Boolean);
+  const day = w.date === today() ? '' : ` · ${dayName(w.date)}`;
+  return `<div class="card way" id="way">
+    <div class="way-head"><span class="kicker">${w.dir === 'school' ? 'Zur Schule' : 'Nach Hause'}${esc(day)}</span>${w.dir === 'school' && !day ? `<span class="due">Beginn ${esc(w.time)}</span>` : ''}</div>
+    ${legs.length ? `<div class="wx-row">${legs.map(([label, t, x]) => `<div class="wx"><span class="wx-icon">${x.icon}</span><div class="wx-t"><div class="wx-l"><b>${x.temp}°</b> <span>${esc(x.text)}</span></div><small>${label} ${esc(t)}${x.rain >= 20 ? ` · ☂ ${x.rain} %` : ''}</small></div></div>`).join('')}</div>` : ''}
+    ${hints.length ? `<div class="way-hint">${esc(hints.join(' · '))}</div>` : ''}
+    ${hasTrips ? `<div class="list">${mine.error ? `<p class="footnote warn-text" style="margin:8px 16px 12px;text-align:left">${esc(mine.error)}</p>`
+      : mine.list ? (list.length ? (w.dir === 'school' ? list.slice(-2) : list.slice(0, 2)).map(tripRow).join('') : '<p class="footnote" style="margin:8px 16px 12px;text-align:left">Keine passende Verbindung gefunden.</p>')
+      : '<div class="row"><div class="spinner"></div></div>'}</div>` : ''}
+  </div>`;
+}
+
+/* ---------------------------------------------------------------- Geburtstage */
+function nextBirthday(b) {
+  for (let i = 0; i <= 366; i++) { const d = addDays(today(), i); if (Recur.birthdayOn(b, d)) return d; }
+  return null;
+}
+function bdayItem(b, d) {
+  const n = daysBetween(today(), d), age = Recur.ageOn(b, d);
+  const when = n === 0 ? 'Heute' : n === 1 ? 'Morgen' : n < 7 ? dayName(d) : `${F.short.format(parseDay(d))} · in ${n} Tagen`;
+  return `<button class="row bday${n === 0 ? ' today' : ''}" data-bday="${esc(b.id)}"><div class="avatar" style="--c:var(--pink)">${esc(initials(b.name))}</div>
+    <div class="main"><div class="title">${esc(b.name)}</div><div class="sub">${esc(when)}${age ? ` · wird ${age}` : ''}</div></div>${n === 0 ? '<span class="cake">🎂</span>' : ''}</button>`;
+}
+function openBirthdays() {
+  const all = (D.db.birthdays || []).map((b) => ({ b, d: nextBirthday(b) })).sort((a, b) => (a.d || '9').localeCompare(b.d || '9'));
+  openSheet('Geburtstage', `${all.length ? `<div class="list card">${all.map(({ b, d }) => bdayItem(b, d)).join('')}</div>` : emptyCard('gift', 'Noch keine Geburtstage eingetragen.')}
+    <button class="btn-primary pressable" data-new="birthday" style="margin-top:16px">Geburtstag hinzufügen</button>`);
+}
+
 function renderHeute() {
   const t = today();
   const changes = S().days.filter((d) => d.date >= t).flatMap((d) => d.changes.map((c) => changeRow(c, d.date)));
-  const left = agenda(t).filter((a) => a.type === 'allday' || (a.start && endMin(a) > nowMin()));
+  const left = agenda(t).filter((a) => a.type === 'allday' || a.type === 'bday' || (a.start && endMin(a) > nowMin()));
+  const bdays = (D.db.birthdays || []).map((b) => ({ b, d: nextBirthday(b) })).filter((x) => x.d).sort((a, b) => a.d.localeCompare(b.d));
   const show = left.length ? t : week().slice(1).find((d) => agenda(d).length);
   const due = dueSoon().sort((a, b) => (a.due + (a.time || '')).localeCompare(b.due + (b.time || '')));
   const msgs = S().messages;
@@ -413,6 +498,7 @@ function renderHeute() {
     <div class="today-grid"><div class="col">
       ${heroHTML()}
       ${bellRow()}
+      ${wayCard()}
       ${holidayCard()}
       ${changes.length ? section('Vertretungen') + `<div class="list card">${changes.join('')}</div>` : ''}
       ${show ? section(show === t ? 'Tagesablauf' : dayName(show), 'kalender') + `<div class="list card">${agendaList(show)}</div>` : ''}
@@ -420,6 +506,7 @@ function renderHeute() {
       ${section('Fällig', 'aufgaben')}
       ${due.length ? `<div class="list card">${due.slice(0, 6).map(taskRow).join('')}</div>` : emptyCard('check', 'Für heute und morgen ist nichts fällig.')}
       ${msgs.length ? section('Nachrichten', 'schule') + `<div class="list card">${msgs.slice(0, 3).map(msgRow).join('')}</div>` : ''}
+      ${bdays.length ? `<h2 class="section-title">Geburtstage<button data-bdays>Alle</button></h2><div class="list card">${bdays.slice(0, 3).map(({ b, d }) => bdayItem(b, d)).join('')}</div>` : ''}
     </div></div>
     ${D.edupage.connected ? `<p class="footnote">EduPage aktualisiert ${esc(ago(D.snap?.updated))} · <button class="btn-link" data-refresh>Jetzt aktualisieren</button>${S().bells?.length ? ' · <button class="btn-link" data-bells>Klingelzeiten</button>' : ''}</p>` : ''}`;
 }
@@ -501,7 +588,7 @@ function renderKalender() {
     </div>
     <div class="seg-bar"><div class="seg days glass" role="tablist" aria-label="Tag"><div class="thumb"></div>
       ${days.map((date) => {
-        const dt = parseDay(date), dot = (dayOf(date)?.changes.length ? 'var(--orange)' : '') || (D.db.events.some((e) => Recur.occursOn(e, date)) ? 'var(--purple)' : '');
+        const dt = parseDay(date), dot = (dayOf(date)?.changes.length ? 'var(--orange)' : '') || (D.db.events.some((e) => Recur.occursOn(e, date)) ? 'var(--purple)' : '') || ((D.db.birthdays || []).some((b) => Recur.birthdayOn(b, date)) ? 'var(--pink)' : '');
         return `<button role="tab" class="${date === today() ? 'today' : ''}" aria-selected="${date === planDay}" aria-label="${esc(F.long.format(dt))}">
           <span>${esc(F.wdShort.format(dt).replace('.', ''))}</span><b>${dt.getDate()}</b>${dot ? `<i style="background:${dot}"></i>` : ''}</button>`;
       }).join('')}
@@ -846,11 +933,20 @@ function gradeForm(g, subject) {
     ${fChoice('weight', [[0.5, '×½'], [1, '×1'], [2, '×2'], [3, '×3']], g?.weight ?? 1)}`);
 }
 
+function birthdayForm(b) {
+  formSheet('birthdays', b, b ? b.name : 'Neuer Geburtstag', `
+    ${group(fText('name', 'Name', b?.name, 'required maxlength="120"'), fRow('Geburtstag', `<input type="date" name="date" required value="${esc(b?.date)}">`))}
+    <p class="label-sm">Zusätzlich vorher erinnern</p>
+    ${fChoice('before', [[0, 'Nein'], [1, '1 Tag'], [3, '3 Tage'], [7, '1 Woche']], b?.before ?? 3)}
+    ${group(fArea('notes', 'Geschenkideen, Notiz', b?.notes))}
+    <p class="footnote" style="text-align:left;margin:6px 4px 0">Mitteilung jeweils morgens um 8 Uhr. Jahr unbekannt? Trag 1900 ein – dann wird kein Alter angezeigt.</p>`);
+}
+
 function newChooser() {
-  const tiles = [['reminder', 'Erinnerung', ICON.check], ['event', 'Termin', ICON.cal], ['note', 'Notiz', ICON.note], ['grade', 'Note', ICON.cap]];
+  const tiles = [['reminder', 'Erinnerung', ICON.check], ['event', 'Termin', ICON.cal], ['note', 'Notiz', ICON.note], ['grade', 'Note', ICON.cap], ['birthday', 'Geburtstag', ICON.gift]];
   openSheet('Neu', `<div class="new-grid">${tiles.map(([k, l, i]) => `<button class="card new-tile pressable" data-new="${k}">${i}<span>${l}</span></button>`).join('')}</div>`);
 }
-const NEW = { reminder: () => reminderForm(), event: () => eventForm(null, planDay), note: () => noteForm(), grade: () => gradeForm() };
+const NEW = { reminder: () => reminderForm(), event: () => eventForm(null, planDay), note: () => noteForm(), grade: () => gradeForm(), birthday: () => birthdayForm() };
 const ADD = { heute: newChooser, kalender: () => eventForm(null, planDay), aufgaben: () => reminderForm(), notizen: () => noteForm(),
   schule: () => (schoolSeg === 'noten' ? gradeForm() : composeMessage()) };
 const updateAdd = () => { $('#add').hidden = tab === 'schule' && (schoolSeg === 'lehrer' || (schoolSeg === 'nachrichten' && !D.edupage.connected)); };
@@ -1192,6 +1288,13 @@ async function openSettings() {
     </div>
     <p class="label-sm">Ferien</p>
     ${group(fRow('Bundesland', `<select id="state-select">${[['BW', 'Baden-Württemberg'], ['BY', 'Bayern'], ['BE', 'Berlin'], ['BB', 'Brandenburg'], ['HB', 'Bremen'], ['HH', 'Hamburg'], ['HE', 'Hessen'], ['MV', 'Mecklenburg-Vorpommern'], ['NI', 'Niedersachsen'], ['NW', 'Nordrhein-Westfalen'], ['RP', 'Rheinland-Pfalz'], ['SL', 'Saarland'], ['SN', 'Sachsen'], ['ST', 'Sachsen-Anhalt'], ['SH', 'Schleswig-Holstein'], ['TH', 'Thüringen']].map(([v, l]) => `<option value="${v}"${D.state === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`))}
+    <p class="label-sm">Schulweg</p>
+    ${group(
+      `<button class="row" data-choose="place"><div class="main"><div class="title">Ort fürs Wetter</div></div><div class="trail">${esc(D.place?.name || 'Wählen')}</div>${ICON.chev}</button>`,
+      `<button class="row" data-choose="home"><div class="main"><div class="title">Haltestelle zu Hause</div></div><div class="trail">${esc(D.stops?.home?.name || 'Wählen')}</div>${ICON.chev}</button>`,
+      `<button class="row" data-choose="school"><div class="main"><div class="title">Haltestelle Schule</div></div><div class="trail">${esc(D.stops?.school?.name || 'Wählen')}</div>${ICON.chev}</button>`,
+      fRow('Wecker-Vorlauf', `<select id="wake-lead">${[20, 30, 45, 60, 75, 90, 120].map((v) => `<option value="${v}"${D.wakeLead === v ? ' selected' : ''}>${v} Min.</option>`).join('')}</select>`))}
+    <p class="footnote" style="margin-top:8px;text-align:left">Fahrplan mit Echtzeit aus dem bayerischen Nahverkehr (Bahnland Bayern), Wetter von Open-Meteo. Der Wecker richtet sich nach der Abfahrt zur ersten Stunde, ohne Haltestellen nach dem Unterrichtsbeginn.</p>
     <p class="label-sm">Darstellung</p>
     <div class="card" style="padding:14px 16px">
       <div class="sub" style="margin-bottom:8px">Erscheinungsbild</div>
@@ -1222,6 +1325,10 @@ async function openSettings() {
       <div class="row"><div class="main"><div class="sub">In der App „Kurzbefehle“: neuer Kurzbefehl → Aktion „Inhalte von URL abrufen“ mit dieser Adresse → danach „Text sprechen“ oder „Ergebnis anzeigen“. Nenn ihn z. B. „Schule morgen“ – dann reicht „Hey Siri, Schule morgen“.</div></div></div>
       <button class="row" id="sc-today" disabled><span class="btn-plain">Adresse für „Heute“ kopieren</span></button>
       <button class="row" id="sc-tomorrow" disabled><span class="btn-plain">Adresse für „Morgen“ kopieren</span></button>
+      <div class="row"><div class="main"><div class="sub"><b>Wecker:</b> Automation „Tageszeit 20:00“ → „Inhalte von URL abrufen“ (Wecker-Adresse) → „Wenn Inhalte einen Wert haben“ → „Wecker erstellen“ mit diesen Inhalten als Uhrzeit. Kein Unterricht = kein Wecker.</div></div></div>
+      <button class="row" id="sc-wake" disabled><span class="btn-plain">Wecker-Adresse kopieren</span></button>
+      <div class="row"><div class="main"><div class="sub"><b>Fokus:</b> Automation „Tageszeit 7:00“ (oder „Ankommen“ an der Schule) → „Inhalte von URL abrufen“ (Fokus-Adresse) → „Fokus festlegen“: Schule an, bis zu dieser Uhrzeit (= Schulschluss).</div></div></div>
+      <button class="row" id="sc-focus" disabled><span class="btn-plain">Fokus-Adresse kopieren</span></button>
     </div>
     <p class="footnote" id="sc-hint" style="margin-top:8px;text-align:left">Die Adresse enthält deinen Lese-Schlüssel – nicht weitergeben.</p>
     <p class="label-sm">Hintergrund-Abgleich</p>
@@ -1236,6 +1343,10 @@ async function openSettings() {
   $('#lesson-push').onchange = async (e) => {
     haptic();
     try { setData(await api('/api/settings', { method: 'POST', body: { lessonPush: e.target.checked } })); } catch (x) { e.target.checked = !e.target.checked; toast(x.message); }
+  };
+  $$('#sheet [data-choose]').forEach((b) => { b.onclick = () => openChooser(b.dataset.choose); });
+  $('#wake-lead').onchange = async (e) => {
+    try { setData(await api('/api/settings', { method: 'POST', body: { wakeLead: Number(e.target.value) } })); haptic(); } catch (x) { toast(x.message); }
   };
   $('#state-select').onchange = async (e) => {
     try { setData(await api('/api/settings', { method: 'POST', body: { state: e.target.value } })); toast('Ferien aktualisiert'); } catch (x) { toast(x.message); }
@@ -1256,7 +1367,9 @@ async function openSettings() {
     const cronUrl = `${location.origin}/api/cron?key=${cron}`;
     $('#widget-copy').disabled = $('#cron-copy').disabled = false;
     $('#widget-copy').onclick = () => copy(script, $('#widget-hint'));
-    $('#sc-today').disabled = $('#sc-tomorrow').disabled = false;
+    $('#sc-today').disabled = $('#sc-tomorrow').disabled = $('#sc-wake').disabled = $('#sc-focus').disabled = false;
+    $('#sc-wake').onclick = () => copy(`${location.origin}/api/wake?key=${widget}`, $('#sc-hint'));
+    $('#sc-focus').onclick = () => copy(`${location.origin}/api/focus?key=${widget}`, $('#sc-hint'));
     $('#sc-today').onclick = () => copy(`${location.origin}/api/summary?day=heute&key=${widget}`, $('#sc-hint'));
     $('#sc-tomorrow').onclick = () => copy(`${location.origin}/api/summary?day=morgen&key=${widget}`, $('#sc-hint'));
     $('#cron-copy').onclick = () => copy(cronUrl, $('#cron-hint'));
@@ -1284,6 +1397,40 @@ async function openSettings() {
       .finally(() => { toggle.disabled = false; });
   };
   test.onclick = () => api('/api/push/test', { method: 'POST' }).then((r) => say(r.ok ? 'Gesendet – kommt gleich an.' : 'Kein Gerät registriert.')).catch((e) => say(e.message));
+}
+
+// Ort (Wetter) oder Haltestelle suchen und übernehmen
+function openChooser(kind) {
+  const place = kind === 'place', cur = place ? D.place : D.stops?.[kind];
+  openSheet(place ? 'Ort fürs Wetter' : kind === 'home' ? 'Haltestelle zu Hause' : 'Haltestelle Schule', `
+    ${group(`<label class="field"><input id="choose-q" type="search" placeholder="${place ? 'Ort, z. B. Sonthofen' : 'Haltestelle, z. B. Sonthofen Bahnhof'}" autocomplete="off" enterkeyhint="search"></label>`)}
+    <div id="choose-list" style="margin-top:12px"></div>
+    ${cur ? `<button class="btn-plain danger" id="choose-clear" type="button" style="margin-top:12px">„${esc(cur.name)}“ entfernen</button>` : ''}
+    <button class="btn-plain" id="choose-back" type="button" style="margin-top:8px">Zurück</button>`);
+  const q = $('#choose-q'), list = $('#choose-list');
+  let timer, seq = 0;
+  const choose = async (r) => {
+    const body = place ? { place: r && { name: r.name, lat: r.lat, lon: r.lon } } : { stops: { [kind]: r && { id: r.id, name: r.name } } };
+    try { setData(await api('/api/settings', { method: 'POST', body })); haptic(); openSettings(); } catch (x) { toast(x.message); }
+  };
+  q.oninput = () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const n = ++seq, text = q.value.trim();
+      if (text.length < 2) { list.innerHTML = ''; return; }
+      list.innerHTML = '<div class="card row"><div class="spinner"></div></div>';
+      try {
+        const rows = await api(`/api/${place ? 'places' : 'stops'}?q=${encodeURIComponent(text)}`);
+        if (n !== seq) return;
+        list.innerHTML = rows.length ? `<div class="list card">${rows.map((r) => `<button class="row"><div class="main"><div class="title">${esc(r.name)}</div>${r.region ? `<div class="sub">${esc(r.region)}</div>` : ''}</div></button>`).join('')}</div>`
+          : '<p class="footnote">Nichts gefunden.</p>';
+        $$('button', list).forEach((b, i) => { b.onclick = () => choose(rows[i]); });
+      } catch (x) { if (n === seq) list.innerHTML = `<p class="footnote warn-text">${esc(x.message)}</p>`; }
+    }, 300);
+  };
+  if (matchMedia('(hover: hover)').matches) q.focus();
+  $('#choose-back').onclick = openSettings;
+  if (cur) $('#choose-clear').onclick = () => choose(null);
 }
 
 function wireEduForm() {
@@ -1426,7 +1573,7 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-like],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-bday],[data-bdays],[data-like],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (el.id === 'me' || 'settings' in ds) return openSettings();
@@ -1434,6 +1581,8 @@ document.addEventListener('click', async (e) => {
   if (el.id === 'search') return openSearch();
   if (ds.week !== undefined) return shiftWeek(Number(ds.week));
   if ('bells' in ds) return openBells();
+  if (ds.bday) return birthdayForm(D.db.birthdays.find((x) => x.id === ds.bday));
+  if ('bdays' in ds) return openBirthdays();
   if (ds.star) return toggleStar(ds.star, el);
   if (ds.like) return toggleLike(ds.like);
   if (ds.confirm) return confirmRead(ds.confirm, el);

@@ -12,6 +12,9 @@ Web-App/PWA „Alltag“ für Schule (EduPage) + Privates (Erinnerungen, Termine
 - Kalender: Woche Mo–So (am Wochenende schon die nächste), ‹ › / Pfeiltasten wechseln; andere Wochen per `GET /api/week?start=<Montag>` (aus dem Abgleich, sonst live, 10 Min. Cache). Snapshot selbst bleibt „heute + 6 Tage“ (Heute-Ansicht, Mitteilungen).
 - Lernplan wird nicht gespeichert, sondern aus Prüfungen berechnet (`study()` in app.js, IDs `learn:<examId>:<7|3|1>`, Haken in state.done).
 - Abgleich: interner Timer; der Hoster hat keine geplanten Aufgaben → App pingt sich alle 2 Min. selbst (`/api/ping`, Adresse aus angemeldetem `/api/data` in `data/origin.json`). Optional `/api/cron?key=…` (z. B. cron-job.org).
+- Schulweg: Wetter von Open-Meteo (Server holt stündlich in `data/weather.json`, CSP verbietet Abrufe vom Browser), Fahrplan mit Echtzeit von `bahnland-bayern.de/efa` (rapidJSON: STOPFINDER → `locations[].id`, TRIP_REQUEST2 mit `itdTripDateTimeDepArr=arr|dep`, Zeiten in UTC). db.transport.rest ist tot, bahn.de blockt.
+- Kurzbefehle: `/api/wake` (Abfahrt zur 1. Stunde minus Vorlauf, sonst Beginn minus Vorlauf; leer ohne Schule) und `/api/focus` (Schulschluss) liefern nur „HH:MM“, lesbar mit Widget-Schlüssel.
+- Geburtstage: db-Art `birthdays`, Regel `birthdayOn`/`ageOn` in recur.js (29.2. → 28.2., Jahr 1900 = unbekannt).
 - `main.py` = ursprüngliches Python-CLI-Skript (nicht mehr Teil der App).
 - Demo: `npm run demo` (DEMO=1, Passwort `demo`, Daten in `data-demo/`). Tests: `npm test`.
 
