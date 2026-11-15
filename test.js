@@ -62,6 +62,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
       flags: [], classids: [], teacherids: [], classroomids: [], groupnames: [], starttime: '', endtime: '', period: '4' },
     card('5', '1', { teacherids: ['10'], classroomids: ['7'] }, { changes: [{ column: 'teacherids', old: '9' }, { column: 'classroomids', old: '5' }] }),
     card('7', '6', { header: [{ item: { text: 'Percussion, 6-10' } }, { item: { text: '·' } }, { item: { subjectid: '6', changes: [] } }] }, { type: 'tcard' }),
+    card('6', '1', { teacherids: [], starttime: '12:10', endtime: '12:50' }), // keine Lehrkraft eingetragen → Entfall
     { type: 'period', uniperiod: '8', header: [], flags: [], classids: [], teacherids: [], classroomids: [], groupnames: [] },
     { uniperiod: 'ad', type: 'event', starttime: '00:00', endtime: '24:00', header: [{ text: 'Feiertag: Buß- und Bettag' }], teacherids: [], classroomids: [], groupnames: [''], flags: { dp0: { type: 'event', allday: true } } },
   ];
@@ -73,13 +74,15 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
   // Entfall und Vertretung kommen aus dem persönlichen Stundenplan, nicht aus dem Vertretungsplan der Schule
   assert.deepEqual(d0.changes, [
     { periods: [4], label: '4.', text: 'Geographie – Entfall', kind: 'cancel' },
-    { periods: [5], label: '5.', text: 'Mathematik: Vertretung für Bea Becker, Raumänderung, sonst 104', kind: 'change' }]);
+    { periods: [5], label: '5.', text: 'Mathematik: Vertretung für Bea Becker, Raumänderung, sonst 104', kind: 'change' },
+    { periods: [6], label: '6.', text: 'Mathematik – Entfall', kind: 'cancel' }]);
   assert.deepEqual(d0.lessons.map((l) => [l.period, l.start, l.subject, l.topic, l.cancelled, l.event, l.allday]), [
     [3, '09:45', 'Mathematik', null, false, false, false],
     [4, '10:50', 'SchA: 1.Deutsch-SchA', 'Deutsch', false, true, false],
     [4, '10:50', 'Geographie', null, true, false, false], // Zeit von derselben Stunde übernommen
     [5, '09:45', 'Mathematik', null, false, false, false],
     [7, '09:45', 'Interessengruppe', 'Percussion, 6-10', false, false, false],
+    [6, '12:10', 'Mathematik', null, true, false, false],
     [null, '', 'Feiertag: Buß- und Bettag', null, false, true, true]]);
   assert.deepEqual(d0.lessons[0].homework, ['S. 12 Nr. 4']);
   assert.deepEqual(d0.lessons[0].changes, []);
@@ -92,7 +95,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
   assert.equal(snap.tasks.find((t) => t.id === '8').label, 'Schulaufgabe');
   assert.equal(snap.tasks.find((t) => t.id === 'HW7').tid, '7'); // Timeline-ID für den Haken in EduPage
   assert.deepEqual(snap.missing.map((m) => [m.title, m.subject]), [['AB Zellatmung', 'Mathematik']]);
-  assert.equal(snap.v, 5);
+  assert.equal(snap.v, 6);
 
   // Lehrkraft laut regulärem Gesamtstundenplan (Montag = erste Stelle in „days“, Doppelstunde über durationperiods)
   const { regularDay } = require('./edupage');
@@ -186,6 +189,13 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
     const sum = await call(`/api/summary?day=morgen&key=${widget}`);
     assert.equal(sum.status, 200);
     assert.match(await sum.text(), /^Morgen /);
+    // Einstellungen: Stunden-Mitteilungen an, unbekanntes Bundesland abgelehnt
+    assert.equal((await (await auth('/api/settings', { method: 'POST', body: JSON.stringify({ lessonPush: true }) })).json()).lessonPush, true);
+    assert.equal((await auth('/api/settings', { method: 'POST', body: JSON.stringify({ state: 'XX' }) })).status, 400);
+    // Siri schreibt Schul-Kürzel aus
+    const td = new Date(); const tdIso = `${td.getFullYear()}-${String(td.getMonth() + 1).padStart(2, '0')}-${String(td.getDate()).padStart(2, '0')}`;
+    await auth('/api/items/events', { method: 'POST', body: JSON.stringify({ title: 'SchA Mathe und PLN Physik', date: tdIso }) });
+    assert.match(await (await call(`/api/summary?day=heute&key=${widget}`)).text(), /Schulaufgabe Mathe und praktischer Leistungsnachweis Physik/);
     assert.equal((await call('/api/summary?day=morgen&key=falsch')).status, 401);
     assert.equal((await auth('/api/messages', { method: 'POST', body: JSON.stringify({ to: ['unbekannt'], text: 'Hallo' }) })).status, 400);
     assert.equal((await auth('/api/messages', { method: 'POST', body: JSON.stringify({ to: [d2.snap.people[0].id], text: 'Hallo' }) })).status, 200);

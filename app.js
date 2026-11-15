@@ -125,6 +125,17 @@ function news(snap, data, done, now) {
   for (const m of snap?.messages || []) for (const x of [m, ...m.replies]) {
     out.push([`msg|${x.id}`, { title: `${x.important ? 'Wichtig · ' : ''}${x.author || 'Neue Nachricht'}`, body: x.text.slice(0, 180), url: `/#schule/${m.id}`, tag: `msg-${x.id}` }]);
   }
+  if (load('config.json', {}).lessonPush) { // kurz vor jeder Stunde: Fach, Zeit, Raum, Lehrkraft
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    for (const l of snap?.days.find((d) => d.date === today)?.lessons || []) {
+      if (l.cancelled || l.allday || !l.start) continue;
+      const mins = toMin(l.start) - nowMin;
+      if (mins >= 0 && mins <= 6) {
+        out.push([`les|${today}|${l.start}|${l.subject}`, { title: `Gleich: ${l.subject}`, tag: 'lesson', url: `/#kalender/${today}`,
+          body: [l.start, l.rooms.join(', '), l.teachers.join(', '), ...l.changes].filter(Boolean).join(' · ') }]);
+      }
+    }
+  }
   for (const r of data.reminders) { // eigene Erinnerung zur eingestellten Uhrzeit
     if (!r.done && r.due && r.time && (r.due < today || (r.due === today && r.time <= hm))) {
       out.push([`rem|${r.id}|${r.due}|${r.time}`, { title: 'Erinnerung', body: r.title, url: '/#aufgaben', tag: `rem-${r.id}` }]);
@@ -155,9 +166,10 @@ async function notify(snap) {
   const items = news(snap && { ...snap, tasks: [...snap.tasks, ...study(snap, st.done)] }, db(), st.done, new Date());
   const seen = new Set(st.seen), quiet = !st.eduSeeded; // erster EduPage-Abgleich: Bestand still übernehmen
   let fresh = items.filter(([k]) => !seen.has(k));
+  const changed = fresh.length || (snap && !st.eduSeeded);
   st.seen = [...st.seen, ...fresh.map(([k]) => k)].slice(-4000);
   if (snap) st.eduSeeded = true;
-  save('state.json', st);
+  if (changed) save('state.json', st); // läuft minütlich – nur schreiben, wenn sich etwas tut
   if (quiet) fresh = fresh.filter(([k]) => !k.startsWith('sub|') && !k.startsWith('msg|'));
   const subs = fresh.filter(([k]) => k.startsWith('sub|'));
   if (subs.length > 3) { // Sammelmeldung statt Mitteilungsflut
@@ -197,6 +209,11 @@ function study(snap, done, now = new Date()) {
   return out;
 }
 
+// Für Siri: Schul-Kürzel ausschreiben (in der App bleiben die Kürzel stehen)
+const SPOKEN = [[/\bSchA\b/g, 'Schulaufgabe'], [/\bPLN\b/g, 'praktischer Leistungsnachweis'], [/\bStEx\b|\bEx\b/g, 'Stegreifaufgabe'],
+  [/\bKA\b/g, 'Kurzarbeit'], [/\bHA\b/g, 'Hausaufgabe'], [/\bStd\.(?=\s|$)/g, 'Stunde'], [/(\d)\.(?=[A-Za-zÄÖÜäöü])/g, '$1. ']];
+const speakable = (t) => SPOKEN.reduce((s, [re, w]) => s.replace(re, w), t);
+
 // Kurzbefehle/Siri: der Tag in zwei, drei Sätzen
 function summary(which) {
   const p = payload(), date = isoDay(addDays(new Date(), which === 'morgen' ? 1 : 0)), name = which === 'morgen' ? 'Morgen' : 'Heute';
@@ -211,7 +228,35 @@ function summary(which) {
   if (evs.length) lines.push(`Termine: ${evs.map((e) => `${e.start ? `${e.start} ` : ''}${e.title}`).join(', ')}.`);
   const due = [...(p.snap?.tasks || []).filter((t) => !t.done && t.due === date), ...p.db.reminders.filter((r) => !r.done && r.due === date)];
   if (due.length) lines.push(`Fällig: ${due.map((t) => t.subject ? `${t.subject} (${t.title})` : t.title).join(', ')}.`);
-  return lines.join(' ');
+  const cd = which === 'morgen' ? null : holidayCountdown(p.holidays);
+  if (cd && !cd.during && cd.days <= 30) lines.push(`Noch ${cd.days} Schultage bis zu den ${cd.name}.`);
+  return speakable(lines.join(' '));
+}
+
+const STATES = ['BW', 'BY', 'BE', 'BB', 'HB', 'HH', 'HE', 'MV', 'NI', 'NW', 'RP', 'SL', 'SN', 'ST', 'SH', 'TH'];
+async function refreshHolidays(force) {
+  const state = load('config.json', {}).state || 'BY', cached = load('holidays.json', null);
+  if (!force && cached?.state === state && Date.now() - cached.at < 864e5) return;
+  try {
+    const today = isoDay(new Date()), until = isoDay(addDays(new Date(), 400));
+    const r = await fetch(`https://openholidaysapi.org/SchoolHolidays?countryIsoCode=DE&subdivisionCode=DE-${state}&languageIsoCode=DE&validFrom=${today}&validTo=${until}`, { signal: AbortSignal.timeout(10000) });
+    const list = (await r.json()).map((h) => ({ start: String(h.startDate).slice(0, 10), end: String(h.endDate).slice(0, 10), name: String((h.name || []).find((n) => n.language === 'DE')?.text || h.name?.[0]?.text || 'Ferien') }))
+      .filter((h) => h.end >= today).sort((a, b) => a.start.localeCompare(b.start));
+    if (!list.length) throw new Error('keine Ferien geliefert');
+    save('holidays.json', { state, at: Date.now(), list });
+  } catch (e) { console.warn('Ferien nicht abrufbar:', e.message); }
+}
+const holidayName = (n) => n || 'Ferien';
+// Schultage bis zu den nächsten Ferien (Werktage ohne Ferientage; heute zählt mit)
+function holidayCountdown(list, now = new Date()) {
+  const today = isoDay(now), off = (d) => list.some((h) => h.start <= d && d <= h.end);
+  const cur = list.find((h) => h.start <= today && today <= h.end);
+  if (cur) return { during: true, name: holidayName(cur.name), end: cur.end };
+  const next = list.find((h) => h.start > today && (new Date(`${h.end}T12:00`) - new Date(`${h.start}T12:00`)) / 864e5 >= 2);
+  if (!next) return null;
+  let days = 0;
+  for (let d = new Date(`${today}T12:00`); isoDay(d) < next.start; d.setDate(d.getDate() + 1)) if (d.getDay() % 6 && !off(isoDay(d))) days++;
+  return { during: false, name: holidayName(next.name), start: next.start, days };
 }
 
 async function syncEdupage() {
@@ -241,6 +286,7 @@ function sync(minAgeMs) {
   if (Date.now() - load('lastrun.json', 0) < minAgeMs) return Promise.resolve();
   running = (async () => {
     save('lastrun.json', Date.now());
+    await refreshHolidays();
     await notify(await syncEdupage());
   })().catch((e) => console.error('Abgleich:', e)).finally(() => { running = null; });
   return running;
@@ -255,6 +301,7 @@ setInterval(() => {
   const origin = load('origin.json', null);
   if (origin) fetch(`${origin}/api/ping`, { signal: AbortSignal.timeout(10000) }).catch(() => {});
 }, 2 * 60e3);
+setInterval(() => { if (!running) notify(load('snapshot.json', null)).catch((e) => console.error('Mitteilungen:', e)); }, 60e3);
 // nach einem Update mit neuer Auswertung sofort neu abgleichen, sonst nur wenn der letzte Abgleich älter als 10 Min. ist
 setTimeout(() => sync(load('snapshot.json', null)?.v === SNAPSHOT_VERSION ? 10 * 60e3 : 0), 3000);
 
@@ -263,6 +310,7 @@ function payload() {
   const st = state(), snap = load('snapshot.json', null), cfg = load('config.json', {}).edupage;
   return {
     app: APP, demo: DEMO, status: load('status.json', {}),
+    state: load('config.json', {}).state || 'BY', lessonPush: !!load('config.json', {}).lessonPush, holidays: load('holidays.json', null)?.list || [],
     edupage: DEMO ? { connected: true, school: 'demo', user: 'demo' } : cfg ? { connected: true, school: cfg.school, user: cfg.user } : { connected: false },
     snap: snap && {
       ...snap,
@@ -439,6 +487,13 @@ const routes = {
     send(res, 200, payload());
   },
 
+  'POST /api/settings': async (req, res) => {
+    const { state: st, lessonPush } = await readJson(req);
+    if (st !== undefined && !STATES.includes(st)) throw bad('Unbekanntes Bundesland');
+    save('config.json', { ...load('config.json', {}), ...(st ? { state: st } : {}), ...(typeof lessonPush === 'boolean' ? { lessonPush } : {}) });
+    if (st) await refreshHolidays(true);
+    send(res, 200, payload());
+  },
   'GET /api/push/key': (req, res) => send(res, 200, { key: VAPID.publicKey }),
   'POST /api/push/subscribe': async (req, res) => {
     const s = await readJson(req);

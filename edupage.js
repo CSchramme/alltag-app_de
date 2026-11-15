@@ -141,7 +141,8 @@ class Edupage {
       const texts = (l.infos || []).flatMap((i) => (i.texts || []).map((t) => ({ type: i.type, ...t })));
       const event = !!(l.type === 'event' || l.type === 'out' || l.main);
       const allday = !!(dp.allday || l.allday || l.uniperiod === 'ad');
-      const cancelled = !!(dp.cancelled || l.removed || l.type === 'absent' || l.type === '' || texts.some((t) => /^Entfällt/.test(t.text || '')));
+      const noTeacher = !event && !allday && !!subj && l.type !== 'period' && !(l.teacherids || []).length; // keine Lehrkraft eingetragen → fällt aus
+      const cancelled = !!(dp.cancelled || l.removed || l.type === 'absent' || l.type === '' || noTeacher || texts.some((t) => /^Entfällt/.test(t.text || '')));
       const [start, end] = allday ? ['', ''] : l.starttime ? [l.starttime, l.endtime] : times[l.uniperiod] || ['', ''];
       // Vertretung = anderer Lehrer, Raum oder anderes Fach als im regulären Plan; geänderte Klassenlisten betreffen dich nicht
       const old = (col) => [...new Set((dp.changes || []).filter((c) => c.column === col).flatMap((c) => [].concat(c.old)).map(String))];
@@ -263,10 +264,10 @@ const TASK_KINDS = {
   homework: ['homework', 'Hausaufgabe'], bexam: ['exam', 'Klassenarbeit'], sexam: ['exam', 'Test'], testing: ['exam', 'Test'],
   oexam: ['exam', 'Mündliche Prüfung'], rexam: ['exam', 'Referat'], pexam: ['exam', 'Projekt'],
 }; // Termine/Feiertage nicht aus der Timeline – die stehen schon im persönlichen Stundenplan
-const SNAPSHOT_VERSION = 5;
+const SNAPSHOT_VERSION = 6;
 // Prüfungen kündigt EduPage als Timeline-Termin an („Udalosť: 1.Deutsch-SchA - 16.11.2026“) – daraus entsteht der Lernplan
-const EXAM_RE = /SchA|Schulaufgabe|Stegreif|\bEx\b|Klassenarbeit|Klausur|Kurzarbeit|\bTest\b/i;
-const examLabel = (t) => (/SchA|Schulaufgabe/i.test(t) ? 'Schulaufgabe' : /Stegreif|\bEx\b/i.test(t) ? 'Stegreifaufgabe'
+const EXAM_RE = /SchA|Schulaufgabe|Stegreif|\bEx\b|Klassenarbeit|Klausur|Kurzarbeit|\bTest\b|\bPLN\b|Leistungsnachweis/i;
+const examLabel = (t) => (/SchA|Schulaufgabe/i.test(t) ? 'Schulaufgabe' : /\bPLN\b|Leistungsnachweis/i.test(t) ? 'Leistungsnachweis' : /Stegreif|\bEx\b/i.test(t) ? 'Stegreifaufgabe'
   : /Kurzarbeit/i.test(t) ? 'Kurzarbeit' : /Klassenarbeit/i.test(t) ? 'Klassenarbeit' : 'Prüfung'); // erhöhen, wenn sich die Auswertung ändert → Server gleicht nach dem Update sofort neu ab
 const MESSAGE_KINDS = { sprava: 'message', news: 'news', chat: 'chat' };
 const KEEP_DAYS = 14;
@@ -350,6 +351,8 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
     student: { name: who.name, class: who.cls },
     days, tasks: [...tasks.values()], missing: [...missing.values()].reverse(),
     people: await attempt('Lehrkräfte', () => ep.teachers(), []),
+    bells: (ep.data?.zvonenia || []).filter((z) => z.starttime && z.endtime)
+      .map((z, i) => ({ name: String(z.short || z.name || z.p_skratka || i + 1), start: z.starttime, end: z.endtime })),
     messages: [...messages.values()].sort((a, b) => (b.last || b.time).localeCompare(a.last || a.time)).slice(0, 100),
     errors,
   };

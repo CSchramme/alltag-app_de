@@ -103,7 +103,7 @@ const initials = (name) => {
   const w = String(name || '?').split(/\s+/).filter((x) => x && !x.endsWith('.'));
   return ((w[0]?.[0] || '?') + (w.length > 1 ? w.at(-1)[0] : '')).toUpperCase();
 };
-const EXAM = /SchA|Schulaufgabe|Stegreif|\bEx\b|Klassenarbeit|Klausur|Test/i;
+const EXAM = /SchA|Schulaufgabe|Stegreif|\bEx\b|Klassenarbeit|Klausur|Test|\bPLN\b|Leistungsnachweis/i;
 const room = (r) => (/^\d/.test(r) ? `Raum ${r}` : r);
 const where = (l) => [l.rooms.map(room).join(', '), l.teachers.join(', ')].filter(Boolean).join(' · ');
 const chip = (text, c, solid) => `<span class="chip${solid ? ' solid' : ''}" style="--c:${c}">${esc(text)}</span>`;
@@ -358,6 +358,48 @@ function heroHTML() {
   return card({ kicker: 'Die nächsten Tage', title: 'Nichts geplant', sub: 'Tippe auf +, um einen Termin anzulegen.', c: 'var(--indigo)' });
 }
 
+/* ---------------------------------------------------------------- Klingelzeiten und Ferien-Countdown */
+// Wo im Stundenraster stehen wir gerade? → Stunde läuft (Gong um …) oder Pause (bis …)
+function bellState() {
+  const bells = S().bells || [], m = nowMin(), dow = now().getDay();
+  if (!bells.length || dow === 0 || dow === 6 || (D.holidays || []).some((h) => h.start <= today() && today() <= h.end)) return null;
+  for (let i = 0; i < bells.length; i++) {
+    const b = bells[i], s = toMin(b.start), e = toMin(b.end);
+    if (m >= s && m < e) return { lesson: true, b, left: Math.ceil(e - m), at: b.end };
+    if (m < s && (i === 0 ? s - m <= 30 : true)) return i === 0 ? { before: true, b, left: Math.ceil(s - m), at: b.start } : { lesson: false, b, left: Math.ceil(s - m), at: b.start };
+  }
+  return null;
+}
+function bellRow() {
+  const st = bellState();
+  if (!st) return '';
+  const text = st.lesson ? `${st.b.name}. Stunde · Gong um ${st.at}` : st.before ? `Unterricht beginnt um ${st.at}` : `Pause · weiter um ${st.at} (${st.b.name}. Stunde)`;
+  return `<button class="card bell-row pressable" data-bells><span class="bell-dot${st.lesson ? '' : ' pause'}"></span><span class="main">${esc(text)}</span><b>${st.left} Min.</b></button>`;
+}
+function openBells() {
+  const bells = S().bells || [], st = bellState();
+  openSheet('Klingelzeiten', `<div class="list card">${bells.map((b, i) => {
+    const gap = i ? toMin(b.start) - toMin(bells[i - 1].end) : 0;
+    return `${gap >= 5 ? `<div class="break">Pause · ${gap} Min.</div>` : ''}<div class="row${st?.b === b ? ' now-row' : ''}"><div class="main"><div class="title">${esc(b.name)}. Stunde</div></div><div class="trail">${esc(b.start)} – ${esc(b.end)}</div></div>`;
+  }).join('')}</div>`);
+}
+const holidayLabel = (n) => n || 'Ferien';
+function holidayCard() {
+  const list = D.holidays || [], t = today(), off = (d) => list.some((h) => h.start <= d && d <= h.end);
+  const cur = list.find((h) => h.start <= t && t <= h.end);
+  if (cur) {
+    let back = addDays(cur.end, 1);
+    while (parseDay(back).getDay() % 6 === 0 || off(back)) back = addDays(back, 1);
+    const n = daysBetween(t, back);
+    return `<div class="card holiday"><div class="big">${n}</div><div class="main"><div class="title">${n === 1 ? 'Tag' : 'Tage'} ${esc(holidayLabel(cur.name))}</div><div class="sub">Schule wieder ab ${esc(F.short.format(parseDay(back)))}</div></div></div>`;
+  }
+  const next = list.find((h) => h.start > t && daysBetween(h.start, h.end) >= 2);
+  if (!next) return '';
+  let days = 0;
+  for (let d = t; d < next.start; d = addDays(d, 1)) if (parseDay(d).getDay() % 6 && !off(d)) days++;
+  return `<div class="card holiday"><div class="big">${days}</div><div class="main"><div class="title">${days === 1 ? 'Schultag' : 'Schultage'} bis zu den ${esc(holidayLabel(next.name))}</div><div class="sub">ab ${esc(F.short.format(parseDay(next.start)))}</div></div></div>`;
+}
+
 function renderHeute() {
   const t = today();
   const changes = S().days.filter((d) => d.date >= t).flatMap((d) => d.changes.map((c) => changeRow(c, d.date)));
@@ -370,6 +412,8 @@ function renderHeute() {
     ${banners()}
     <div class="today-grid"><div class="col">
       ${heroHTML()}
+      ${bellRow()}
+      ${holidayCard()}
       ${changes.length ? section('Vertretungen') + `<div class="list card">${changes.join('')}</div>` : ''}
       ${show ? section(show === t ? 'Tagesablauf' : dayName(show), 'kalender') + `<div class="list card">${agendaList(show)}</div>` : ''}
     </div><div class="col">
@@ -377,7 +421,7 @@ function renderHeute() {
       ${due.length ? `<div class="list card">${due.slice(0, 6).map(taskRow).join('')}</div>` : emptyCard('check', 'Für heute und morgen ist nichts fällig.')}
       ${msgs.length ? section('Nachrichten', 'schule') + `<div class="list card">${msgs.slice(0, 3).map(msgRow).join('')}</div>` : ''}
     </div></div>
-    ${D.edupage.connected ? `<p class="footnote">EduPage aktualisiert ${esc(ago(D.snap?.updated))} · <button class="btn-link" data-refresh>Jetzt aktualisieren</button></p>` : ''}`;
+    ${D.edupage.connected ? `<p class="footnote">EduPage aktualisiert ${esc(ago(D.snap?.updated))} · <button class="btn-link" data-refresh>Jetzt aktualisieren</button>${S().bells?.length ? ' · <button class="btn-link" data-bells>Klingelzeiten</button>' : ''}</p>` : ''}`;
 }
 
 /* ---------------------------------------------------------------- Segment-Steuerung mit gleitendem Daumen */
@@ -1146,6 +1190,8 @@ async function openSettings() {
       <div class="avatar" style="--c:var(--blue);width:58px;height:58px;font-size:21px">${esc(initials(s.name || 'Ich'))}</div>
       <div class="main"><div class="title">${esc(s.name || 'Alltag')}</div><div class="sub">${s.class ? `Klasse ${esc(s.class)}` : 'Schule und Privates'}</div></div>
     </div>
+    <p class="label-sm">Ferien</p>
+    ${group(fRow('Bundesland', `<select id="state-select">${[['BW', 'Baden-Württemberg'], ['BY', 'Bayern'], ['BE', 'Berlin'], ['BB', 'Brandenburg'], ['HB', 'Bremen'], ['HH', 'Hamburg'], ['HE', 'Hessen'], ['MV', 'Mecklenburg-Vorpommern'], ['NI', 'Niedersachsen'], ['NW', 'Nordrhein-Westfalen'], ['RP', 'Rheinland-Pfalz'], ['SL', 'Saarland'], ['SN', 'Sachsen'], ['ST', 'Sachsen-Anhalt'], ['SH', 'Schleswig-Holstein'], ['TH', 'Thüringen']].map(([v, l]) => `<option value="${v}"${D.state === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`))}
     <p class="label-sm">Darstellung</p>
     <div class="card" style="padding:14px 16px">
       <div class="sub" style="margin-bottom:8px">Erscheinungsbild</div>
@@ -1160,6 +1206,8 @@ async function openSettings() {
     <div class="list card">
       <label class="row"><div class="main"><div class="title">Mitteilungen</div><div class="sub">Vertretungen, Nachrichten, Erinnerungen, Termine und abends der Ausblick auf morgen</div></div>
         <input type="checkbox" class="switch" id="push-toggle" aria-label="Mitteilungen" disabled></label>
+      <label class="row"><div class="main"><div class="title">Vor jeder Stunde</div><div class="sub">Kurz vorher: Fach, Raum, Lehrkraft und Vertretung</div></div>
+        <input type="checkbox" class="switch" id="lesson-push"${D.lessonPush ? ' checked' : ''} aria-label="Mitteilung vor jeder Stunde"></label>
       <button class="row" id="push-test" hidden><span class="btn-plain">Test-Mitteilung senden</span></button>
     </div>
     <p class="footnote" id="push-hint" style="margin-top:8px;text-align:left"></p>
@@ -1185,6 +1233,13 @@ async function openSettings() {
     <div class="list card" style="margin-top:22px"><button class="row" id="logout"><span class="btn-plain danger">Abmelden</span></button></div>`);
 
   $('#logout').onclick = logout;
+  $('#lesson-push').onchange = async (e) => {
+    haptic();
+    try { setData(await api('/api/settings', { method: 'POST', body: { lessonPush: e.target.checked } })); } catch (x) { e.target.checked = !e.target.checked; toast(x.message); }
+  };
+  $('#state-select').onchange = async (e) => {
+    try { setData(await api('/api/settings', { method: 'POST', body: { state: e.target.value } })); toast('Ferien aktualisiert'); } catch (x) { toast(x.message); }
+  };
   $$('#sheet input[name=look], #sheet input[name=glass]').forEach((r) => {
     r.onchange = () => { // weicher Übergang statt hartem Helligkeitssprung
       try { localStorage.setItem(r.name, r.value); } catch { /* privater Modus */ }
@@ -1371,13 +1426,14 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-week],[data-like],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-like],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (el.id === 'me' || 'settings' in ds) return openSettings();
   if (el.id === 'add') return ADD[tab]();
   if (el.id === 'search') return openSearch();
   if (ds.week !== undefined) return shiftWeek(Number(ds.week));
+  if ('bells' in ds) return openBells();
   if (ds.star) return toggleStar(ds.star, el);
   if (ds.like) return toggleLike(ds.like);
   if (ds.confirm) return confirmRead(ds.confirm, el);

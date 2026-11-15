@@ -35,7 +35,10 @@ function dayLabel(s) {
 }
 const COLORS = ['#007AFF', '#5856D6', '#AF52DE', '#FF2D55', '#FF3B30', '#FF9500', '#34C759', '#00C7BE', '#30B0C7', '#32ADE6', '#A2845E'];
 const colorOf = (s) => { let h = 7; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) >>> 0; return new Color(COLORS[h % COLORS.length]); };
-const LABEL = new Color('#000000', 0.9), LABEL2 = new Color('#3C3C43', 0.64), ORANGE = new Color('#FF9500'), BLUE = new Color('#007AFF'), PURPLE = new Color('#AF52DE');
+// hell/dunkel automatisch wie das iPhone
+const dyn = (light, dark) => Color.dynamic(new Color(light[0], light[1] ?? 1), new Color(dark[0], dark[1] ?? 1));
+const LABEL = dyn(['#000000', 0.9], ['#FFFFFF', 0.94]), LABEL2 = dyn(['#3C3C43', 0.64], ['#EBEBF5', 0.62]);
+const ORANGE = dyn(['#FF9500'], ['#FF9F0A']), BLUE = dyn(['#007AFF'], ['#0A84FF']), PURPLE = dyn(['#AF52DE'], ['#BF5AF2']), RED = dyn(['#FF3B30'], ['#FF453A']);
 
 // Tagesablauf: Stunden + eigene Termine mit Uhrzeit
 function agenda(D, date) {
@@ -123,13 +126,13 @@ function build(D, family) {
   }
 
   const g = new LinearGradient();
-  g.colors = [new Color('#F5F8FE'), new Color('#E8EEFB')];
+  g.colors = [dyn(['#F5F8FE'], ['#1C1E26']), dyn(['#E8EEFB'], ['#101218'])];
   g.locations = [0, 1];
   w.backgroundGradient = g;
   w.setPadding(14, 15, 14, 15);
 
-  const subRows = ch.map((c) => ({ color: c.kind === 'cancel' ? new Color('#FF3B30') : ORANGE, text: c.label ? `${c.label} ${c.text}` : c.text, meta: dayLabel(c.date) }));
-  const dueRows = dueList.map((x) => ({ color: x.exam ? new Color('#FF3B30') : x.own ? PURPLE : colorOf(x.title), text: x.title, meta: x.meta }));
+  const subRows = ch.map((c) => ({ color: c.kind === 'cancel' ? RED : ORANGE, text: c.label ? `${c.label} ${c.text}` : c.text, meta: dayLabel(c.date) }));
+  const dueRows = dueList.map((x) => ({ color: x.exam ? RED : x.own ? PURPLE : colorOf(x.title), text: x.title, meta: x.meta }));
   const todayRows = agenda(D, today).filter((a) => endOf(a) > nm).map((a) => ({ color: a.color, text: `${a.start} ${a.title}`, meta: a.sub }));
 
   if (family === 'small') {

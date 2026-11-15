@@ -59,6 +59,7 @@ function snapshot(now = new Date()) {
       { id: 'm3', kind: 'message', author: 'Hr. Schulz', time: ago(52), replies: [], attachments: [], text: 'Sport findet diese Woche draußen statt – bitte an wetterfeste Kleidung denken.' },
     ],
     missing: [{ id: 'x1', title: 'Arbeitsblatt Zellatmung', subject: 'Biologie', date: isoDay(addDays(now, -3)), comment: '' }],
+    bells: TIMES.map(([start, end], i) => ({ name: String(i + 1), start, end })),
     people: [...new Set(Object.values(T).map(([name]) => name))].map((name, i) => ({ id: `-${i + 1}`, name })),
     errors: [],
   };
