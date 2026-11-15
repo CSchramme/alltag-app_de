@@ -209,6 +209,14 @@ function sync(minAgeMs) {
 }
 // Läuft der Prozess dauerhaft, gleicht er selbst ab; unter Plesk weckt ihn zusätzlich die geplante Aufgabe (/api/cron)
 setInterval(() => { const h = new Date().getHours(); sync(h >= 5 && h < 22 ? 14 * 60e3 : 55 * 60e3); }, 5 * 60e3);
+
+// Plesk/Passenger beendet die App nach einigen Minuten ohne Aufruf – dann gäbe es keinen Abgleich und keine Mitteilungen.
+// Ohne geplante Aufgabe hält sie sich deshalb selbst wach: alle 2 Minuten ein Aufruf der eigenen Adresse.
+// Die Adresse stammt nur aus angemeldeten Aufrufen, damit kein fremder Host-Header sie umlenken kann.
+setInterval(() => {
+  const origin = load('origin.json', null);
+  if (origin) fetch(`${origin}/api/ping`, { signal: AbortSignal.timeout(10000) }).catch(() => {});
+}, 2 * 60e3);
 // nach einem Update mit neuer Auswertung sofort neu abgleichen, sonst nur wenn der letzte Abgleich älter als 10 Min. ist
 setTimeout(() => sync(load('snapshot.json', null)?.v === SNAPSHOT_VERSION ? 10 * 60e3 : 0), 3000);
 
@@ -237,7 +245,11 @@ const routes = {
     send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 365 * 86400) });
   },
   'POST /api/logout': (req, res) => send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 0) }),
-  'GET /api/data': (req, res) => send(res, 200, payload()),
+  'GET /api/data': (req, res) => {
+    const origin = `${https(req) ? 'https' : 'http'}://${req.headers.host}`;
+    if (loggedIn(req) && /^[\w.:-]+$/.test(req.headers.host || '') && load('origin.json', null) !== origin) save('origin.json', origin);
+    send(res, 200, payload());
+  },
   'POST /api/refresh': async (req, res) => { await sync(60e3); send(res, 200, payload()); },
 
   'POST /api/tasks/:id': async (req, res, id) => {
@@ -339,7 +351,8 @@ const server = http.createServer(async (req, res) => {
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method Not Allowed');
       return serveStatic(req, res, url.pathname);
     }
-    if (url.pathname === '/api/cron') { // geplante Aufgabe in Plesk ("URL abrufen")
+    if (url.pathname === '/api/ping') return send(res, 200, 'ok'); // Selbst-Wachhalten, verrät nichts
+    if (url.pathname === '/api/cron') { // geplante Aufgabe in Plesk bzw. cron-job.org ("URL abrufen")
       if (!same(url.searchParams.get('key') || '', TOKENS.cron)) return send(res, 403, { error: 'falscher Schlüssel' });
       await sync(10 * 60e3);
       return send(res, 200, { ok: true, status: load('status.json', {}) });

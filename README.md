@@ -39,7 +39,7 @@ Danach http://localhost:3000 öffnen. Das Passwort ist `demo`, angezeigt werden 
 4. Unter **Benutzerdefinierte Umgebungsvariablen** `APP_PASSWORD` auf dein Passwort für die App setzen.
 5. **Node.js aktivieren** bzw. **App neu starten**.
 6. Die Domain öffnen und dich anmelden. Unter **Profil (oben rechts) → EduPage** Schul-Adresse, Benutzername und Passwort eintragen und auf **Verbinden** tippen.
-7. **Regelmäßiger Abgleich:** Plesk startet die App nur bei Bedarf. Kopiere unter **Profil → Plesk · geplante Aufgabe** die Adresse. Lege dann in Plesk unter *Geplante Aufgaben* → *Aufgabe hinzufügen* → **URL abrufen** eine Aufgabe mit dieser Adresse an, die **alle 15 Minuten** läuft (`*/15 * * * *`).
+7. **Regelmäßiger Abgleich:** Plesk beendet Node-Apps, wenn eine Weile niemand die Seite aufruft. Die App hält sich deshalb selbst wach (Aufruf der eigenen Adresse alle 2 Minuten) und gleicht alle 15 Minuten mit EduPage ab. Nach einem Neustart des Servers läuft sie erst wieder, wenn du sie einmal öffnest. Noch zuverlässiger wird es, wenn du unter **Profil → Hintergrund-Abgleich** die Adresse kopierst und sie alle 15 Minuten aufrufen lässt: entweder in Plesk unter *Geplante Aufgaben* → **URL abrufen**, falls dein Hoster das anbietet, oder beim kostenlosen Dienst **cron-job.org**.
 
 Wichtig: `data/` liegt außerhalb des Dokumentenstamms und darf nie in `public/` landen. Dort stehen dein EduPage-Passwort und deine Einträge, also gehört der Ordner in deine Datensicherung.
 

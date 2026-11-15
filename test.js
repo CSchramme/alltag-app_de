@@ -147,6 +147,9 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
     assert.equal((await call('/api/cron?key=falsch')).status, 403);
     assert.equal((await call(`/api/cron?key=${cron}`)).status, 200);
     assert.equal((await call(`/api/diagnose?key=${cron}`)).status, 401); // vorübergehende Diagnose ist wieder entfernt
+    // Selbst-Wachhalten: Ping ohne Anmeldung, eigene Adresse nur aus angemeldetem Aufruf gemerkt
+    assert.equal(await (await call('/api/ping')).text(), 'ok');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'origin.json'), 'utf8')), `http://localhost:${port}`);
     assert.equal((await call('/api/push/subscribe', { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify({ endpoint: 'http://x' }) })).status, 400);
 
     // statische Dateien, kein Ausbruch aus public/

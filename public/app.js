@@ -860,9 +860,9 @@ async function openSettings() {
       <button class="row" id="widget-copy" disabled><span class="btn-plain">Widget-Skript kopieren</span></button>
     </div>
     <p class="footnote" id="widget-hint" style="margin-top:8px;text-align:left">Das Skript enthält einen eigenen Lese-Schlüssel – nicht weitergeben.</p>
-    <p class="label-sm">Plesk · geplante Aufgabe</p>
+    <p class="label-sm">Hintergrund-Abgleich</p>
     <div class="list card">
-      <div class="row"><div class="main"><div class="sub">In Plesk unter „Geplante Aufgaben“ → „URL abrufen“ alle 15 Minuten diese Adresse eintragen. So kommen Mitteilungen auch, wenn die App gerade niemand öffnet.</div></div></div>
+      <div class="row"><div class="main"><div class="sub">Die App hält sich auf dem Server selbst wach und gleicht alle 15 Minuten ab. Nach einem Server-Neustart startet sie erst wieder, wenn du sie öffnest. Noch zuverlässiger: diese Adresse beim kostenlosen Dienst cron-job.org alle 15 Minuten aufrufen lassen.</div></div></div>
       <button class="row" id="cron-copy" disabled><span class="btn-plain">Adresse kopieren</span></button>
     </div>
     <p class="footnote" id="cron-hint" style="margin-top:8px;text-align:left"></p>
