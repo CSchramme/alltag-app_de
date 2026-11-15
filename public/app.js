@@ -228,14 +228,20 @@ function banners() {
 
 function lessonRow(l, date, i) {
   const isNow = date === today() && l.start && toMin(l.start) <= nowMin() && nowMin() < toMin(l.end);
-  const note = l.cancelled ? 'Entfällt' : l.changes.join(' · ');
+  const changed = !l.cancelled && l.changes?.length > 0;
   const exam = l.event && EXAM.test(l.subject);
-  return `<button class="row lesson${l.cancelled ? ' cancelled' : ''}${isNow ? ' now' : ''}" style="--c:${colorOf(l.subject)}" data-day="${date}" data-i="${i}">
+  const chips = [
+    l.cancelled && chip('Entfall', 'var(--red)', true),
+    changed && chip(l.changes.every((c) => c.startsWith('Raum')) ? 'Raumänderung' : 'Vertretung', 'var(--orange)', true),
+    l.event && chip(exam ? 'Prüfung' : 'Termin', exam ? 'var(--red)' : 'var(--indigo)', true),
+    l.homework?.length && chip('Hausaufgabe fällig', 'var(--blue)'),
+  ].filter(Boolean).join('');
+  return `<button class="row lesson${l.cancelled ? ' cancelled' : ''}${changed ? ' changed' : ''}${isNow ? ' now' : ''}" style="--c:${colorOf(l.subject)}" data-day="${date}" data-i="${i}">
     <div class="time"><b>${esc(l.start)}</b><span>${esc(l.end)}</span></div>
     <div class="bar"></div>
     <div class="main"><div class="title">${esc(l.subject)}</div>${where(l) ? `<div class="sub">${esc(where(l))}</div>` : ''}
-      ${note ? `<div class="change-text">${esc(note)}</div>` : ''}
-      ${l.event || l.homework?.length ? `<div class="meta-line">${l.event ? chip(exam ? 'Prüfung' : 'Termin', exam ? 'var(--red)' : 'var(--indigo)', true) : ''}${l.homework?.length ? chip('Hausaufgabe fällig', 'var(--blue)') : ''}</div>` : ''}</div>
+      ${changed ? `<div class="change-text">${esc(l.changes.join(' · '))}</div>` : ''}
+      ${chips ? `<div class="meta-line">${chips}</div>` : ''}</div>
     <div class="num">${l.period ?? ''}</div></button>`;
 }
 function eventRow(e) {
@@ -396,9 +402,8 @@ const segHTML = (items, sel, label) => `<div class="seg-bar"><div class="seg gla
 /* ---------------------------------------------------------------- Kalender (7 Tage ab heute) */
 let planSeg = null;
 function dayPage(date) {
-  const d = parseDay(date), changes = dayOf(date)?.changes || [], items = agenda(date);
+  const d = parseDay(date), items = agenda(date);
   return `<h3 class="page-day${date === today() ? ' today' : ''}">${esc(F.wd.format(d))} <span>${d.getDate()}.</span></h3>
-    ${changes.length ? `<div class="list card" style="margin-bottom:12px">${changes.map((c) => changeRow(c, date)).join('')}</div>` : ''}
     ${items.length ? `<div class="list card">${agendaList(date, items)}</div>` : `<div class="card empty slim">${d.getDay() % 6 === 0 ? 'Wochenende' : 'Nichts eingetragen'}</div>`}
     <button class="add-row pressable" data-new-event="${date}">+ Termin</button>`;
 }
@@ -416,10 +421,11 @@ function renderKalender() {
     </div></div>
     <div class="pager">${days.map((date) => `<div class="page">${dayPage(date)}</div>`).join('')}</div>`;
   const pager = $('.pager', v);
-  planSeg = Seg($('.days', v), (i) => pager.scrollTo({ left: i * pager.clientWidth, behavior: reduceMotion.matches ? 'auto' : 'smooth' }));
+  planSeg = Seg($('.days', v), (i) => pager.scrollTo({ left: pager.children[i].offsetLeft - pager.children[0].offsetLeft, behavior: reduceMotion.matches ? 'auto' : 'smooth' }));
   let settle;
+  const step = () => (pager.children[1]?.offsetLeft - pager.children[0].offsetLeft) || pager.clientWidth;
   pager.addEventListener('scroll', () => {
-    const pos = pager.scrollLeft / pager.clientWidth;
+    const pos = pager.scrollLeft / step();
     planSeg.track(pos);
     clearTimeout(settle);
     settle = setTimeout(() => {
@@ -436,7 +442,7 @@ function syncPlan() {
   if (tab !== 'kalender' || !planSeg) return;
   const pager = $('#view-kalender .pager'), i = Math.max(0, week().indexOf(planDay));
   planSeg.measure();
-  pager.scrollLeft = i * pager.clientWidth;
+  pager.scrollLeft = pager.children[i].offsetLeft - pager.children[0].offsetLeft;
   planSeg.track(i);
   planSeg.mark(i);
 }

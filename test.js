@@ -85,7 +85,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome } = requ
   // überfällig und Timeline-Termine fallen weg, die geänderte Hausaufgabe ersetzt ihr Original
   assert.deepEqual(snap.tasks.map((t) => [t.id, t.title, t.details, t.subject, t.due, t.done]).sort(), [
     ['1', 'S. 12', 'mit Rechenweg', 'Mathematik', '2026-11-17', true], ['HW7', 'S. 40', '', 'Mathematik', '2026-11-19', false]]);
-  assert.equal(snap.v, 2);
+  assert.equal(snap.v, 3);
   assert.equal(snap.messages.length, 1);
   assert.equal(snap.messages[0].text, 'Hallo');
   assert.equal(snap.messages[0].replies[0].text, 'Antwort');

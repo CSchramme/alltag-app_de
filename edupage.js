@@ -108,6 +108,7 @@ class Edupage {
   async refresh() { this.home((await this.req('/user')).text); }
 
   dbi(group, id) { return this.data?.dbi?.[group]?.[String(id)]; }
+  room(id) { const r = this.dbi('classrooms', id); return r ? r.short || r.name : null; }
   person(group, id) { const p = this.dbi(group, id); return p ? `${p.firstname} ${p.lastname}`.trim() : null; }
 
   async plan(date) {
@@ -147,7 +148,7 @@ class Edupage {
       const notes = [];
       if (!cancelled) {
         const t = old('teacherids').map((id) => this.person('teachers', id)).filter(Boolean);
-        const r = old('classroomids').map((id) => this.dbi('classrooms', id)?.name).filter(Boolean);
+        const r = old('classroomids').map((id) => this.room(id)).filter(Boolean);
         const s = old('subjectid').filter((id) => id !== String(subj?.id)).map((id) => this.dbi('subjects', id)?.name).filter(Boolean);
         if (t.length) notes.push(`Vertretung für ${t.join(', ')}`);
         if (r.length) notes.push(`Raumänderung, sonst ${r.join(', ')}`);
@@ -161,7 +162,7 @@ class Edupage {
         subject: (event ? headText || subj?.name : subj?.name || headText) || 'Unterricht',
         short: subj?.short || '',
         teachers: (l.teacherids || []).map((id) => this.person('teachers', id)).filter(Boolean),
-        rooms: (l.classroomids || []).map((id) => this.dbi('classrooms', id)?.name).filter(Boolean),
+        rooms: (l.classroomids || []).map((id) => this.room(id)).filter(Boolean),
         groups: (l.groupnames || []).filter(Boolean),
         topic: (event ? subj?.name : (subj && headText) || dp.note_wd || l.flags?.event?.name) || null,
         cancelled, event, allday,
@@ -209,7 +210,7 @@ const TASK_KINDS = {
   homework: ['homework', 'Hausaufgabe'], bexam: ['exam', 'Klassenarbeit'], sexam: ['exam', 'Test'], testing: ['exam', 'Test'],
   oexam: ['exam', 'Mündliche Prüfung'], rexam: ['exam', 'Referat'], pexam: ['exam', 'Projekt'],
 }; // Termine/Feiertage nicht aus der Timeline – die stehen schon im persönlichen Stundenplan
-const SNAPSHOT_VERSION = 2; // erhöhen, wenn sich die Auswertung ändert → Server gleicht nach dem Update sofort neu ab
+const SNAPSHOT_VERSION = 3; // erhöhen, wenn sich die Auswertung ändert → Server gleicht nach dem Update sofort neu ab
 const MESSAGE_KINDS = { sprava: 'message', news: 'news', chat: 'chat' };
 const KEEP_DAYS = 14;
 

@@ -237,8 +237,12 @@ button.row:active { background-color: rgba(0, 0, 0, .045); transition-duration: 
 .lesson .main { display: flex; flex-direction: column; justify-content: center; }
 .lesson .num { flex: none; align-self: center; font-size: 13px; font-weight: 600; color: var(--label3); font-variant-numeric: tabular-nums; }
 .lesson.cancelled .title { text-decoration: line-through; text-decoration-thickness: 1.5px; color: var(--label2); }
-.lesson.cancelled .bar { background: var(--label3); }
 .lesson.now { background: color-mix(in srgb, var(--blue) 7%, transparent); }
+/* Vertretung und Entfall sitzen direkt an der betroffenen Stunde */
+.lesson.changed { background: color-mix(in srgb, var(--orange) 10%, transparent); }
+.lesson.changed .bar { background: var(--orange); }
+.lesson.cancelled { background: color-mix(in srgb, var(--red) 6%, transparent); }
+.lesson.cancelled .bar { background: color-mix(in srgb, var(--red) 55%, transparent); }
 .change-text { margin-top: 4px; font-size: 13px; line-height: 18px; font-weight: 500; letter-spacing: -.08px; color: color-mix(in srgb, var(--orange) 80%, #000); }
 .cancelled .change-text { color: color-mix(in srgb, var(--red) 85%, #000); }
 .break { display: flex; align-items: center; gap: 10px; padding: 6px 16px 6px 74px; font-size: 12px; font-weight: 500; color: var(--label3); }
@@ -484,8 +488,14 @@ button.banner { display: flex; text-align: left; }
   .today-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 0 28px; align-items: start; }
   .today-grid .col > .section-title:first-child { margin-top: 0; }
   #view-kalender .seg-bar { display: none; }
-  #view-kalender .pager { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 14px; margin: 0 auto; overflow: visible; max-width: 1180px; }
-  #view-kalender .page { padding: 0; }
+  #view-kalender .pager {
+    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(250px, 1fr); gap: 14px;
+    max-width: none; margin: 0 -32px; padding: 0 32px 10px; scroll-padding: 0 32px;
+    scroll-snap-type: x proximity; scrollbar-width: thin;
+  }
+  #view-kalender .pager::-webkit-scrollbar { display: block; height: 8px; }
+  #view-kalender .pager::-webkit-scrollbar-thumb { border-radius: 4px; background: rgba(60, 60, 67, .22); }
+  #view-kalender .page { padding: 0; scroll-snap-stop: normal; }
   .page-day { display: block; margin: 0 4px 10px; font-size: 17px; font-weight: 700; letter-spacing: -.43px; }
   .page-day span { color: var(--label2); font-weight: 500; }
   .page-day.today, .page-day.today span { color: var(--blue); }
