@@ -850,3 +850,6 @@ button.banner { display: flex; text-align: left; }
 .btn-ghost { height: 46px; padding: 0 18px; border-radius: 12px; font-size: 15px; font-weight: 600; color: var(--label);
   background: var(--card); box-shadow: 0 0 0 1px var(--card-edge), var(--shadow-card); }
 .btn-ghost::after { content: " →"; color: var(--blue); }
+
+/* Vorschau des ersten Flyers nach dem Erstellen */
+.flyer-preview { display: block; width: min(100%, 260px); margin: 4px auto 0; border-radius: 10px; box-shadow: 0 0 0 1px var(--card-edge), var(--shadow-float); }

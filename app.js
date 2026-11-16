@@ -144,7 +144,8 @@ const supportId = (a) => a.id.replace(/-/g, '').slice(0, 8).toUpperCase().replac
 const school = () => me()?.school || 'edupage';
 function admin() { if (!me()?.admin) throw Object.assign(new Error('Nur für Admins'), { status: 403 }); }
 const demoAccount = () => accounts().find((a) => a.demo && !a.disabled);
-const adminData = () => ({ accounts: accounts().map(pubAccount), invites: invites().slice(-200).map((x) => ({ ...x, expired: !x.usedBy && !inviteOpen(x), expires: new Date(Date.parse(x.created) + INVITE_DAYS * 864e5).toISOString() })) });
+const adminData = () => ({ accounts: accounts().map(pubAccount), contact: process.env.LEGAL_EMAIL || '', site: process.env.PUBLIC_URL || '',
+  invites: invites().slice(-300).map((x) => ({ ...x, expired: !x.usedBy && !inviteOpen(x), expires: new Date(inviteEnd(x)).toISOString() })) });
 const pubAccount = (a) => ({ id: a.id, support: supportId(a), name: a.name, school: a.school, admin: !!a.admin, disabled: !!a.disabled, demo: !!a.demo, created: a.created, lastSeen: a.lastSeen || null });
 // Hintergrund-Aufgaben nacheinander für jedes aktive Konto (ohne Konten: einmal für die App)
 async function eachUser(fn) {
@@ -154,9 +155,10 @@ async function eachUser(fn) {
   }
 }
 // Einladungscodes: 6 Ziffern, leicht abzutippen. Damit Raten nichts bringt: 7 Tage gültig, nur einmal nutzbar,
-// und nach 50 falschen Codes in einer Stunde pausiert das Registrieren (die Anmeldung bleibt davon unberührt).
+// und nach 30 falschen Codes in einer Stunde pausiert das Registrieren (die Anmeldung bleibt davon unberührt).
 const INVITE_DAYS = 7;
-const inviteOpen = (x) => !x.usedBy && Date.now() - Date.parse(x.created) < INVITE_DAYS * 864e5;
+const inviteEnd = (x) => Date.parse(x.created) + (x.days || INVITE_DAYS) * 864e5; // Flyer-Codes gelten 30 Tage
+const inviteOpen = (x) => !x.usedBy && Date.now() < inviteEnd(x);
 function newInvite(list) {
   let c;
   do c = String(crypto.randomInt(0, 1e6)).padStart(6, '0'); while (list.some((x) => x.code === c && !x.usedBy));
@@ -681,7 +683,7 @@ const routes = {
     const list = accounts(), inv = invites(), first = !list.length;
     if (!first) {
       while (regFails.length && regFails[0] < Date.now() - 3600e3) regFails.shift();
-      if (regFails.length >= 50) return send(res, 429, { error: 'Registrieren ist gerade kurz pausiert. Bitte versuch es in einer Stunde noch einmal.' });
+      if (regFails.length >= 30) return send(res, 429, { error: 'Registrieren ist gerade kurz pausiert. Bitte versuch es in einer Stunde noch einmal.' });
     }
     const hit = first ? null : inv.find((x) => inviteOpen(x) && same(x.code, code.replace(/\D/g, '')));
     if (first ? !same(code, PASSWORD) : !hit) {
@@ -740,11 +742,17 @@ const routes = {
   'GET /api/admin': (req, res) => { admin(); send(res, 200, adminData()); },
   'POST /api/admin/invites': async (req, res) => {
     admin();
-    const note = F.text(80)((await readJson(req)).note), list = invites();
-    if (list.filter(inviteOpen).length >= 50) throw bad('Es gibt schon 50 offene Codes. Lösch erst ein paar.');
-    list.push({ code: newInvite(list), note, created: new Date().toISOString(), usedBy: null, usedAt: null });
+    const b = await readJson(req), note = F.text(80)(b.note), list = invites();
+    const count = Math.min(40, Math.max(1, Math.trunc(Number(b.count)) || 1)), days = b.days === 30 ? 30 : INVITE_DAYS;
+    if (list.filter(inviteOpen).length + count > 200) throw bad('Es gibt schon zu viele offene Codes. Lösch erst ein paar.');
+    const created = [];
+    for (let i = 0; i < count; i++) {
+      const code = newInvite(list);
+      list.push({ code, note, days, created: new Date().toISOString(), usedBy: null, usedAt: null });
+      created.push(code);
+    }
     saveInvites(list);
-    send(res, 200, adminData());
+    send(res, 200, { ...adminData(), created });
   },
   'DELETE /api/admin/invites/:code': (req, res, code) => {
     admin();
@@ -1120,7 +1128,7 @@ const routes = {
   'GET /api/tokens': (req, res) => send(res, 200, { widget: userTokens().widget, ...(!ACCOUNTS || me()?.admin ? { cron: TOKENS.cron } : {}), ...(PRIVATE ? { screen: TOKENS.screen } : {}) }),
 };
 
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.json': 'application/json', '.ico': 'image/x-icon' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.json': 'application/json', '.ico': 'image/x-icon' };
 const CSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
 // Impressum und Datenschutz: persönliche Angaben kommen aus Umgebungsvariablen (Plesk), nicht aus dem Code auf GitHub

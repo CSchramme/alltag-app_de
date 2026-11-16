@@ -1892,12 +1892,23 @@ function openDeleteAccount() {
 async function openAdmin(data) {
   try { data ||= await api('/api/admin'); } catch (x) { return toast(x.message); }
   const nameOf = (id) => data.accounts.find((a) => a.id === id)?.name || 'gelöschtes Konto';
-  const open = data.invites.filter((i) => !i.usedBy && !i.expired), used = data.invites.filter((i) => i.usedBy).slice(-10).reverse();
+  const valid = data.invites.filter((i) => !i.usedBy && !i.expired), used = data.invites.filter((i) => i.usedBy).slice(-10).reverse();
+  const isFlyer = (i) => /^Flyer /.test(i.note || ''), open = valid.filter((i) => !isFlyer(i));
+  const batches = Object.entries(Object.groupBy ? Object.groupBy(valid.filter(isFlyer), (i) => i.note) : valid.filter(isFlyer).reduce((m, i) => ((m[i.note] ||= []).push(i), m), {}));
   const shown = (c) => String(c).replace(/^(\d{3})(\d{3})$/, '$1 $2'); // 482 913 liest sich leichter vor
   openSheet('Einladungen und Konten', `
     <form class="form" id="invite-form">${group(fText('note', 'Für wen? (siehst nur du)', '', 'maxlength="80"'))}
       <button class="btn-primary pressable" type="submit">Einladungscode erstellen</button></form>
     <p class="footnote" id="invite-hint" style="text-align:left"></p>
+    <p class="label-sm">Flyer zum Ausdrucken</p>
+    <form class="form" id="flyer-form">${group(
+      fRow('Anzahl', `<select name="count">${[10, 20, 30, 40].map((n) => `<option value="${n}">${n} Flyer</option>`).join('')}</select>`),
+      fText('email', 'Deine E-Mail für Fragen', data.contact, 'type="email" inputmode="email" autocapitalize="off" spellcheck="false" maxlength="120"'),
+      fText('site', 'Adresse der App', (data.site || location.host).replace(/^https?:\/\//, '').replace(/\/$/, ''), 'autocapitalize="off" spellcheck="false" maxlength="60" required'))}
+      <button class="btn-primary pressable" type="submit">Flyer erstellen</button></form>
+    <p class="footnote" style="text-align:left">Jeder Flyer bekommt einen eigenen Code, 30 Tage gültig. Du bekommst eine ZIP-Datei mit Bildern im Fotoformat 10 × 15 cm (300 dpi), z. B. für den Fotodruck bei dm.</p>
+    <div id="flyer-preview"></div>
+    ${batches.length ? `<p class="label-sm">Flyer im Umlauf</p>${group(...batches.map(([note, list]) => `<div class="row"><div class="main"><div class="title">${esc(note)}</div><div class="sub">${list.length} Codes noch offen · gültig bis ${esc(F.short.format(new Date(list[0].expires)))}</div></div></div>`))}` : ''}
     <p class="label-sm">Offene Codes</p>
     ${open.length ? group(...open.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shown(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} · gültig bis ${esc(F.short.format(new Date(i.expires)))}</div>
         <div class="code-actions"><button class="btn-plain" type="button" data-copy-code="${esc(i.code)}">Kopieren</button><button class="btn-plain danger" type="button" data-del-code="${esc(i.code)}">Löschen</button></div></div></div>`))
@@ -1915,6 +1926,27 @@ async function openAdmin(data) {
     try { const d = await api('/api/admin/invites', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); haptic(); openAdmin(d); } catch (x) { hint.textContent = x.message; }
   };
   $$('#sheet [data-copy-code]').forEach((b) => { b.onclick = () => copy(b.dataset.copyCode, hint); });
+  $('#flyer-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target, btn = $('button[type=submit]', f), body = Object.fromEntries(new FormData(f));
+    btn.disabled = true;
+    btn.textContent = 'Erstelle Flyer …';
+    try {
+      const d = await api('/api/admin/invites', { method: 'POST', body: { count: Number(body.count), days: 30, note: `Flyer ${F.short.format(now())}` } });
+      const until = new Date(d.invites.find((i) => i.code === d.created[0]).expires).toLocaleDateString('de-DE');
+      const { flyers } = await import('/flyer.mjs');
+      const out = await flyers({ codes: d.created, until, email: body.email.trim(), site: body.site.trim() });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(out.zip);
+      a.download = `alltag-flyer-${today()}.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      haptic();
+      toast(`${d.created.length} Flyer erstellt`);
+      await openAdmin(d);
+      $('#flyer-preview').innerHTML = `<img class="flyer-preview" src="${out.preview}" alt="Vorschau des ersten Flyers">`;
+    } catch (x) { toast(x.message); btn.disabled = false; btn.textContent = 'Flyer erstellen'; }
+  };
   $$('#sheet [data-del-code]').forEach((b) => {
     b.onclick = async () => {
       if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Sicher?'; return; }

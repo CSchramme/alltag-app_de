@@ -391,6 +391,12 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await call('/api/items/notes', { method: 'POST', body: JSON.stringify({ title: 'x' }), headers: { Origin: `http://localhost:${port2}` } }, c1)).status, 200);
     const code3 = (await (await post('/api/admin/invites', {}, c1)).json()).invites.find((i) => !i.usedBy).code;
     assert.equal((await post('/api/register', { name: 'lea', password: '12345678', code: code3, school: 'none' })).status, 400);
+    // Flyer: mehrere Codes auf einmal, 30 Tage gültig
+    const fl = await (await post('/api/admin/invites', { count: 3, days: 30, note: 'Flyer Test' }, c1)).json();
+    assert.equal(fl.created.length, 3);
+    const flDays = (Date.parse(fl.invites.find((i) => i.code === fl.created[0]).expires) - Date.now()) / 864e5;
+    assert.ok(flDays > 29.9 && flDays <= 30);
+    assert.equal((await call('/flyer.mjs')).headers.get('content-type'), 'text/javascript; charset=utf-8');
     // Codes laufen nach 7 Tagen ab
     const code4 = (await (await post('/api/admin/invites', { note: 'alt' }, c1)).json()).invites.find((i) => !i.usedBy && i.note === 'alt').code;
     const invFile = path.join(dir2, 'invites.json');
@@ -417,7 +423,16 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     srv2.kill();
     fs.rmSync(dir2, { recursive: true, force: true });
   }
-  // 7. Mit Konten startet der Server nicht ohne ausreichend langen DATA_KEY
+  // 7. ZIP für die Flyer: Kopf, Inhaltsverzeichnis, Abschluss mit Anzahl und Prüfsumme
+  const { zip } = await import(require('url').pathToFileURL(path.join(__dirname, 'public', 'flyer.mjs')).href);
+  const zbuf = Buffer.from(await zip([{ name: 'a.txt', data: Buffer.from('Hallo') }, { name: 'b.jpg', data: Buffer.from([0xff, 0xd8, 0xff]) }]).arrayBuffer());
+  assert.equal(zbuf.readUInt32LE(0), 0x04034b50);
+  assert.equal(zbuf.readUInt32LE(zbuf.length - 22), 0x06054b50);
+  assert.equal(zbuf.readUInt16LE(zbuf.length - 12), 2);
+  if (require('zlib').crc32) assert.equal(zbuf.readUInt32LE(14), require('zlib').crc32(Buffer.from('Hallo')));
+  assert.equal(zbuf.subarray(35, 40).toString(), 'Hallo'); // 30 Byte Kopf + 5 Byte Name
+
+  // 8. Mit Konten startet der Server nicht ohne ausreichend langen DATA_KEY
   const noKey = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, ENV_FILE: '', DEMO: '', ACCOUNTS: '1', APP_PASSWORD: 'x', DATA_KEY: 'kurz', DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-ohne-')), PORT: String(port + 200) }, stdio: 'pipe' });
   assert.equal(await new Promise((r) => noKey.on('exit', r)), 1);
   console.log('alle Tests ok');
