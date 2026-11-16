@@ -237,7 +237,8 @@ const emptyCard = (icon, text) => `<div class="card empty">${ICON[icon]}${esc(te
 
 function banners() {
   const out = [];
-  if (D.demo) out.push(['info', 'Demo-Modus', 'Du siehst Beispieldaten.']);
+  if (D.account?.jury) out.push(['info', 'Jugend forscht Version · Full Access', 'Alle Funktionen sind freigeschaltet. Die Beispieldaten setzt der Betreiber nach der Vorstellung zurück.']);
+  else if (D.demo) out.push(['info', 'Demo-Modus', 'Du siehst Beispieldaten.']);
   if (!navigator.onLine) out.push(['warn', 'Offline', 'Angezeigt wird der zuletzt geladene Stand.']);
   else if (D.edupage.connected && D.status?.ok === false) out.push(['warn', 'EduPage-Abgleich fehlgeschlagen', D.status.error || '']);
   if (D.school === 'none' && !D.demo) { if (!D.db.lessons?.length) out.push(['info', 'Noch kein Stundenplan', 'Tippe hier und trag deine Stunden einmal ein. Sie gelten dann jede Woche.', 'data-settings']); }
@@ -1829,7 +1830,7 @@ function accountSection() {
   const a = D.account;
   if (!a) return '';
   const sid = `<button class="row" data-copy-support><div class="main"><div class="title">Support-ID</div><div class="sub" id="support-hint">Nenn sie, wenn du Hilfe brauchst. Tippen kopiert.</div></div><div class="trail code">${esc(a.support)}</div></button>`;
-  if (a.demo) return `<p class="label-sm">Konto</p>${group(sid)}<p class="footnote" style="text-align:left;margin-top:8px">Das ist ein Demo-Konto mit Beispieldaten. Was du hier änderst, wird 15 Minuten nach dem letzten Besuch zurückgesetzt.</p>`;
+  if (a.demo) return `<p class="label-sm">Konto</p>${group(sid)}<p class="footnote" style="text-align:left;margin-top:8px">${a.jury ? 'Jugend forscht Version · Full Access. Alle Funktionen sind frei, die Beispieldaten setzt der Betreiber zurück.' : 'Das ist ein Demo-Konto mit Beispieldaten. Was du hier änderst, wird 15 Minuten nach dem letzten Besuch zurückgesetzt.'}</p>`;
   return `<p class="label-sm">Konto</p>
     ${group(sid, fRow('Schulsoftware', `<select id="school-select">${SCHOOL_OPTS.map(([v, l]) => `<option value="${v}"${D.school === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`),
       '<button class="row" data-account="password"><span class="btn-plain">Passwort ändern</span></button>',
@@ -1915,7 +1916,7 @@ async function openAdmin(data) {
       : '<p class="footnote" style="text-align:left">Keine offenen Codes. Jeder Code funktioniert genau einmal und 7 Tage lang.</p>'}
     <p class="label-sm">Konten (${data.accounts.length})</p>
     ${group(`<label class="field"><input id="acc-q" type="search" placeholder="Name oder Support-ID" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`)}
-    <div class="list card" id="acc-list" style="margin-top:10px">${data.accounts.map((a) => `<button class="row" data-acc="${esc(a.id)}" data-q="${esc(`${a.name} ${a.support} ${a.support.replace('-', '')}`.toLowerCase())}"><div class="main"><div class="title">${esc(a.name)}${a.admin ? ' · Admin' : ''}${a.demo ? ' · Demo' : ''}${a.disabled ? ' · gesperrt' : ''}</div>
+    <div class="list card" id="acc-list" style="margin-top:10px">${data.accounts.map((a) => `<button class="row" data-acc="${esc(a.id)}" data-q="${esc(`${a.name} ${a.support} ${a.support.replace('-', '')}`.toLowerCase())}"><div class="main"><div class="title">${esc(a.name)}${a.admin ? ' · Admin' : ''}${a.jury ? ' · Jugend forscht' : a.demo ? ' · Demo' : ''}${a.disabled ? ' · gesperrt' : ''}</div>
       <div class="sub"><span class="code">${esc(a.support)}</span> · ${esc(schoolName(a.school))} · ${a.lastSeen ? `aktiv ${esc(ago(a.lastSeen))}` : `angelegt ${esc(ago(a.created))}`}</div></div>${ICON.chev}</button>`).join('')}</div>
     ${used.length ? `<p class="label-sm">Zuletzt eingelöst</p>${group(...used.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shown(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} → ${esc(nameOf(i.usedBy))}</div></div></div>`))}` : ''}
     <button class="btn-plain" type="button" data-back style="margin-top:12px">Zurück</button>`);
@@ -1967,6 +1968,8 @@ function openAcc(a, password) {
     ${self ? '<p class="footnote" style="text-align:left">Das ist dein eigenes Konto. Passwort und Löschen findest du im Profil unter „Konto“.</p>'
       : group('<button class="row" data-do="reset"><span class="btn-plain">Passwort zurücksetzen</span></button>',
         a.demo ? '' : `<button class="row" data-do="admin"><span class="btn-plain">${a.admin ? 'Admin-Rechte entziehen' : 'Zum Admin machen'}</span></button>`,
+        a.demo ? `<button class="row" data-do="jury"><span class="btn-plain">${a.jury ? 'Jugend-forscht-Kennzeichnung entfernen' : 'Als „Jugend forscht Version · Full Access“ kennzeichnen'}</span></button>` : '',
+        a.demo ? '<button class="row" data-do="resetDemo"><span class="btn-plain">Demo-Daten zurücksetzen</span></button>' : '',
         a.admin ? '' : `<button class="row" data-do="demo"><span class="btn-plain">${a.demo ? 'Demo-Konto beenden' : 'Als Demo-Konto einrichten'}</span></button>`,
         `<button class="row" data-do="disable"><span class="btn-plain${a.disabled ? '' : ' danger'}">${a.disabled ? 'Entsperren' : 'Sperren'}</span></button>`,
         '<button class="row" data-do="delete"><span class="btn-plain danger">Konto löschen</span></button>')}
@@ -1978,13 +1981,14 @@ function openAcc(a, password) {
   $$('#sheet [data-do]').forEach((b) => {
     b.onclick = async () => {
       const act = b.dataset.do;
-      const ask = { delete: 'Wirklich löschen? Alle Daten sind dann weg.', reset: 'Wirklich zurücksetzen?', demo: a.demo ? 'Wirklich beenden? Das Konto ist danach leer.' : 'Wirklich? Alle Daten des Kontos werden durch Beispieldaten ersetzt.' }[act];
+      const ask = { delete: 'Wirklich löschen? Alle Daten sind dann weg.', reset: 'Wirklich zurücksetzen?', resetDemo: 'Wirklich? Alles, was Besucher eingetragen haben, ist dann weg.', demo: a.demo ? 'Wirklich beenden? Das Konto ist danach leer.' : 'Wirklich? Alle Daten des Kontos werden durch Beispieldaten ersetzt.' }[act];
       if (ask && !b.dataset.sure) { b.dataset.sure = '1'; $('span', b).textContent = ask; return; }
       try {
         if (act === 'delete') return openAdmin(await api(url, { method: 'DELETE' }));
-        const body = act === 'reset' ? { reset: true } : act === 'admin' ? { admin: !a.admin } : act === 'demo' ? { demo: !a.demo } : { disabled: !a.disabled };
+        const body = act === 'reset' ? { reset: true } : act === 'admin' ? { admin: !a.admin } : act === 'demo' ? { demo: !a.demo } : act === 'jury' ? { jury: !a.jury } : act === 'resetDemo' ? { resetDemo: true } : { disabled: !a.disabled };
         const d = await api(url, { method: 'POST', body });
         haptic();
+        if (act === 'resetDemo') toast('Demo-Daten zurückgesetzt');
         openAcc(d.accounts.find((x) => x.id === a.id), d.password);
       } catch (x) { toast(x.message); }
     };
@@ -2145,9 +2149,11 @@ function loginMode() {
       <p>Bei „Keine“ trägst du deinen Stundenplan selbst ein. WebUntis und Schulmanager kommen bald.</p>
       <p>Was mit deinen Daten passiert, steht in der <a href="/datenschutz.html" target="_blank" rel="noopener">Datenschutzerklärung</a>.</p></div>`);
   }
-  $('button[type=submit]', f).textContent = registering ? 'Konto anlegen' : 'Anmelden';
+  $('button[type=submit]', f).textContent = info?.setup ? 'Admin-Konto anlegen' : registering ? 'Konto anlegen' : 'Anmelden';
+  if (info?.setup && f.code) { f.code.placeholder = 'Start-Code (APP_PASSWORD aus der .env)'; f.code.setAttribute('aria-label', 'Start-Code'); f.code.inputMode = 'text'; }
+  $('.login-card h1', $('#login')).textContent = info?.setup ? 'Erstes Konto anlegen' : 'Alltag';
   const sw = $('.login-switch', f);
-  sw.hidden = !acc;
+  sw.hidden = !acc || !!info?.setup;
   sw.textContent = registering ? 'Schon ein Konto? Anmelden' : 'Neu hier? Mit Einladungscode registrieren';
   $('#login [data-demo]').hidden = !(acc && info?.demo);
   const note = $('.login-note', f);
@@ -2159,7 +2165,8 @@ async function showLogin() {
   $('#boot').hidden = true;
   $('#app').hidden = true;
   $('#login').hidden = false;
-  info ??= await fetch('/api/info').then((r) => r.json()).catch(() => null);
+  info = await fetch('/api/info').then((r) => r.json()).catch(() => info); // jedes Mal neu: nach dem ersten Konto ist die Einrichtung vorbei
+  if (info?.setup) registering = true;
   loginMode();
   if (info?.accounts && info.demo && location.hash === '#demo') return startDemo();
   setTimeout(() => $(info?.accounts ? '#login [name=username]' : '#login [name=password]').focus(), 60);

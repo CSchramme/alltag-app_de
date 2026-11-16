@@ -139,14 +139,14 @@ const SCHOOLS = ['edupage', 'none']; // später: untis, schulmanager
 const asUser = (a, fn) => ctx.run({ dir: userDir(a.id), account: a }, fn);
 const me = () => ctx.getStore()?.account || null;
 const isDemo = () => DEMO || !!me()?.demo; // Beispieldaten statt Schulsoftware
-const limited = () => OPEN_DEMO || !!me()?.demo; // öffentlich zugängliche Demo: keine Fotos, keine Mitteilungen, setzt sich zurück
+const limited = () => OPEN_DEMO || (!!me()?.demo && !me()?.jury); // öffentliche Demo: keine Fotos, keine Mitteilungen, setzt sich zurück. Jugend-forscht-Konto: alles frei, Zurücksetzen per Admin
 const supportId = (a) => a.id.replace(/-/g, '').slice(0, 8).toUpperCase().replace(/^(.{4})/, '$1-'); // zum Nennen bei Fragen
 const school = () => me()?.school || 'edupage';
 function admin() { if (!me()?.admin) throw Object.assign(new Error('Nur für Admins'), { status: 403 }); }
 const demoAccount = () => accounts().find((a) => a.demo && !a.disabled);
 const adminData = () => ({ accounts: accounts().map(pubAccount), contact: process.env.LEGAL_EMAIL || '', site: process.env.PUBLIC_URL || '',
   invites: invites().slice(-300).map((x) => ({ ...x, expired: !x.usedBy && !inviteOpen(x), expires: new Date(inviteEnd(x)).toISOString() })) });
-const pubAccount = (a) => ({ id: a.id, support: supportId(a), name: a.name, school: a.school, admin: !!a.admin, disabled: !!a.disabled, demo: !!a.demo, created: a.created, lastSeen: a.lastSeen || null });
+const pubAccount = (a) => ({ id: a.id, support: supportId(a), name: a.name, school: a.school, admin: !!a.admin, disabled: !!a.disabled, demo: !!a.demo, jury: !!a.jury, created: a.created, lastSeen: a.lastSeen || null });
 // Hintergrund-Aufgaben nacheinander für jedes aktive Konto (ohne Konten: einmal für die App)
 async function eachUser(fn) {
   if (!ACCOUNTS) return fn();
@@ -578,6 +578,7 @@ function demoTouch(req) {
 function demoReset() {
   save('db.json', demo.db());
   for (const n of ['state.json', 'config.json', 'snapshot.json', 'session.json', 'status.json']) fs.rmSync(file(n), { force: true });
+  fs.rmSync(path.join(home(), 'photos'), { recursive: true, force: true });
   demoUse.delete(home());
 }
 setInterval(() => eachUser(() => {
@@ -686,7 +687,7 @@ const routes = {
       if (regFails.length >= 30) return send(res, 429, { error: 'Registrieren ist gerade kurz pausiert. Bitte versuch es in einer Stunde noch einmal.' });
     }
     const hit = first ? null : inv.find((x) => inviteOpen(x) && same(x.code, code.replace(/\D/g, '')));
-    if (first ? !same(code, PASSWORD) : !hit) {
+    if (first ? !same(code.replace(/\s/g, ''), String(PASSWORD).replace(/\s/g, '')) : !hit) {
       if (!first) regFails.push(Date.now());
       return fail(res, 403, 'Dieser Einladungscode passt nicht, ist abgelaufen oder wurde schon benutzt.', ip);
     }
@@ -768,9 +769,12 @@ const routes = {
     if (b.reset) { password = newCode().toLowerCase(); Object.assign(a, hashPw(password)); a.ver = (a.ver || 0) + 1; }
     if (typeof b.disabled === 'boolean') { a.disabled = b.disabled; a.ver = (a.ver || 0) + 1; }
     if (typeof b.admin === 'boolean') { if (b.admin && a.demo) throw bad('Ein Demo-Konto kann kein Admin sein.'); a.admin = b.admin; }
+    if (typeof b.jury === 'boolean') { if (!a.demo) throw bad('Erst als Demo-Konto einrichten.'); a.jury = b.jury; }
+    if (b.resetDemo === true) { if (!a.demo) throw bad('Nur Demo-Konten lassen sich zurücksetzen.'); asUser(a, demoReset); }
     if (typeof b.demo === 'boolean' && b.demo !== !!a.demo) { // Demo an: Beispieldaten statt eigener Daten. Demo aus: Konto ist danach leer.
       if (b.demo && a.admin) throw bad('Ein Admin-Konto kann kein Demo-Konto sein.');
       a.demo = b.demo; a.ver = (a.ver || 0) + 1;
+      if (!a.demo) delete a.jury;
       fs.rmSync(userDir(a.id), { recursive: true, force: true });
       fs.mkdirSync(userDir(a.id), { recursive: true, mode: 0o700 });
       if (a.demo) asUser(a, demoReset);
@@ -1173,7 +1177,7 @@ const server = http.createServer(async (req, res) => {
       try { own = new URL(req.headers.origin).host === req.headers.host; } catch { /* ungültig = fremd */ }
       if (!own) return send(res, 403, { error: 'Anfrage von fremder Seite abgelehnt' });
     }
-    if (url.pathname === '/api/info') return send(res, 200, { demo: DEMO || (ACCOUNTS && !!demoAccount()), accounts: ACCOUNTS }); // für die Anmeldeseite
+    if (url.pathname === '/api/info') return send(res, 200, { demo: DEMO || (ACCOUNTS && !!demoAccount()), accounts: ACCOUNTS, setup: ACCOUNTS && !accounts().length }); // für die Anmeldeseite
     if (!PRIVATE && /^\/api\/(ha|shop|screen)(\/|$)/.test(url.pathname)) return send(res, 404, { error: 'unbekannt' });
     if (url.pathname === '/api/screen/agent') { // Fernsteuerungs-Programm auf dem PC, eigener Schlüssel statt Anmeldung
       if (req.method !== 'POST' || !same(req.headers['x-key'] || '', TOKENS.screen)) return send(res, 403, { error: 'falscher Schlüssel' }); // Header statt Adresse: landet nicht im Zugriffsprotokoll

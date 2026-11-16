@@ -313,13 +313,13 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const call = (p, o = {}, cookie) => fetch(`http://localhost:${port2}${p}`, { ...o, headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...o.headers } });
     const post = (p, body, cookie) => call(p, { method: 'POST', body: JSON.stringify(body) }, cookie);
     const ck = (r) => r.headers.get('set-cookie').split(';')[0];
-    assert.deepEqual(await (await call('/api/info')).json(), { demo: false, accounts: true });
+    assert.deepEqual(await (await call('/api/info')).json(), { demo: false, accounts: true, setup: true });
     assert.ok((await (await call('/')).text()).includes('<html lang="de" data-skin="modern">')); // öffentliche Version: eigener Look
     const imp = await (await call('/impressum.html')).text(); // Angaben aus Plesk-Variablen, sicher eingesetzt; fehlende sichtbar markiert
     assert.ok(imp.includes('Max &#60;Muster&#62;') && imp.includes('noch eintragen: LEGAL_EMAIL') && !imp.includes('{{'));
     assert.ok((await (await call('/datenschutz.html')).text()).includes('PEIN GbR'));
     assert.equal((await post('/api/register', { name: 'chef', password: 'geheim123', code: 'falsch', school: 'edupage' })).status, 403);
-    const r1 = await post('/api/register', { name: 'Chef', password: 'geheim123', code: 'start-code', school: 'edupage' });
+    const r1 = await post('/api/register', { name: 'Chef', password: 'geheim123', code: ' start-code ', school: 'edupage' }); // Leerzeichen egal
     assert.equal(r1.status, 200);
     const c1 = ck(r1);
     const d1 = await (await call('/api/data', {}, c1)).json();
@@ -383,6 +383,15 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await post('/api/account', { old: 'beispiel-zugang', password: 'gekapert-123' }, cd)).status, 400);
     assert.equal((await call('/api/account', { method: 'DELETE', body: JSON.stringify({ password: 'beispiel-zugang' }) }, cd)).status, 400);
     assert.equal((await post('/api/push/subscribe', { endpoint: 'https://push.example/x', keys: { p256dh: 'a', auth: 'b' } }, cd)).status, 400);
+    // Jugend forscht Version: alles frei, Daten bleiben bis zum Zurücksetzen durch den Admin
+    await post(`/api/admin/accounts/${dem.id}`, { jury: true }, c1);
+    const dj = await (await call('/api/data', {}, cd)).json();
+    assert.ok(dj.account.jury && dj.features.photos && dj.features.push);
+    const nn = await (await post('/api/items/notes', { title: 'Von der Jury' }, cd)).json();
+    assert.ok((await (await call('/api/data', {}, cd)).json()).db.notes.some((n) => n.id === nn.id));
+    await post(`/api/admin/accounts/${dem.id}`, { resetDemo: true }, c1);
+    assert.ok(!(await (await call('/api/data', {}, cd)).json()).db.notes.some((n) => n.id === nn.id));
+    assert.equal((await post(`/api/admin/accounts/${d1.account.id}`, { jury: true }, c1)).status, 400); // nur Demo-Konten
     assert.equal((await post(`/api/admin/accounts/${dem.id}`, { demo: false }, c1)).status, 200);
     assert.equal((await call('/api/data', {}, cd)).status, 401); // Demo beendet: Besucher-Sitzungen enden
     assert.equal((await post('/api/demo', {})).status, 404);
