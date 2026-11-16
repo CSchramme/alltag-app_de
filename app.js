@@ -144,7 +144,7 @@ const supportId = (a) => a.id.replace(/-/g, '').slice(0, 8).toUpperCase().replac
 const school = () => me()?.school || 'edupage';
 function admin() { if (!me()?.admin) throw Object.assign(new Error('Nur für Admins'), { status: 403 }); }
 const demoAccount = () => accounts().find((a) => a.demo && !a.disabled);
-const adminData = () => ({ accounts: accounts().map(pubAccount), invites: invites().slice(-200) });
+const adminData = () => ({ accounts: accounts().map(pubAccount), invites: invites().slice(-200).map((x) => ({ ...x, expired: !x.usedBy && !inviteOpen(x), expires: new Date(Date.parse(x.created) + INVITE_DAYS * 864e5).toISOString() })) });
 const pubAccount = (a) => ({ id: a.id, support: supportId(a), name: a.name, school: a.school, admin: !!a.admin, disabled: !!a.disabled, demo: !!a.demo, created: a.created, lastSeen: a.lastSeen || null });
 // Hintergrund-Aufgaben nacheinander für jedes aktive Konto (ohne Konten: einmal für die App)
 async function eachUser(fn) {
@@ -153,7 +153,17 @@ async function eachUser(fn) {
     try { await asUser(a, fn); } catch (e) { console.error(`Konto ${a.name}:`, e); }
   }
 }
-function newCode() { // gut abzutippen: ohne 0/O, 1/I/L
+// Einladungscodes: 6 Ziffern, leicht abzutippen. Damit Raten nichts bringt: 7 Tage gültig, nur einmal nutzbar,
+// und nach 50 falschen Codes in einer Stunde pausiert das Registrieren (die Anmeldung bleibt davon unberührt).
+const INVITE_DAYS = 7;
+const inviteOpen = (x) => !x.usedBy && Date.now() - Date.parse(x.created) < INVITE_DAYS * 864e5;
+function newInvite(list) {
+  let c;
+  do c = String(crypto.randomInt(0, 1e6)).padStart(6, '0'); while (list.some((x) => x.code === c && !x.usedBy));
+  return c;
+}
+const regFails = []; // Zeitpunkte falscher Einladungscodes (alle zusammen)
+function newCode() { // für zurückgesetzte Passwörter: länger, gut abzutippen (ohne 0/O, 1/I/L)
   const abc = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', b = crypto.randomBytes(8);
   return `${[...b.subarray(0, 4)].map((x) => abc[x % abc.length]).join('')}-${[...b.subarray(4)].map((x) => abc[x % abc.length]).join('')}`;
 }
@@ -669,8 +679,15 @@ const routes = {
     if (weakPw(pw, name)) throw bad('Dieses Passwort ist zu leicht zu erraten. Nimm zum Beispiel drei Wörter, die nichts miteinander zu tun haben.');
     if (!SCHOOLS.includes(b.school)) throw bad('Bitte wähle aus, welche Schulsoftware deine Schule nutzt.');
     const list = accounts(), inv = invites(), first = !list.length;
-    const hit = first ? null : inv.find((x) => !x.usedBy && same(x.code, code.toUpperCase()));
-    if (first ? !same(code, PASSWORD) : !hit) return fail(res, 403, 'Dieser Einladungscode passt nicht oder wurde schon benutzt.', ip);
+    if (!first) {
+      while (regFails.length && regFails[0] < Date.now() - 3600e3) regFails.shift();
+      if (regFails.length >= 50) return send(res, 429, { error: 'Registrieren ist gerade kurz pausiert. Bitte versuch es in einer Stunde noch einmal.' });
+    }
+    const hit = first ? null : inv.find((x) => inviteOpen(x) && same(x.code, code.replace(/\D/g, '')));
+    if (first ? !same(code, PASSWORD) : !hit) {
+      if (!first) regFails.push(Date.now());
+      return fail(res, 403, 'Dieser Einladungscode passt nicht, ist abgelaufen oder wurde schon benutzt.', ip);
+    }
     if (list.some((x) => x.name === name)) throw bad('Diesen Benutzernamen gibt es schon.');
     const a = { id: crypto.randomUUID(), name, ...hashPw(pw), school: b.school, admin: first, created: new Date().toISOString(), ver: 0 };
     fs.mkdirSync(userDir(a.id), { recursive: true, mode: 0o700 });
@@ -724,8 +741,8 @@ const routes = {
   'POST /api/admin/invites': async (req, res) => {
     admin();
     const note = F.text(80)((await readJson(req)).note), list = invites();
-    if (list.filter((x) => !x.usedBy).length >= 50) throw bad('Es gibt schon 50 offene Codes. Lösch erst ein paar.');
-    list.push({ code: newCode(), note, created: new Date().toISOString(), usedBy: null, usedAt: null });
+    if (list.filter(inviteOpen).length >= 50) throw bad('Es gibt schon 50 offene Codes. Lösch erst ein paar.');
+    list.push({ code: newInvite(list), note, created: new Date().toISOString(), usedBy: null, usedAt: null });
     saveInvites(list);
     send(res, 200, adminData());
   },

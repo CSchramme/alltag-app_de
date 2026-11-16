@@ -1892,20 +1892,21 @@ function openDeleteAccount() {
 async function openAdmin(data) {
   try { data ||= await api('/api/admin'); } catch (x) { return toast(x.message); }
   const nameOf = (id) => data.accounts.find((a) => a.id === id)?.name || 'gelöschtes Konto';
-  const open = data.invites.filter((i) => !i.usedBy), used = data.invites.filter((i) => i.usedBy).slice(-10).reverse();
+  const open = data.invites.filter((i) => !i.usedBy && !i.expired), used = data.invites.filter((i) => i.usedBy).slice(-10).reverse();
+  const shown = (c) => String(c).replace(/^(\d{3})(\d{3})$/, '$1 $2'); // 482 913 liest sich leichter vor
   openSheet('Einladungen und Konten', `
     <form class="form" id="invite-form">${group(fText('note', 'Für wen? (siehst nur du)', '', 'maxlength="80"'))}
       <button class="btn-primary pressable" type="submit">Einladungscode erstellen</button></form>
     <p class="footnote" id="invite-hint" style="text-align:left"></p>
     <p class="label-sm">Offene Codes</p>
-    ${open.length ? group(...open.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(i.code)}</div><div class="sub">${esc(i.note || 'ohne Notiz')} · ${esc(ago(i.created))}</div>
+    ${open.length ? group(...open.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shown(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} · gültig bis ${esc(F.short.format(new Date(i.expires)))}</div>
         <div class="code-actions"><button class="btn-plain" type="button" data-copy-code="${esc(i.code)}">Kopieren</button><button class="btn-plain danger" type="button" data-del-code="${esc(i.code)}">Löschen</button></div></div></div>`))
-      : '<p class="footnote" style="text-align:left">Keine offenen Codes. Jeder Code funktioniert genau einmal.</p>'}
+      : '<p class="footnote" style="text-align:left">Keine offenen Codes. Jeder Code funktioniert genau einmal und 7 Tage lang.</p>'}
     <p class="label-sm">Konten (${data.accounts.length})</p>
     ${group(`<label class="field"><input id="acc-q" type="search" placeholder="Name oder Support-ID" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`)}
     <div class="list card" id="acc-list" style="margin-top:10px">${data.accounts.map((a) => `<button class="row" data-acc="${esc(a.id)}" data-q="${esc(`${a.name} ${a.support} ${a.support.replace('-', '')}`.toLowerCase())}"><div class="main"><div class="title">${esc(a.name)}${a.admin ? ' · Admin' : ''}${a.demo ? ' · Demo' : ''}${a.disabled ? ' · gesperrt' : ''}</div>
       <div class="sub"><span class="code">${esc(a.support)}</span> · ${esc(schoolName(a.school))} · ${a.lastSeen ? `aktiv ${esc(ago(a.lastSeen))}` : `angelegt ${esc(ago(a.created))}`}</div></div>${ICON.chev}</button>`).join('')}</div>
-    ${used.length ? `<p class="label-sm">Zuletzt eingelöst</p>${group(...used.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(i.code)}</div><div class="sub">${esc(i.note || 'ohne Notiz')} → ${esc(nameOf(i.usedBy))}</div></div></div>`))}` : ''}
+    ${used.length ? `<p class="label-sm">Zuletzt eingelöst</p>${group(...used.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shown(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} → ${esc(nameOf(i.usedBy))}</div></div></div>`))}` : ''}
     <button class="btn-plain" type="button" data-back style="margin-top:12px">Zurück</button>`);
   const hint = $('#invite-hint');
   $('#sheet [data-back]').onclick = openSettings;
@@ -2106,7 +2107,7 @@ function loginMode() {
   $('.register', f)?.remove();
   if (registering) {
     $('.login-fields', f).insertAdjacentHTML('beforeend', `<div class="register login-fields">
-      <input name="code" placeholder="Einladungscode" aria-label="Einladungscode" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+      <input name="code" placeholder="Einladungscode (6 Ziffern)" aria-label="Einladungscode" inputmode="numeric" autocomplete="one-time-code" maxlength="20" spellcheck="false" required>
       <p>Welche Schulsoftware nutzt deine Schule?</p>
       ${fChoice('school', SCHOOL_OPTS, 'edupage')}
       <p>Bei „Keine“ trägst du deinen Stundenplan selbst ein. WebUntis und Schulmanager kommen bald.</p>

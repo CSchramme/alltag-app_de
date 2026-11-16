@@ -326,9 +326,9 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.deepEqual([d1.account.name, d1.account.admin, d1.features.ha, d1.features.screen], ['chef', true, false, false]);
     assert.equal((await post('/api/register', { name: 'zweiter', password: 'geheim123', code: 'start-code', school: 'none' })).status, 403); // Startcode nur fürs erste Konto
     const code = (await (await post('/api/admin/invites', { note: 'Ben' }, c1)).json()).invites[0].code;
-    assert.match(code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    assert.match(code, /^\d{6}$/);
     assert.equal((await post('/api/register', { name: 'ben', password: 'kurz', code, school: 'none' })).status, 400);
-    const r2 = await post('/api/register', { name: 'ben', password: 'passwort-ben', code: code.toLowerCase(), school: 'none' });
+    const r2 = await post('/api/register', { name: 'ben', password: 'passwort-ben', code: `${code.slice(0, 3)} ${code.slice(3)}`, school: 'none' }); // Leerzeichen egal
     assert.equal(r2.status, 200);
     const c2 = ck(r2);
     assert.equal((await post('/api/register', { name: 'ben2', password: 'passwort-ben', code, school: 'none' })).status, 403); // Code verbraucht
@@ -391,6 +391,12 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await call('/api/items/notes', { method: 'POST', body: JSON.stringify({ title: 'x' }), headers: { Origin: `http://localhost:${port2}` } }, c1)).status, 200);
     const code3 = (await (await post('/api/admin/invites', {}, c1)).json()).invites.find((i) => !i.usedBy).code;
     assert.equal((await post('/api/register', { name: 'lea', password: '12345678', code: code3, school: 'none' })).status, 400);
+    // Codes laufen nach 7 Tagen ab
+    const code4 = (await (await post('/api/admin/invites', { note: 'alt' }, c1)).json()).invites.find((i) => !i.usedBy && i.note === 'alt').code;
+    const invFile = path.join(dir2, 'invites.json');
+    fs.writeFileSync(invFile, JSON.stringify(JSON.parse(fs.readFileSync(invFile, 'utf8')).map((i) => (i.code === code4 ? { ...i, created: new Date(Date.now() - 8 * 864e5).toISOString() } : i))));
+    assert.equal((await post('/api/register', { name: 'zu-spaet', password: 'gruene-wiese-8', code: code4, school: 'none' })).status, 403);
+    assert.ok((await (await call('/api/admin', {}, c1)).json()).invites.find((i) => i.code === code4).expired);
     assert.equal((await post('/api/register', { name: 'leander', password: 'xxleanderxx', code: code3, school: 'none' })).status, 400);
     // Widget-Schlüssel erneuern: der alte gilt sofort nicht mehr
     const w1 = (await (await call('/api/tokens', {}, c1)).json()).widget;
