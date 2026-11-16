@@ -240,7 +240,7 @@ function banners() {
   if (D.demo) out.push(['info', 'Demo-Modus', 'Du siehst Beispieldaten.']);
   if (!navigator.onLine) out.push(['warn', 'Offline', 'Angezeigt wird der zuletzt geladene Stand.']);
   else if (D.edupage.connected && D.status?.ok === false) out.push(['warn', 'EduPage-Abgleich fehlgeschlagen', D.status.error || '']);
-  if (D.school === 'none') { if (!D.db.lessons?.length) out.push(['info', 'Noch kein Stundenplan', 'Tippe hier und trag deine Stunden einmal ein. Sie gelten dann jede Woche.', 'data-settings']); }
+  if (D.school === 'none' && !D.demo) { if (!D.db.lessons?.length) out.push(['info', 'Noch kein Stundenplan', 'Tippe hier und trag deine Stunden einmal ein. Sie gelten dann jede Woche.', 'data-settings']); }
   else if (!D.edupage.connected) out.push(['info', 'EduPage noch nicht verbunden', 'Tippe hier, um Stundenplan, Vertretungen und Nachrichten zu holen.', 'data-settings']);
   return out.map(([k, t, s, attr]) => `<${attr ? `button ${attr}` : 'div'} class="card banner ${k}"><div><b>${esc(t)}</b>${esc(s)}</div></${attr ? 'button' : 'div'}>`).join('');
 }
@@ -1665,7 +1665,7 @@ async function openSettings() {
       <div class="main"><div class="title">${esc(D.account?.name || s.name || 'Alltag')}</div><div class="sub">${D.account ? `${esc(schoolName(D.school))}${D.account.admin ? ' · Admin' : ''}` : s.class ? `Klasse ${esc(s.class)}` : 'Schule und Privates'}</div></div>
     </div>
     ${accountSection()}
-    ${D.school === 'none' ? `<p class="label-sm">Stundenplan</p><div id="own-plan">${ownPlan()}</div>` : ''}
+    ${D.school === 'none' && !D.demo ? `<p class="label-sm">Stundenplan</p><div id="own-plan">${ownPlan()}</div>` : ''}
     <p class="label-sm">Ferien</p>
     ${group(fRow('Bundesland', `<select id="state-select">${[['BW', 'Baden-Württemberg'], ['BY', 'Bayern'], ['BE', 'Berlin'], ['BB', 'Brandenburg'], ['HB', 'Bremen'], ['HH', 'Hamburg'], ['HE', 'Hessen'], ['MV', 'Mecklenburg-Vorpommern'], ['NI', 'Niedersachsen'], ['NW', 'Nordrhein-Westfalen'], ['RP', 'Rheinland-Pfalz'], ['SL', 'Saarland'], ['SN', 'Sachsen'], ['ST', 'Sachsen-Anhalt'], ['SH', 'Schleswig-Holstein'], ['TH', 'Thüringen']].map(([v, l]) => `<option value="${v}"${D.state === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`))}
     <p class="label-sm">Schulweg</p>
@@ -1714,6 +1714,7 @@ async function openSettings() {
     <div class="list card">
       <div class="row"><div class="main"><div class="sub">1. Gratis-App „Scriptable“ laden · 2. Skript kopieren · 3. In Scriptable „+“, einfügen, „Alltag“ nennen · 4. Widget „Scriptable“ hinzufügen und beim Bearbeiten „Alltag“ wählen</div></div></div>
       <button class="row" id="widget-copy" disabled><span class="btn-plain">Widget-Skript kopieren</span></button>
+      ${D.account?.demo ? '' : '<button class="row" id="widget-rotate"><span class="btn-plain danger">Schlüssel erneuern</span></button>'}
     </div>
     <p class="footnote" id="widget-hint" style="margin-top:8px;text-align:left">Das Skript enthält einen eigenen Lese-Schlüssel – nicht weitergeben.</p>
     <p class="label-sm">Kurzbefehle (Siri)</p>
@@ -1748,6 +1749,11 @@ async function openSettings() {
   };
   if (D.features?.ha !== false) wireHa();
   wireAccount();
+  const rot = $('#widget-rotate');
+  if (rot) rot.onclick = async () => { // falls der Lese-Schlüssel in falsche Hände geraten ist
+    if (!rot.dataset.sure) { rot.dataset.sure = '1'; $('span', rot).textContent = 'Wirklich? Widget und Kurzbefehle musst du danach neu einrichten.'; return; }
+    try { await api('/api/tokens/widget', { method: 'POST' }); haptic(); toast('Neuer Schlüssel. Bitte Widget-Skript und Kurzbefehle neu kopieren.'); openSettings(); } catch (x) { toast(x.message); }
+  };
   $('#wake-lead').onchange = async (e) => {
     try { setData(await api('/api/settings', { method: 'POST', body: { wakeLead: Number(e.target.value) } })); haptic(); } catch (x) { toast(x.message); }
   };
@@ -1822,9 +1828,12 @@ const WEEKDAYS = [[1, 'Montag'], [2, 'Dienstag'], [3, 'Mittwoch'], [4, 'Donnerst
 function accountSection() {
   const a = D.account;
   if (!a) return '';
+  const sid = `<button class="row" data-copy-support><div class="main"><div class="title">Support-ID</div><div class="sub" id="support-hint">Nenn sie, wenn du Hilfe brauchst. Tippen kopiert.</div></div><div class="trail code">${esc(a.support)}</div></button>`;
+  if (a.demo) return `<p class="label-sm">Konto</p>${group(sid)}<p class="footnote" style="text-align:left;margin-top:8px">Das ist ein Demo-Konto mit Beispieldaten. Was du hier änderst, wird 15 Minuten nach dem letzten Besuch zurückgesetzt.</p>`;
   return `<p class="label-sm">Konto</p>
-    ${group(fRow('Schulsoftware', `<select id="school-select">${SCHOOL_OPTS.map(([v, l]) => `<option value="${v}"${D.school === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`),
+    ${group(sid, fRow('Schulsoftware', `<select id="school-select">${SCHOOL_OPTS.map(([v, l]) => `<option value="${v}"${D.school === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`),
       '<button class="row" data-account="password"><span class="btn-plain">Passwort ändern</span></button>',
+      '<button class="row" data-account="others"><span class="btn-plain">Auf allen anderen Geräten abmelden</span></button>',
       a.admin ? `<button class="row" data-account="admin"><div class="main"><div class="title">Einladungen und Konten</div></div>${ICON.chev}</button>` : '',
       '<button class="row" data-account="delete"><span class="btn-plain danger">Konto löschen</span></button>')}`;
 }
@@ -1836,7 +1845,10 @@ function wireAccount() {
       catch (x) { toast(x.message); }
     };
   }
-  $$('#sheet [data-account]').forEach((b) => { b.onclick = { password: openPassword, admin: () => openAdmin(), delete: openDeleteAccount }[b.dataset.account]; });
+  const sup = $('#sheet [data-copy-support]');
+  if (sup) sup.onclick = () => copy(D.account.support, $('#support-hint'));
+  const others = async () => { try { await api('/api/account', { method: 'POST', body: { logoutOthers: true } }); haptic(); toast('Andere Geräte sind abgemeldet'); } catch (x) { toast(x.message); } };
+  $$('#sheet [data-account]').forEach((b) => { b.onclick = { password: openPassword, admin: () => openAdmin(), delete: openDeleteAccount, others }[b.dataset.account]; });
   $$('#sheet [data-lesson]').forEach((b) => { b.onclick = () => lessonForm(D.db.lessons.find((l) => l.id === b.dataset.lesson)); });
   $('#sheet [data-new-lesson]')?.addEventListener('click', () => lessonForm());
 }
@@ -1890,8 +1902,9 @@ async function openAdmin(data) {
         <div class="code-actions"><button class="btn-plain" type="button" data-copy-code="${esc(i.code)}">Kopieren</button><button class="btn-plain danger" type="button" data-del-code="${esc(i.code)}">Löschen</button></div></div></div>`))
       : '<p class="footnote" style="text-align:left">Keine offenen Codes. Jeder Code funktioniert genau einmal.</p>'}
     <p class="label-sm">Konten (${data.accounts.length})</p>
-    ${group(...data.accounts.map((a) => `<button class="row" data-acc="${esc(a.id)}"><div class="main"><div class="title">${esc(a.name)}${a.admin ? ' · Admin' : ''}${a.disabled ? ' · gesperrt' : ''}</div>
-      <div class="sub">${esc(schoolName(a.school))} · ${a.lastSeen ? `aktiv ${esc(ago(a.lastSeen))}` : `angelegt ${esc(ago(a.created))}`}</div></div>${ICON.chev}</button>`))}
+    ${group(`<label class="field"><input id="acc-q" type="search" placeholder="Name oder Support-ID" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`)}
+    <div class="list card" id="acc-list" style="margin-top:10px">${data.accounts.map((a) => `<button class="row" data-acc="${esc(a.id)}" data-q="${esc(`${a.name} ${a.support} ${a.support.replace('-', '')}`.toLowerCase())}"><div class="main"><div class="title">${esc(a.name)}${a.admin ? ' · Admin' : ''}${a.demo ? ' · Demo' : ''}${a.disabled ? ' · gesperrt' : ''}</div>
+      <div class="sub"><span class="code">${esc(a.support)}</span> · ${esc(schoolName(a.school))} · ${a.lastSeen ? `aktiv ${esc(ago(a.lastSeen))}` : `angelegt ${esc(ago(a.created))}`}</div></div>${ICON.chev}</button>`).join('')}</div>
     ${used.length ? `<p class="label-sm">Zuletzt eingelöst</p>${group(...used.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(i.code)}</div><div class="sub">${esc(i.note || 'ohne Notiz')} → ${esc(nameOf(i.usedBy))}</div></div></div>`))}` : ''}
     <button class="btn-plain" type="button" data-back style="margin-top:12px">Zurück</button>`);
   const hint = $('#invite-hint');
@@ -1908,17 +1921,20 @@ async function openAdmin(data) {
     };
   });
   $$('#sheet [data-acc]').forEach((b) => { b.onclick = () => openAcc(data.accounts.find((a) => a.id === b.dataset.acc)); });
+  $('#acc-q').oninput = (e) => { const q = e.target.value.trim().toLowerCase(); $$('#acc-list [data-acc]').forEach((b) => { b.hidden = !!q && !b.dataset.q.includes(q); }); };
 }
 function openAcc(a, password) {
   const self = a.id === D.account?.id;
   openSheet(a.name, `
-    ${group(`<div class="row"><div class="main">Schulsoftware</div><div class="trail">${esc(schoolName(a.school))}</div></div>`,
+    ${group(`<div class="row"><div class="main">Support-ID</div><div class="trail code">${esc(a.support)}</div></div>`,
+      `<div class="row"><div class="main">Schulsoftware</div><div class="trail">${esc(a.demo ? 'Demo-Daten' : schoolName(a.school))}</div></div>`,
       `<div class="row"><div class="main">Angelegt</div><div class="trail">${esc(ago(a.created))}</div></div>`,
       `<div class="row"><div class="main">Zuletzt aktiv</div><div class="trail">${esc(ago(a.lastSeen))}</div></div>`)}
     ${password ? `<p class="label-sm">Neues Passwort</p>${group(`<div class="row"><div class="main"><div class="title code">${esc(password)}</div><div class="sub">Nur jetzt sichtbar. Gib es ${esc(a.name)} persönlich weiter.</div><div class="code-actions"><button class="btn-plain" type="button" data-copy-pw>Kopieren</button></div></div></div>`)}<p class="footnote" id="acc-hint" style="text-align:left"></p>` : ''}
     ${self ? '<p class="footnote" style="text-align:left">Das ist dein eigenes Konto. Passwort und Löschen findest du im Profil unter „Konto“.</p>'
       : group('<button class="row" data-do="reset"><span class="btn-plain">Passwort zurücksetzen</span></button>',
-        `<button class="row" data-do="admin"><span class="btn-plain">${a.admin ? 'Admin-Rechte entziehen' : 'Zum Admin machen'}</span></button>`,
+        a.demo ? '' : `<button class="row" data-do="admin"><span class="btn-plain">${a.admin ? 'Admin-Rechte entziehen' : 'Zum Admin machen'}</span></button>`,
+        a.admin ? '' : `<button class="row" data-do="demo"><span class="btn-plain">${a.demo ? 'Demo-Konto beenden' : 'Als Demo-Konto einrichten'}</span></button>`,
         `<button class="row" data-do="disable"><span class="btn-plain${a.disabled ? '' : ' danger'}">${a.disabled ? 'Entsperren' : 'Sperren'}</span></button>`,
         '<button class="row" data-do="delete"><span class="btn-plain danger">Konto löschen</span></button>')}
     <button class="btn-plain" type="button" data-back style="margin-top:12px">Zurück</button>`);
@@ -1929,10 +1945,11 @@ function openAcc(a, password) {
   $$('#sheet [data-do]').forEach((b) => {
     b.onclick = async () => {
       const act = b.dataset.do;
-      if ((act === 'delete' || act === 'reset') && !b.dataset.sure) { b.dataset.sure = '1'; $('span', b).textContent = act === 'delete' ? 'Wirklich löschen? Alle Daten sind dann weg.' : 'Wirklich zurücksetzen?'; return; }
+      const ask = { delete: 'Wirklich löschen? Alle Daten sind dann weg.', reset: 'Wirklich zurücksetzen?', demo: a.demo ? 'Wirklich beenden? Das Konto ist danach leer.' : 'Wirklich? Alle Daten des Kontos werden durch Beispieldaten ersetzt.' }[act];
+      if (ask && !b.dataset.sure) { b.dataset.sure = '1'; $('span', b).textContent = ask; return; }
       try {
         if (act === 'delete') return openAdmin(await api(url, { method: 'DELETE' }));
-        const body = act === 'reset' ? { reset: true } : act === 'admin' ? { admin: !a.admin } : { disabled: !a.disabled };
+        const body = act === 'reset' ? { reset: true } : act === 'admin' ? { admin: !a.admin } : act === 'demo' ? { demo: !a.demo } : { disabled: !a.disabled };
         const d = await api(url, { method: 'POST', body });
         haptic();
         openAcc(d.accounts.find((x) => x.id === a.id), d.password);
@@ -2099,9 +2116,10 @@ function loginMode() {
   const sw = $('.login-switch', f);
   sw.hidden = !acc;
   sw.textContent = registering ? 'Schon ein Konto? Anmelden' : 'Neu hier? Mit Einladungscode registrieren';
+  $('#login [data-demo]').hidden = !(acc && info?.demo);
   const note = $('.login-note', f);
-  note.hidden = !info?.demo;
-  if (info?.demo) { note.textContent = 'Das ist die Demo mit Beispieldaten. Das Passwort ist „demo“.'; f.password.value ||= 'demo'; }
+  note.hidden = !info?.demo || acc;
+  if (info?.demo && !acc) { note.textContent = 'Das ist die Demo mit Beispieldaten. Das Passwort ist „demo“.'; f.password.value ||= 'demo'; }
   $('.login-error', f).textContent = '';
 }
 async function showLogin() {
@@ -2110,8 +2128,18 @@ async function showLogin() {
   $('#login').hidden = false;
   info ??= await fetch('/api/info').then((r) => r.json()).catch(() => null);
   loginMode();
+  if (info?.accounts && info.demo && location.hash === '#demo') return startDemo();
   setTimeout(() => $(info?.accounts ? '#login [name=username]' : '#login [name=password]').focus(), 60);
 }
+async function startDemo() {
+  try {
+    await api('/api/demo', { method: 'POST' });
+    $('#login').hidden = true;
+    boot('Lade die Demo …');
+    await load();
+  } catch (x) { $('#login .login-error').textContent = x.message; }
+}
+$('#login [data-demo]').onclick = startDemo;
 $('#login .login-switch').onclick = () => { registering = !registering; loginMode(); };
 $('#login form').addEventListener('submit', async (e) => {
   e.preventDefault();

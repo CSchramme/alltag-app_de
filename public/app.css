@@ -843,3 +843,10 @@ button.banner { display: flex; text-align: left; }
 :root[data-skin="modern"] .legal-links { display: flex; justify-content: center; gap: 22px; margin: 18px 0 0; font-size: 14px; }
 :root[data-skin="modern"] .legal-links a { color: var(--label2); }
 :root[data-skin="modern"] #login .legal-links { grid-column: 1 / -1; padding-bottom: 8px; }
+
+/* Demo-Knopf auf der Startseite (wie der zweite Knopf in der Vorlage: dunkel mit Rand) */
+.hero-cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+.hero-cta:not(:has(:not([hidden]))) { display: none; }
+.btn-ghost { height: 46px; padding: 0 18px; border-radius: 12px; font-size: 15px; font-weight: 600; color: var(--label);
+  background: var(--card); box-shadow: 0 0 0 1px var(--card-edge), var(--shadow-card); }
+.btn-ghost::after { content: " →"; color: var(--blue); }

@@ -307,7 +307,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   // 6. Öffentliche Version mit Konten: Einladungscodes, getrennte Daten, keine privaten Funktionen
   const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-konten-'));
   const port2 = port + 100;
-  const srv2 = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, DEMO: '', PRIVATE: '', ACCOUNTS: '1', APP_PASSWORD: 'start-code', LEGAL_NAME: 'Max <Muster>', LEGAL_EMAIL: '', DATA_DIR: dir2, PORT: String(port2) }, stdio: 'pipe' });
+  const srv2 = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, DEMO: '', PRIVATE: '', ACCOUNTS: '1', APP_PASSWORD: 'start-code', DATA_KEY: 'k'.repeat(40), LEGAL_NAME: 'Max <Muster>', LEGAL_EMAIL: '', DATA_DIR: dir2, PORT: String(port2) }, stdio: 'pipe' });
   try {
     await new Promise((resolve, reject) => { srv2.stdout.on('data', (b) => String(b).includes('läuft') && resolve()); srv2.on('exit', reject); });
     const call = (p, o = {}, cookie) => fetch(`http://localhost:${port2}${p}`, { ...o, headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...o.headers } });
@@ -368,9 +368,51 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await call(`/api/admin/accounts/${benId}`, { method: 'DELETE' }, c1)).status, 200);
     assert.ok(!fs.existsSync(path.join(dir2, 'users', benId)));
     assert.equal((await call(`/api/admin/accounts/${d1.account.id}`, { method: 'DELETE' }, c1)).status, 400); // sich selbst nicht
+    // Demo-Konto: Admin stellt ein Konto über die Support-ID auf Demo; Besucher kommen ohne Passwort hinein und können nichts Dauerhaftes ändern
+    assert.equal((await post('/api/demo', {})).status, 404);
+    const code2 = (await (await post('/api/admin/invites', { note: 'Demo' }, c1)).json()).invites.find((i) => !i.usedBy).code;
+    assert.equal((await post('/api/register', { name: 'demo', password: 'beispiel-zugang', code: code2, school: 'edupage' })).status, 200);
+    const dem = (await (await call('/api/admin', {}, c1)).json()).accounts.find((a) => a.name === 'demo');
+    assert.match(dem.support, /^[0-9A-F]{4}-[0-9A-F]{4}$/);
+    assert.equal((await post(`/api/admin/accounts/${d1.account.id}`, { demo: true }, c1)).status, 400); // Admin-Konto nicht
+    assert.equal((await post(`/api/admin/accounts/${dem.id}`, { demo: true }, c1)).status, 200);
+    assert.equal((await (await call('/api/info')).json()).demo, true);
+    const cd = ck(await post('/api/demo', {}));
+    const dd = await (await call('/api/data', {}, cd)).json();
+    assert.ok(dd.demo && dd.account.demo && dd.snap.messages.length && dd.db.reminders.length && !dd.features.photos && !dd.features.push);
+    assert.equal((await post('/api/account', { old: 'beispiel-zugang', password: 'gekapert-123' }, cd)).status, 400);
+    assert.equal((await call('/api/account', { method: 'DELETE', body: JSON.stringify({ password: 'beispiel-zugang' }) }, cd)).status, 400);
+    assert.equal((await post('/api/push/subscribe', { endpoint: 'https://push.example/x', keys: { p256dh: 'a', auth: 'b' } }, cd)).status, 400);
+    assert.equal((await post(`/api/admin/accounts/${dem.id}`, { demo: false }, c1)).status, 200);
+    assert.equal((await call('/api/data', {}, cd)).status, 401); // Demo beendet: Besucher-Sitzungen enden
+    assert.equal((await post('/api/demo', {})).status, 404);
+    // Sicherheit: fremde Seiten dürfen nichts ändern, zu einfache Passwörter gibt es nicht
+    assert.equal((await call('/api/items/notes', { method: 'POST', body: '{}', headers: { Origin: 'https://boese.example' } }, c1)).status, 403);
+    assert.equal((await call('/api/items/notes', { method: 'POST', body: JSON.stringify({ title: 'x' }), headers: { Origin: `http://localhost:${port2}` } }, c1)).status, 200);
+    const code3 = (await (await post('/api/admin/invites', {}, c1)).json()).invites.find((i) => !i.usedBy).code;
+    assert.equal((await post('/api/register', { name: 'lea', password: '12345678', code: code3, school: 'none' })).status, 400);
+    assert.equal((await post('/api/register', { name: 'leander', password: 'xxleanderxx', code: code3, school: 'none' })).status, 400);
+    // Widget-Schlüssel erneuern: der alte gilt sofort nicht mehr
+    const w1 = (await (await call('/api/tokens', {}, c1)).json()).widget;
+    assert.equal((await call(`/api/summary?key=${w1}`)).status, 200);
+    await post('/api/tokens/widget', {}, c1);
+    assert.equal((await call(`/api/summary?key=${w1}`)).status, 401);
+    // Auf anderen Geräten abmelden: dieses Gerät bleibt angemeldet
+    const other = ck(await post('/api/login', { name: 'chef', password: 'geheim123' }));
+    const keep = ck(await post('/api/account', { logoutOthers: true }, c1));
+    assert.deepEqual([(await call('/api/data', {}, other)).status, (await call('/api/data', {}, keep)).status], [401, 200]);
+    // Raten bremst nur das angegriffene Konto (auch bei wechselnden Geräten), nicht alle anderen
+    for (let i = 0; i < 10; i++) await call('/api/login', { method: 'POST', body: JSON.stringify({ name: 'chef', password: `falsch${i}` }), headers: { 'X-Real-IP': `10.0.0.${i}` } });
+    assert.equal((await post('/api/login', { name: 'chef', password: 'geheim123' })).status, 429);
+    const lena = ck(await post('/api/register', { name: 'lena', password: 'gruene-wiese-7', code: code3, school: 'none' }));
+    assert.equal((await call('/api/data', {}, lena)).status, 200);
+    assert.equal((await post('/api/login', { name: 'lena', password: 'gruene-wiese-7' })).status, 200);
   } finally {
     srv2.kill();
     fs.rmSync(dir2, { recursive: true, force: true });
   }
+  // 7. Mit Konten startet der Server nicht ohne ausreichend langen DATA_KEY
+  const noKey = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, DEMO: '', ACCOUNTS: '1', APP_PASSWORD: 'x', DATA_KEY: 'kurz', DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-ohne-')), PORT: String(port + 200) }, stdio: 'pipe' });
+  assert.equal(await new Promise((r) => noKey.on('exit', r)), 1);
   console.log('alle Tests ok');
 })().catch((e) => { console.error(e); process.exit(1); });

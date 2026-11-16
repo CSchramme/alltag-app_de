@@ -47,6 +47,37 @@ Wichtig: `data/` liegt außerhalb des Dokumentenstamms und darf nie in `public/`
 
 **Aktualisieren:** In Plesk unter *Git* auf „Pull“ und danach auf *App neu starten* klicken. Ein `npm install` ist nicht nötig, weil die App keine Pakete braucht.
 
+## Öffentliche Version einrichten (alltag-app.de)
+
+Dieselbe App, nur mit Konten, Einladungscodes, eigenem Look und ohne Home Assistant und PC-Fernsteuerung. Sie läuft als **zweite Node-App** neben deiner privaten, mit eigenem Datenordner.
+
+1. **Domain** `alltag-app.de` in Plesk anlegen, unter *SSL/TLS-Zertifikate* Let's Encrypt aktivieren und **„Dauerhafte, SEO-sichere 301-Weiterleitung von HTTP zu HTTPS“** einschalten.
+2. **Git:** dasselbe Repository `CSchramme/private`, Zweig `main`, in den Ordner der neuen Domain holen.
+3. **Node.js** wie oben (Anwendungsstamm = Ordner mit `app.js`, Dokumentenstamm = `public`, Startdatei `app.js`).
+4. **Umgebungsvariablen:**
+
+   | Variable | Wert |
+   |---|---|
+   | `ACCOUNTS` | `1` |
+   | `APP_PASSWORD` | Start-Code für das allererste Konto (dein Admin-Konto). Danach hat er keine Wirkung mehr. |
+   | `DATA_KEY` | Zufälliger Schlüssel, mindestens 32 Zeichen. Verschlüsselt die Schul-Passwörter. **Einmal setzen, nie ändern**, sonst müssen alle ihre Schule neu verbinden. Erzeugen z. B. mit `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"` und im Passwort-Manager sichern. |
+   | `LEGAL_NAME`, `LEGAL_ADDRESS`, `LEGAL_EMAIL` | Angaben für Impressum und Datenschutz |
+   | `LEGAL_LOG_DAYS` | Nach wie vielen Tagen der Hoster die Server-Protokolle löscht |
+
+5. **App neu starten**, die Domain öffnen, **„Neu hier? Mit Einladungscode registrieren“** und als Code dein `APP_PASSWORD` eingeben. Dieses erste Konto ist Admin.
+6. **Demo für die Jury:** Im Profil unter *Einladungen und Konten* einen Code erstellen, damit ein zweites Konto registrieren (z. B. `demo`), es dann in der Liste suchen und **„Als Demo-Konto einrichten“** wählen. Ab dann gibt es auf der Startseite „Demo ansehen“, und `https://alltag-app.de/#demo` öffnet die Demo direkt (gut für einen QR-Code). Was Besucher dort ändern, setzt sich nach 15 Minuten ohne Nutzung zurück.
+7. **Datensicherung:** In Plesk unter *Backup-Manager* eine regelmäßige Sicherung einrichten. `data/` enthält alle Konten.
+
+### Sicherheit auf einen Blick
+
+- Jedes Konto hat einen eigenen Datenordner; die Tests prüfen, dass kein Konto die Daten eines anderen sieht.
+- Passwörter nur als scrypt-Hash, Schul-Passwörter und EduPage-Sitzungen verschlüsselt (`DATA_KEY`, liegt nicht bei den Daten).
+- Registrieren nur mit Einladungscode, zu leichte Passwörter werden abgelehnt.
+- Falsche Anmeldeversuche bremsen je Gerät und je Konto (10 in 15 Minuten), nicht alle Nutzer zusammen.
+- Cookie nur für die Anmeldung (HttpOnly, SameSite, Secure), ändernde Anfragen nur von der eigenen Seite, strenge Content-Security-Policy, HTTPS wird erzwungen (HSTS).
+- Nutzer können sich auf allen anderen Geräten abmelden und ihren Widget-Schlüssel erneuern. Admins können Konten sperren und Passwörter zurücksetzen; alle Sitzungen des Kontos enden dann sofort.
+- Ein Admin sieht nur Name, Schulsoftware und Aktivität eines Kontos, keine Inhalte.
+
 ## Aufs iPhone
 
 1. Die Adresse in **Safari** öffnen, auf **Teilen → Zum Home-Bildschirm** tippen und Alltag von dort starten.
