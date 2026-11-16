@@ -1904,10 +1904,11 @@ async function openAdmin(data) {
     <p class="label-sm">Flyer zum Ausdrucken</p>
     <form class="form" id="flyer-form">${group(
       fRow('Anzahl', `<select name="count">${[10, 20, 30, 40].map((n) => `<option value="${n}">${n} Flyer</option>`).join('')}</select>`),
+      fRow('Gültig', `<select name="days">${[30, 60, 90].map((n) => `<option value="${n}">${n} Tage</option>`).join('')}</select>`),
       fText('email', 'Deine E-Mail für Fragen', data.contact, 'type="email" inputmode="email" autocapitalize="off" spellcheck="false" maxlength="120"'),
       fText('site', 'Adresse der App', (data.site || location.host).replace(/^https?:\/\//, '').replace(/\/$/, ''), 'autocapitalize="off" spellcheck="false" maxlength="60" required'))}
       <button class="btn-primary pressable" type="submit">Flyer erstellen</button></form>
-    <p class="footnote" style="text-align:left">Jeder Flyer bekommt einen eigenen Code, 30 Tage gültig. Du bekommst eine ZIP-Datei mit Bildern im Fotoformat 10 × 15 cm (300 dpi), z. B. für den Fotodruck bei dm.</p>
+    <p class="footnote" style="text-align:left">Jeder Flyer bekommt einen eigenen Code, so lange gültig wie oben gewählt. Je länger und je mehr offene Codes, desto leichter lässt sich einer erraten; nicht genutzte Codes kannst du jederzeit löschen. Du bekommst eine ZIP-Datei mit Bildern im Fotoformat 10 × 15 cm (300 dpi), z. B. für den Fotodruck bei dm.</p>
     <div id="flyer-preview"></div>
     ${batches.length ? `<p class="label-sm">Flyer im Umlauf</p>${group(...batches.map(([note, list]) => `<div class="row"><div class="main"><div class="title">${esc(note)}</div><div class="sub">${list.length} Codes noch offen · gültig bis ${esc(F.short.format(new Date(list[0].expires)))}</div></div></div>`))}` : ''}
     <p class="label-sm">Offene Codes</p>
@@ -1933,7 +1934,7 @@ async function openAdmin(data) {
     btn.disabled = true;
     btn.textContent = 'Erstelle Flyer …';
     try {
-      const d = await api('/api/admin/invites', { method: 'POST', body: { count: Number(body.count), days: 30, note: `Flyer ${F.short.format(now())}` } });
+      const d = await api('/api/admin/invites', { method: 'POST', body: { count: Number(body.count), days: Number(body.days), note: `Flyer ${F.short.format(now())}` } });
       const until = new Date(d.invites.find((i) => i.code === d.created[0]).expires).toLocaleDateString('de-DE');
       const { flyers } = await import('/flyer.mjs');
       const out = await flyers({ codes: d.created, until, email: body.email.trim(), site: body.site.trim() });

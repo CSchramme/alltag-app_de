@@ -744,7 +744,7 @@ const routes = {
   'POST /api/admin/invites': async (req, res) => {
     admin();
     const b = await readJson(req), note = F.text(80)(b.note), list = invites();
-    const count = Math.min(40, Math.max(1, Math.trunc(Number(b.count)) || 1)), days = b.days === 30 ? 30 : INVITE_DAYS;
+    const count = Math.min(40, Math.max(1, Math.trunc(Number(b.count)) || 1)), days = [30, 60, 90].includes(b.days) ? b.days : INVITE_DAYS; // Flyer: länger gültig, normale Einladung 7 Tage
     if (list.filter(inviteOpen).length + count > 200) throw bad('Es gibt schon zu viele offene Codes. Lösch erst ein paar.');
     const created = [];
     for (let i = 0; i < count; i++) {

@@ -405,6 +405,10 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal(fl.created.length, 3);
     const flDays = (Date.parse(fl.invites.find((i) => i.code === fl.created[0]).expires) - Date.now()) / 864e5;
     assert.ok(flDays > 29.9 && flDays <= 30);
+    const fl90 = await (await post('/api/admin/invites', { count: 1, days: 90, note: 'Flyer Lang' }, c1)).json();
+    assert.ok((Date.parse(fl90.invites.find((i) => i.code === fl90.created[0]).expires) - Date.now()) / 864e5 > 89.9);
+    const fl999 = await (await post('/api/admin/invites', { count: 1, days: 999 }, c1)).json(); // unbekannte Dauer → 7 Tage
+    assert.ok((Date.parse(fl999.invites.find((i) => i.code === fl999.created[0]).expires) - Date.now()) / 864e5 <= 7);
     assert.equal((await call('/flyer.mjs')).headers.get('content-type'), 'text/javascript; charset=utf-8');
     // Codes laufen nach 7 Tagen ab
     const code4 = (await (await post('/api/admin/invites', { note: 'alt' }, c1)).json()).invites.find((i) => !i.usedBy && i.note === 'alt').code;
