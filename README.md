@@ -51,6 +51,8 @@ Wichtig: `data/` liegt außerhalb des Dokumentenstamms und darf nie in `public/`
 
 Dieselbe App, nur mit Konten, Einladungscodes, eigenem Look und ohne Home Assistant und PC-Fernsteuerung. Sie läuft als **zweite Node-App** neben deiner privaten, mit eigenem Datenordner.
 
+**Erst am PC:** `.env.beispiel` nach `.env` kopieren, ausfüllen, `npm start`, dann http://localhost:3000 öffnen. Alle Konten landen in `data-public/`. Für den Umzug auf den Server den Code per Git holen und **`.env` und `data-public/`** in den App-Ordner hochladen (neben `app.js`, nicht in `public/`). Beide kommen nie ins Git. Wichtig: Der `DATA_KEY` muss derselbe bleiben, sonst lassen sich die gespeicherten Schul-Passwörter nicht mehr entschlüsseln.
+
 1. **Domain** `alltag-app.de` in Plesk anlegen, unter *SSL/TLS-Zertifikate* Let's Encrypt aktivieren und **„Dauerhafte, SEO-sichere 301-Weiterleitung von HTTP zu HTTPS“** einschalten.
 2. **Git:** dasselbe Repository `CSchramme/private`, Zweig `main`, in den Ordner der neuen Domain holen.
 3. **Node.js** wie oben (Anwendungsstamm = Ordner mit `app.js`, Dokumentenstamm = `public`, Startdatei `app.js`).

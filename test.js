@@ -152,7 +152,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   // 5. Server (Demo) über HTTP
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-test-'));
   const port = 3900 + Math.floor(Math.random() * 90);
-  const srv = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, DEMO: '1', PRIVATE: '1', DATA_DIR: dir, PORT: String(port) }, stdio: 'pipe' });
+  const srv = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, ENV_FILE: '', DEMO: '1', PRIVATE: '1', DATA_DIR: dir, PORT: String(port) }, stdio: 'pipe' });
   try {
     await new Promise((resolve, reject) => { srv.stdout.on('data', (b) => String(b).includes('läuft') && resolve()); srv.on('exit', reject); });
     const base = `http://localhost:${port}`;
@@ -307,7 +307,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   // 6. Öffentliche Version mit Konten: Einladungscodes, getrennte Daten, keine privaten Funktionen
   const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-konten-'));
   const port2 = port + 100;
-  const srv2 = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, DEMO: '', PRIVATE: '', ACCOUNTS: '1', APP_PASSWORD: 'start-code', DATA_KEY: 'k'.repeat(40), LEGAL_NAME: 'Max <Muster>', LEGAL_EMAIL: '', DATA_DIR: dir2, PORT: String(port2) }, stdio: 'pipe' });
+  const srv2 = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, ENV_FILE: '', DEMO: '', PRIVATE: '', ACCOUNTS: '1', APP_PASSWORD: 'start-code', DATA_KEY: 'k'.repeat(40), LEGAL_NAME: 'Max <Muster>', LEGAL_EMAIL: '', DATA_DIR: dir2, PORT: String(port2) }, stdio: 'pipe' });
   try {
     await new Promise((resolve, reject) => { srv2.stdout.on('data', (b) => String(b).includes('läuft') && resolve()); srv2.on('exit', reject); });
     const call = (p, o = {}, cookie) => fetch(`http://localhost:${port2}${p}`, { ...o, headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...o.headers } });
@@ -412,7 +412,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     fs.rmSync(dir2, { recursive: true, force: true });
   }
   // 7. Mit Konten startet der Server nicht ohne ausreichend langen DATA_KEY
-  const noKey = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, DEMO: '', ACCOUNTS: '1', APP_PASSWORD: 'x', DATA_KEY: 'kurz', DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-ohne-')), PORT: String(port + 200) }, stdio: 'pipe' });
+  const noKey = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, ENV_FILE: '', DEMO: '', ACCOUNTS: '1', APP_PASSWORD: 'x', DATA_KEY: 'kurz', DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-ohne-')), PORT: String(port + 200) }, stdio: 'pipe' });
   assert.equal(await new Promise((r) => noKey.on('exit', r)), 1);
   console.log('alle Tests ok');
 })().catch((e) => { console.error(e); process.exit(1); });

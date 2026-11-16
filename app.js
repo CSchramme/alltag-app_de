@@ -13,6 +13,16 @@ const { Edupage, EduError, snapshot, schoolDay, regularDay, SNAPSHOT_VERSION, is
 const demo = require('./demo');
 const { occursOn, birthdayOn, ageOn } = require('./public/recur');
 
+// Einstellungen auch aus der Datei .env im App-Ordner (NAME=Wert je Zeile, # = Kommentar). Echte Umgebungsvariablen
+// (z. B. aus Plesk) haben Vorrang. Die Datei enthält Geheimnisse und kommt nie ins Git (.gitignore); Vorlage: .env.beispiel
+const ENV_FILE = process.env.ENV_FILE ?? path.join(__dirname, '.env');
+if (ENV_FILE && fs.existsSync(ENV_FILE)) {
+  for (const line of fs.readFileSync(ENV_FILE, 'utf8').split(/\r?\n/)) {
+    const m = /^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^(["'])(.*)\1$/, '$2');
+  }
+}
+
 const APP = 'Alltag';
 const DEMO = process.env.DEMO === '1';
 // Betriebsarten: ohne Angabe die eigene, private App (ein Passwort). ACCOUNTS=1: öffentliche Version mit Konten und Einladungscodes.
