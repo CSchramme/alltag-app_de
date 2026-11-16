@@ -1,5 +1,5 @@
 // Service Worker (Alltag): immer zuerst frisch vom eigenen Server, offline der letzte Stand. Dazu Push-Mitteilungen.
-const CACHE = 'alltag-v2';
+const CACHE = 'alltag-v3'; // hochzählen, wenn sich Dateien der App-Hülle ändern (z. B. Icons)
 const SHELL = ['/', '/app.css', '/app.js', '/recur.js', '/theme.js', '/manifest.webmanifest', '/icon-192.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {

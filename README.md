@@ -1,6 +1,6 @@
 # Alltag
 
-Schule und Privates an einem Ort, als Web-App im Stil von iOS Liquid Glass für iPhone und PC.
+Kalender, Stundenplan, Hausaufgaben. Alles in einer App: eine Web-App im Stil von iOS Liquid Glass für iPhone und PC, die EduPage mit Terminen, Erinnerungen, Notizen und Noten zusammenführt.
 
 - **Schule (EduPage):** Stundenplan mit Vertretung/Entfall an der Stunde, Hausaufgaben (Abhaken landet auch in EduPage), Prüfungen, als „fehlt“ markierte Hausaufgaben, Nachrichten lesen, schreiben, beantworten und markieren, „Wo ist Lehrkraft X gerade?“
 - **Lernplan:** zu jeder angekündigten Prüfung automatisch Lern-Erinnerungen 7, 3 und 1 Tag vorher
