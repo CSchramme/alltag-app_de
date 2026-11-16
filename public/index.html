@@ -86,10 +86,14 @@
     <img src="/apple-touch-icon.png" alt="" class="app-icon" width="84" height="84">
     <h1>Alltag</h1>
     <p>Kalender, Stundenplan, Hausaufgaben. Alles in einer App.</p>
-    <input type="text" name="username" autocomplete="username" value="alltag" hidden>
-    <input type="password" name="password" autocomplete="current-password" placeholder="App-Passwort" aria-label="App-Passwort" required>
+    <div class="login-fields">
+      <input type="text" name="username" autocomplete="username" value="alltag" placeholder="Benutzername" aria-label="Benutzername" autocapitalize="off" spellcheck="false" hidden>
+      <input type="password" name="password" autocomplete="current-password" placeholder="App-Passwort" aria-label="App-Passwort" required>
+    </div>
     <p class="login-error" role="alert"></p>
     <button class="btn-primary pressable" type="submit">Anmelden</button>
+    <button class="btn-plain login-switch" type="button" hidden>Neu hier? Mit Einladungscode registrieren</button>
+    <p class="login-note" hidden></p>
   </form>
 </div>
 

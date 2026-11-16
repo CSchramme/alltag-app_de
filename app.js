@@ -7,6 +7,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 const { generateVapidKeys, sendPush } = require('./push');
 const { Edupage, EduError, snapshot, schoolDay, regularDay, SNAPSHOT_VERSION, isoDay, addDays } = require('./edupage');
 const demo = require('./demo');
@@ -14,17 +15,26 @@ const { occursOn, birthdayOn, ageOn } = require('./public/recur');
 
 const APP = 'Alltag';
 const DEMO = process.env.DEMO === '1';
+// Betriebsarten: ohne Angabe die eigene, private App (ein Passwort). ACCOUNTS=1: öffentliche Version mit Konten und Einladungscodes.
+const ACCOUNTS = !DEMO && process.env.ACCOUNTS === '1';
+const PRIVATE = process.env.PRIVATE === '1' || (!ACCOUNTS && !DEMO); // Home Assistant und PC-Fernsteuerung nur in der privaten App
+const OPEN_DEMO = DEMO && !PRIVATE; // öffentliche Demo: keine Fotos und Mitteilungen von Fremden, Daten setzen sich zurück
 const PUBLIC = path.join(__dirname, 'public');
 const DATA = process.env.DATA_DIR || path.join(__dirname, DEMO ? 'data-demo' : 'data');
-const PASSWORD = DEMO ? 'demo' : process.env.APP_PASSWORD;
+const PASSWORD = DEMO ? 'demo' : process.env.APP_PASSWORD; // mit Konten: Code für das allererste Konto (Admin)
 if (!PASSWORD) {
   console.error('APP_PASSWORD fehlt. In Plesk unter Node.js → „Benutzerdefinierte Umgebungsvariablen“ setzen.');
   process.exit(1);
 }
 
 /* ------------------------------------------------------------------ Dateien (außerhalb von public/) */
+// Mit Konten hat jedes Konto einen eigenen Ordner (DATA/users/<id>). Welcher gerade gilt, steht im Kontext der Anfrage
+// bzw. des Hintergrund-Abgleichs – so bleiben load()/save() überall gleich.
+const ctx = new AsyncLocalStorage();
+const home = () => ctx.getStore()?.dir || DATA;
+const atRoot = (fn) => ctx.exit(fn); // Dateien der ganzen Instanz: Konten, Einladungen, eigene Adresse
 fs.mkdirSync(DATA, { recursive: true, mode: 0o700 });
-const file = (n) => path.join(DATA, n);
+const file = (n) => path.join(home(), n);
 const load = (n, d) => { try { return JSON.parse(fs.readFileSync(file(n), 'utf8')); } catch { return d; } };
 const save = (n, v) => { // atomar: ein Absturz beim Schreiben zerstört die alte Datei nicht
   const tmp = `${file(n)}.${process.pid}.tmp`;
@@ -37,18 +47,36 @@ const token = () => crypto.randomBytes(24).toString('base64url');
 const SECRET = once('secret.json', () => crypto.randomBytes(32).toString('hex'));
 const TOKENS = once('tokens.json', () => ({ widget: token(), cron: token() }));
 if (!TOKENS.screen) { TOKENS.screen = token(); save('tokens.json', TOKENS); } // Schlüssel für das Fernsteuerungs-Programm auf dem PC
+const userTokens = () => (ACCOUNTS && me() ? once('tokens.json', () => ({ widget: token() })) : TOKENS); // mit Konten: Lese-Schlüssel je Konto
+// Lese-Schlüssel (Widget, Kurzbefehle) → Konto; ohne Konten genügt der eine Schlüssel
+function readerFor(key) {
+  if (!key) return null;
+  if (!ACCOUNTS) return same(key, TOKENS.widget) || null;
+  return accounts().find((a) => !a.disabled && same(key, asUser(a, () => load('tokens.json', {})).widget || '')) || null;
+}
 const VAPID = once('vapid.json', generateVapidKeys);
 if (DEMO && !load('db.json', null)) save('db.json', demo.db());
 
 const state = () => ({ seen: [], subs: [], done: {}, eduSeeded: false, ...load('state.json', {}) });
-const db = () => ({ reminders: [], events: [], notes: [], grades: [], birthdays: [], photos: [], sessions: [], ...load('db.json', {}) });
-const PHOTOS = path.join(DATA, 'photos'); // Tafelbilder als JPEG, nur angemeldet abrufbar
-fs.mkdirSync(PHOTOS, { recursive: true, mode: 0o700 });
+const db = () => ({ reminders: [], events: [], notes: [], grades: [], birthdays: [], photos: [], sessions: [], lessons: [], ...load('db.json', {}) });
+const photoDir = () => { const p = path.join(home(), 'photos'); fs.mkdirSync(p, { recursive: true, mode: 0o700 }); return p; }; // Tafelbilder als JPEG, nur angemeldet abrufbar
 
 /* ------------------------------------------------------------------ Hilfen */
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
 const same = (a, b) => crypto.timingSafeEqual(sha(a), sha(b));
 const sign = (v) => crypto.createHmac('sha256', SECRET).update(v).digest('base64url');
+// Schul-Passwörter verschlüsselt ablegen. DATA_KEY (Umgebungsvariable) liegt nicht bei den Daten; ohne ihn gilt der Server-Schlüssel.
+const KEY = sha(process.env.DATA_KEY || SECRET);
+function seal(s) {
+  const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', KEY, iv), enc = Buffer.concat([c.update(String(s), 'utf8'), c.final()]);
+  return `enc:${Buffer.concat([iv, c.getAuthTag(), enc]).toString('base64')}`;
+}
+function unseal(s) { // ältere, unverschlüsselte Einträge kommen unverändert zurück
+  if (!String(s).startsWith('enc:')) return s;
+  const b = Buffer.from(s.slice(4), 'base64'), d = crypto.createDecipheriv('aes-256-gcm', KEY, b.subarray(0, 12));
+  d.setAuthTag(b.subarray(12, 28));
+  return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8');
+}
 
 function send(res, status, body, headers = {}) {
   const json = typeof body !== 'string' && !Buffer.isBuffer(body);
@@ -85,22 +113,62 @@ async function readImage(req, max) {
 
 const cookies = (req) => Object.fromEntries((req.headers.cookie || '').split(';').map((c) => c.trim().split('=')).filter(([k]) => k));
 const https = (req) => req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
-function loggedIn(req) {
-  const [exp, sig] = (cookies(req).sid || '').split('.');
-  return !!sig && Number(exp) > Date.now() && same(sig, sign(exp));
+/* ------------------------------------------------------------------ Konten (nur mit ACCOUNTS=1) */
+const userDir = (id) => path.join(DATA, 'users', id);
+const accounts = () => atRoot(() => load('accounts.json', []));
+const saveAccounts = (list) => atRoot(() => save('accounts.json', list));
+const invites = () => atRoot(() => load('invites.json', []));
+const saveInvites = (list) => atRoot(() => save('invites.json', list));
+const hashPw = (pw, salt = crypto.randomBytes(16).toString('hex')) => ({ salt, hash: crypto.scryptSync(String(pw), salt, 64).toString('hex') });
+const checkPw = (a, pw) => crypto.timingSafeEqual(Buffer.from(hashPw(pw, a.salt).hash, 'hex'), Buffer.from(a.hash, 'hex'));
+const SCHOOLS = ['edupage', 'none']; // später: untis, schulmanager
+const asUser = (a, fn) => ctx.run({ dir: userDir(a.id), account: a }, fn);
+const me = () => ctx.getStore()?.account || null;
+const school = () => me()?.school || 'edupage';
+function admin() { if (!me()?.admin) throw Object.assign(new Error('Nur für Admins'), { status: 403 }); }
+const adminData = () => ({ accounts: accounts().map(pubAccount), invites: invites().slice(-200) });
+const pubAccount = (a) => ({ id: a.id, name: a.name, school: a.school, admin: !!a.admin, disabled: !!a.disabled, created: a.created, lastSeen: a.lastSeen || null });
+// Hintergrund-Aufgaben nacheinander für jedes aktive Konto (ohne Konten: einmal für die App)
+async function eachUser(fn) {
+  if (!ACCOUNTS) return fn();
+  for (const a of accounts().filter((x) => !x.disabled)) {
+    try { await asUser(a, fn); } catch (e) { console.error(`Konto ${a.name}:`, e); }
+  }
 }
-function sessionCookie(req, maxAge) {
+function newCode() { // gut abzutippen: ohne 0/O, 1/I/L
+  const abc = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', b = crypto.randomBytes(8);
+  return `${[...b.subarray(0, 4)].map((x) => abc[x % abc.length]).join('')}-${[...b.subarray(4)].map((x) => abc[x % abc.length]).join('')}`;
+}
+
+// Sitzung: ohne Konten „Ablauf.Signatur“, mit Konten „Konto.Ablauf.Signatur“. Die Signatur enthält die Version des Kontos –
+// Passwort zurücksetzen oder Sperren erhöht sie und beendet damit alle alten Sitzungen.
+function sessionUser(req) {
+  const sid = cookies(req).sid || '';
+  if (!ACCOUNTS) { const [exp, sig] = sid.split('.'); return !!sig && Number(exp) > Date.now() && same(sig, sign(exp)); }
+  const [id, exp, sig] = sid.split('.');
+  const a = sig && Number(exp) > Date.now() && accounts().find((x) => x.id === id);
+  return a && !a.disabled && same(sig, sign(`${id}.${exp}.${a.ver || 0}`)) ? a : null;
+}
+const loggedIn = (req) => !!sessionUser(req);
+function sessionCookie(req, maxAge, a) {
   const exp = String(Date.now() + maxAge * 1000);
-  return `sid=${maxAge ? `${exp}.${sign(exp)}` : ''}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${https(req) ? '; Secure' : ''}`;
+  const v = !maxAge ? '' : a ? `${a.id}.${exp}.${sign(`${a.id}.${exp}.${a.ver || 0}`)}` : `${exp}.${sign(exp)}`;
+  return `sid=${v}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${https(req) ? '; Secure' : ''}`;
 }
-const failures = []; // Bremse gegen Passwort-Raten: max. 10 Fehlversuche je 15 Minuten
+const failures = []; // Bremse gegen Passwort- und Code-Raten: max. 10 Fehlversuche je 15 Minuten
+function throttled() {
+  const now = Date.now();
+  while (failures.length && failures[0] < now - 15 * 60e3) failures.shift();
+  return failures.length >= 10;
+}
+const fail = async (res, status, error) => { failures.push(Date.now()); await new Promise((r) => setTimeout(r, 800)); send(res, status, { error }); };
 
 /* ------------------------------------------------------------------ Eigene Einträge: erlaubte Felder */
 const bad = (m) => Object.assign(new Error(m), { status: 400 });
 const F = {
   text: (max, required) => (v) => { const s = String(v ?? '').trim().slice(0, max); if (required && !s) throw bad('Pflichtfeld fehlt'); return s; },
   date: (required) => (v) => { const s = String(v ?? ''); if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s; if (required) throw bad('Datum fehlt'); return ''; },
-  time: () => (v) => (/^\d{2}:\d{2}$/.test(String(v ?? '')) ? String(v) : ''),
+  time: (required) => (v) => { const s = String(v ?? ''); if (/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) return s; if (required) throw bad('Uhrzeit fehlt'); return ''; },
   bool: () => (v) => v === true,
   num: (min, max, def) => (v) => { const n = Number(v); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def; },
   pick: (...opts) => (v) => (opts.includes(v) ? v : opts[0]),
@@ -113,6 +181,7 @@ const KINDS = {
   grades: { subject: F.text(80, true), value: F.text(12, true), weight: F.num(0, 10, 1), title: F.text(120), date: F.date() },
   birthdays: { name: F.text(120, true), date: F.date(true), before: F.num(0, 30, 3), notes: F.text(1000) },
   photos: { subject: F.text(80), date: F.date(), caption: F.text(300) }, // anlegen nur über POST /api/photos (mit Bild)
+  lessons: { day: (v) => Math.min(6, Math.max(1, Math.round(Number(v)) || 1)), start: F.time(true), end: F.time(true), subject: F.text(80, true), room: F.text(40), teacher: F.text(80) }, // eigener Stundenplan (ohne Schulsoftware), Mo = 1
 };
 const clean = (kind, body) => Object.fromEntries(Object.entries(KINDS[kind]).map(([k, f]) => [k, f(body[k])]));
 
@@ -243,11 +312,10 @@ async function shopItems() {
 }
 
 /* ------------------------------------------------------------------ Abgleich mit EduPage */
-let running = null;
 // Gespeicherte Sitzung weiterverwenden, nur wenn sie abgelaufen ist neu einloggen (Captcha-Schutz)
 async function connect(cfg) {
   const ep = new Edupage(cfg.school, load('session.json', {}));
-  try { await ep.refresh(); } catch (e) { if (!(e instanceof EduError) && !(e instanceof SyntaxError)) throw e; await ep.login(cfg.user, cfg.pass); }
+  try { await ep.refresh(); } catch (e) { if (!(e instanceof EduError) && !(e instanceof SyntaxError)) throw e; await ep.login(cfg.user, unseal(cfg.pass)); }
   save('session.json', Object.fromEntries(ep.cookies));
   return ep;
 }
@@ -338,7 +406,7 @@ async function cachedTrips(dir, date, time) {
   const s = load('config.json', {}).stops || {};
   if (!s.home || !s.school) return null;
   const [from, to, mode] = dir === 'school' ? [s.home.id, s.school.id, 'arr'] : [s.school.id, s.home.id, 'dep'];
-  const key = `${dir}|${date}|${time}`, hit = tripCache.get(key);
+  const key = `${home()}|${dir}|${date}|${time}`, hit = tripCache.get(key);
   if (hit && Date.now() - hit.at < 60e3) return hit.list;
   const list = await trips(from, to, date, time, mode);
   if (tripCache.size > 50) tripCache.clear();
@@ -348,7 +416,7 @@ async function cachedTrips(dir, date, time) {
 
 // Erste und letzte Stunde eines Tages (ohne Entfall und Ganztägiges)
 function schoolTimes(date) {
-  const ls = (load('snapshot.json', null)?.days.find((d) => d.date === date)?.lessons || []).filter((l) => !l.cancelled && !l.allday && l.start && l.end);
+  const ls = (snapNow()?.days.find((d) => d.date === date)?.lessons || []).filter((l) => !l.cancelled && !l.allday && l.start && l.end);
   return ls.length ? { start: ls.map((l) => l.start).sort()[0], end: ls.map((l) => l.end).sort().at(-1) } : null;
 }
 // Wecker: Abfahrt der passenden Verbindung (sonst Unterrichtsbeginn) minus Vorlauf – leer, wenn keine Schule ist
@@ -387,8 +455,25 @@ function holidayCountdown(list, now = new Date()) {
   return { during: false, name: holidayName(next.name), start: next.start, days };
 }
 
+// Ohne Schulsoftware: Stundenplan aus den selbst eingetragenen Stunden, jede Woche gleich, in den Ferien frei
+function ownSnapshot(from = new Date()) {
+  const own = db().lessons.slice().sort((a, b) => a.start.localeCompare(b.start)), off = load('holidays.json', null)?.list || [];
+  const bells = [...new Map(own.map((l) => [l.start, l.end])).entries()].map(([start, end], i) => ({ name: String(i + 1), start, end }));
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(from, i), date = isoDay(d), free = off.some((h) => h.start <= date && date <= h.end);
+    const lessons = free ? [] : own.filter((l) => l.day === d.getDay()).map((l) => ({
+      period: bells.findIndex((b) => b.start === l.start) + 1, start: l.start, end: l.end, subject: l.subject, short: l.subject.slice(0, 2),
+      teachers: l.teacher ? [l.teacher] : [], rooms: l.room ? [l.room] : [], groups: [], topic: null, cancelled: false, event: false, online: null, changes: [] }));
+    if (lessons.length || (d.getDay() >= 1 && d.getDay() <= 5)) days.push({ date, lessons, changes: [] });
+  }
+  return { v: SNAPSHOT_VERSION, updated: new Date().toISOString(), student: { name: me()?.name || '', class: '' }, days, tasks: [], messages: [], missing: [], bells, people: [], errors: [] };
+}
+const snapNow = () => (school() === 'none' ? ownSnapshot() : load('snapshot.json', null));
+
 async function syncEdupage() {
   if (DEMO) { const s = demo.snapshot(); save('snapshot.json', s); return s; }
+  if (school() === 'none') return ownSnapshot();
   const cfg = load('config.json', {}).edupage;
   if (!cfg) return null;
   const status = load('status.json', {});
@@ -409,30 +494,41 @@ async function syncEdupage() {
   }
 }
 
+const runs = new Map(); // laufender Abgleich je Datenordner (= je Konto)
 function sync(minAgeMs) {
-  if (running) return running;
+  const key = home();
+  if (runs.has(key)) return runs.get(key);
   if (Date.now() - load('lastrun.json', 0) < minAgeMs) return Promise.resolve();
-  running = (async () => {
+  const run = (async () => {
     save('lastrun.json', Date.now());
     await refreshHolidays();
     await refreshWeather();
     await notify(await syncEdupage());
-  })().catch((e) => console.error('Abgleich:', e)).finally(() => { running = null; });
-  return running;
+  })().catch((e) => console.error('Abgleich:', e)).finally(() => { runs.delete(key); });
+  runs.set(key, run);
+  return run;
 }
 // Läuft der Prozess dauerhaft, gleicht er selbst ab; unter Plesk weckt ihn zusätzlich die geplante Aufgabe (/api/cron)
-setInterval(() => { const h = new Date().getHours(); sync(h >= 5 && h < 22 ? 14 * 60e3 : 55 * 60e3); }, 5 * 60e3);
+setInterval(() => { const h = new Date().getHours(); eachUser(() => sync(h >= 5 && h < 22 ? 14 * 60e3 : 55 * 60e3)); }, 5 * 60e3);
 
 // Plesk/Passenger beendet die App nach einigen Minuten ohne Aufruf – dann gäbe es keinen Abgleich und keine Mitteilungen.
 // Ohne geplante Aufgabe hält sie sich deshalb selbst wach: alle 2 Minuten ein Aufruf der eigenen Adresse.
 // Die Adresse stammt nur aus angemeldeten Aufrufen, damit kein fremder Host-Header sie umlenken kann.
 setInterval(() => {
-  const origin = load('origin.json', null);
+  const origin = atRoot(() => load('origin.json', null));
   if (origin) fetch(`${origin}/api/ping`, { signal: AbortSignal.timeout(10000) }).catch(() => {});
 }, 2 * 60e3);
-setInterval(() => { if (!running) notify(load('snapshot.json', null)).catch((e) => console.error('Mitteilungen:', e)); }, 60e3);
+setInterval(() => eachUser(() => { if (!runs.has(home())) return notify(snapNow()).catch((e) => console.error('Mitteilungen:', e)); }), 60e3);
 // nach einem Update mit neuer Auswertung sofort neu abgleichen, sonst nur wenn der letzte Abgleich älter als 10 Min. ist
-setTimeout(() => sync(load('snapshot.json', null)?.v === SNAPSHOT_VERSION ? 10 * 60e3 : 0), 3000);
+setTimeout(() => eachUser(() => sync(snapNow()?.v === SNAPSHOT_VERSION ? 10 * 60e3 : 0)), 3000);
+// Öffentliche Demo: nach 15 Minuten ohne Besuch wieder auf die Beispieldaten zurücksetzen
+const demoUse = { at: 0, dirty: false };
+if (OPEN_DEMO) setInterval(() => {
+  if (!demoUse.dirty || Date.now() - demoUse.at < 15 * 60e3) return;
+  save('db.json', demo.db());
+  for (const n of ['state.json', 'config.json']) fs.rmSync(file(n), { force: true });
+  demoUse.dirty = false;
+}, 60e3);
 
 /* ------------------------------------------------------------------ API */
 function settings() {
@@ -441,9 +537,11 @@ function settings() {
     ha: c.ha ? { connected: true, url: c.ha.url, todo: c.ha.todo || '', pc: c.ha.pc || [] } : { connected: false } }; // Token bleibt auf dem Server
 }
 function payload() {
-  const st = state(), snap = load('snapshot.json', null), cfg = load('config.json', {}).edupage;
+  const st = state(), snap = snapNow(), cfg = load('config.json', {}).edupage;
   return {
     app: APP, demo: DEMO, status: load('status.json', {}),
+    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !OPEN_DEMO, push: !OPEN_DEMO },
+    account: me() && pubAccount(me()), school: school(),
     ...settings(), holidays: load('holidays.json', null)?.list || [],
     weather: DEMO ? demo.weather() : load('weather.json', null)?.hours || [],
     timer: st.timer || null,
@@ -504,21 +602,107 @@ async function screenAgent(req, res, q) {
 const teacherCache = new Map(), weekCache = new Map();
 const routes = {
   'POST /api/login': async (req, res) => {
-    const now = Date.now();
-    while (failures.length && failures[0] < now - 15 * 60e3) failures.shift();
-    if (failures.length >= 10) return send(res, 429, { error: 'Zu viele Versuche. Bitte in 15 Minuten erneut.' });
-    const { password } = await readJson(req);
-    if (!same(password ?? '', PASSWORD)) {
-      failures.push(now);
-      await new Promise((r) => setTimeout(r, 800));
-      return send(res, 401, { error: 'Falsches Passwort' });
+    if (throttled()) return send(res, 429, { error: 'Zu viele Versuche. Bitte in 15 Minuten erneut.' });
+    const { name, password } = await readJson(req);
+    if (!ACCOUNTS) {
+      if (!same(password ?? '', PASSWORD)) return fail(res, 401, 'Falsches Passwort');
+      return send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 365 * 86400) });
     }
-    send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 365 * 86400) });
+    const a = accounts().find((x) => x.name === String(name || '').trim().toLowerCase());
+    if (!a) { hashPw(String(password)); return fail(res, 401, 'Benutzername oder Passwort stimmt nicht.'); } // gleiche Rechenzeit wie bei echtem Konto
+    if (!checkPw(a, password ?? '')) return fail(res, 401, 'Benutzername oder Passwort stimmt nicht.');
+    if (a.disabled) return send(res, 403, { error: 'Dieses Konto ist gesperrt.' });
+    send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 365 * 86400, a) });
   },
   'POST /api/logout': (req, res) => send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 0) }),
+  // Registrieren nur mit Einladungscode; das allererste Konto mit APP_PASSWORD als Code und wird Admin
+  'POST /api/register': async (req, res) => {
+    if (!ACCOUNTS) return send(res, 404, { error: 'unbekannt' });
+    if (throttled()) return send(res, 429, { error: 'Zu viele Versuche. Bitte in 15 Minuten erneut.' });
+    const b = await readJson(req), name = String(b.name || '').trim().toLowerCase(), pw = String(b.password || ''), code = String(b.code || '').trim();
+    if (!/^[a-z0-9._-]{3,30}$/.test(name)) throw bad('Benutzername: 3 bis 30 Zeichen, nur Buchstaben, Ziffern, Punkt, Bindestrich und Unterstrich.');
+    if (pw.length < 8) throw bad('Das Passwort braucht mindestens 8 Zeichen.');
+    if (!SCHOOLS.includes(b.school)) throw bad('Bitte wähle aus, welche Schulsoftware deine Schule nutzt.');
+    const list = accounts(), inv = invites(), first = !list.length;
+    const hit = first ? null : inv.find((x) => !x.usedBy && same(x.code, code.toUpperCase()));
+    if (first ? !same(code, PASSWORD) : !hit) return fail(res, 403, 'Dieser Einladungscode passt nicht oder wurde schon benutzt.');
+    if (list.some((x) => x.name === name)) throw bad('Diesen Benutzernamen gibt es schon.');
+    const a = { id: crypto.randomUUID(), name, ...hashPw(pw), school: b.school, admin: first, created: new Date().toISOString(), ver: 0 };
+    fs.mkdirSync(userDir(a.id), { recursive: true, mode: 0o700 });
+    saveAccounts([...list, a]);
+    if (hit) { hit.usedBy = a.id; hit.usedAt = a.created; saveInvites(inv); }
+    send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 365 * 86400, a) });
+  },
+  // Eigenes Konto: Passwort oder Schulsoftware ändern, Konto mit allen Daten löschen
+  'POST /api/account': async (req, res) => {
+    const b = await readJson(req), list = accounts(), a = list.find((x) => x.id === me()?.id);
+    if (!a) return send(res, 404, { error: 'unbekannt' });
+    let cookie = {};
+    if (b.password !== undefined) {
+      if (!checkPw(a, b.old ?? '')) return fail(res, 400, 'Das bisherige Passwort stimmt nicht.');
+      if (String(b.password).length < 8) throw bad('Das neue Passwort braucht mindestens 8 Zeichen.');
+      Object.assign(a, hashPw(b.password), { ver: (a.ver || 0) + 1 }); // andere Geräte werden abgemeldet, dieses bleibt angemeldet
+      cookie = { 'Set-Cookie': sessionCookie(req, 365 * 86400, a) };
+    }
+    if (b.school !== undefined) {
+      if (!SCHOOLS.includes(b.school)) throw bad('Unbekannte Schulsoftware');
+      a.school = b.school;
+    }
+    saveAccounts(list);
+    send(res, 200, asUser(a, payload), cookie);
+  },
+  'DELETE /api/account': async (req, res) => {
+    const { password } = await readJson(req), list = accounts(), a = list.find((x) => x.id === me()?.id);
+    if (!a || !checkPw(a, password ?? '')) return fail(res, 400, 'Das Passwort stimmt nicht.');
+    if (a.admin && !list.some((x) => x.admin && x.id !== a.id)) throw bad('Du bist der einzige Admin. Mach vorher ein anderes Konto zum Admin.');
+    saveAccounts(list.filter((x) => x.id !== a.id));
+    fs.rmSync(userDir(a.id), { recursive: true, force: true });
+    send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 0) });
+  },
+  // Admin: Einladungscodes und Konten verwalten
+  'GET /api/admin': (req, res) => { admin(); send(res, 200, adminData()); },
+  'POST /api/admin/invites': async (req, res) => {
+    admin();
+    const note = F.text(80)((await readJson(req)).note), list = invites();
+    if (list.filter((x) => !x.usedBy).length >= 50) throw bad('Es gibt schon 50 offene Codes. Lösch erst ein paar.');
+    list.push({ code: newCode(), note, created: new Date().toISOString(), usedBy: null, usedAt: null });
+    saveInvites(list);
+    send(res, 200, adminData());
+  },
+  'DELETE /api/admin/invites/:code': (req, res, code) => {
+    admin();
+    saveInvites(invites().filter((x) => x.code !== code || x.usedBy));
+    send(res, 200, adminData());
+  },
+  'POST /api/admin/accounts/:id': async (req, res, id) => {
+    admin();
+    const b = await readJson(req), list = accounts(), a = list.find((x) => x.id === id);
+    if (!a) return send(res, 404, { error: 'nicht gefunden' });
+    if (a.id === me().id && (b.disabled || b.admin === false)) throw bad('Dein eigenes Konto kannst du hier nicht sperren oder herabstufen.');
+    let password = null;
+    if (b.reset) { password = newCode().toLowerCase(); Object.assign(a, hashPw(password)); a.ver = (a.ver || 0) + 1; }
+    if (typeof b.disabled === 'boolean') { a.disabled = b.disabled; a.ver = (a.ver || 0) + 1; }
+    if (typeof b.admin === 'boolean') a.admin = b.admin;
+    saveAccounts(list);
+    send(res, 200, { ...adminData(), password }); // neues Passwort nur in dieser einen Antwort
+  },
+  'DELETE /api/admin/accounts/:id': (req, res, id) => {
+    admin();
+    const list = accounts(), a = list.find((x) => x.id === id);
+    if (!a) return send(res, 404, { error: 'nicht gefunden' });
+    if (a.id === me().id) throw bad('Dein eigenes Konto löschst du unter „Konto“.');
+    saveAccounts(list.filter((x) => x.id !== id));
+    fs.rmSync(userDir(a.id), { recursive: true, force: true });
+    send(res, 200, adminData());
+  },
   'GET /api/data': (req, res) => {
     const origin = `${https(req) ? 'https' : 'http'}://${req.headers.host}`;
-    if (loggedIn(req) && /^[\w.:-]+$/.test(req.headers.host || '') && load('origin.json', null) !== origin) save('origin.json', origin);
+    if (loggedIn(req) && /^[\w.:-]+$/.test(req.headers.host || '') && atRoot(() => load('origin.json', null)) !== origin) atRoot(() => save('origin.json', origin));
+    const a = me();
+    if (a && Date.now() - Date.parse(a.lastSeen || 0) > 3600e3) { // „zuletzt aktiv“ für die Konten-Übersicht, höchstens stündlich schreiben
+      const list = accounts(), x = list.find((y) => y.id === a.id);
+      if (x) { x.lastSeen = new Date().toISOString(); saveAccounts(list); }
+    }
     send(res, 200, payload());
   },
   'POST /api/refresh': async (req, res) => { await sync(60e3); send(res, 200, payload()); },
@@ -527,7 +711,7 @@ const routes = {
     const { done } = await readJson(req);
     const st = state(); st.done[id] = done === true; save('state.json', st);
     // Hausaufgabe auch in EduPage abhaken (wie der Haken im EduPage-Webclient)
-    const t = load('snapshot.json', null)?.tasks.find((x) => x.id === id);
+    const t = snapNow()?.tasks.find((x) => x.id === id);
     const synced = t?.tid && !DEMO ? await edupageDo((ep) => ep.setProp(t.tid, 'done', done === true ? '1' : '0')).then(() => true, () => false) : false;
     send(res, 200, { ok: true, synced });
   },
@@ -535,7 +719,7 @@ const routes = {
   // Nachrichten – gehen an echte Lehrkräfte, die App fragt vorher nach
   'POST /api/messages': async (req, res) => {
     const { to, text } = await readJson(req);
-    const known = new Set((load('snapshot.json', null)?.people || []).map((p) => p.id));
+    const known = new Set((snapNow()?.people || []).map((p) => p.id));
     const ids = [].concat(to || []).map(String).filter((x) => known.has(x));
     if (!ids.length || !String(text || '').trim()) throw bad('Bitte Empfänger und Text angeben.');
     if (DEMO) return send(res, 200, { ...payload(), demo: true });
@@ -546,7 +730,7 @@ const routes = {
   'POST /api/messages/:id/reply': async (req, res, id) => {
     const { text } = await readJson(req);
     if (!String(text || '').trim()) throw bad('Bitte einen Text eingeben.');
-    if (!(load('snapshot.json', null)?.messages || []).some((m) => m.id === id)) throw bad('Nachricht nicht gefunden');
+    if (!(snapNow()?.messages || []).some((m) => m.id === id)) throw bad('Nachricht nicht gefunden');
     if (DEMO) return send(res, 200, { ...payload(), demo: true });
     await edupageDo((ep) => ep.reply(id, String(text).trim().slice(0, 5000)));
     await sync(0);
@@ -573,11 +757,11 @@ const routes = {
 
   // Wo ist Lehrkraft X gerade? (Stundenplan der Lehrkraft für heute, 5 Minuten zwischengespeichert)
   'GET /api/teacher/:id': async (req, res, id) => {
-    const date = isoDay(new Date()), key = `${id}|${date}`, hit = teacherCache.get(key);
+    const date = isoDay(new Date()), key = `${home()}|${id}|${date}`, hit = teacherCache.get(key);
     if (hit && Date.now() - hit.at < 5 * 60e3) return send(res, 200, { date, lessons: hit.lessons, source: hit.source });
     let lessons, source = 'live';
     if (DEMO) {
-      const name = (load('snapshot.json', null)?.people || []).find((p) => p.id === id)?.name;
+      const name = (snapNow()?.people || []).find((p) => p.id === id)?.name;
       lessons = (demo.snapshot().days[0]?.lessons || []).filter((l) => l.teachers.includes(name)).map((l) => ({ ...l, classes: ['8b'] }));
     } else {
       lessons = await edupageDo(async (ep) => {
@@ -599,8 +783,9 @@ const routes = {
     const start = new URL(req.url, 'http://x').searchParams.get('start') || '';
     if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || new Date(`${start}T12:00`).getDay() !== 1) throw bad('start muss ein Montag sein');
     const dates = [0, 1, 2, 3, 4].map((n) => isoDay(addDays(new Date(`${start}T12:00`), n)));
-    const known = load('snapshot.json', null)?.days || [], hit = weekCache.get(start);
+    const known = snapNow()?.days || [], hit = weekCache.get(`${home()}|${start}`);
     if (DEMO) return send(res, 200, { days: demo.snapshot(new Date(`${start}T08:00`)).days });
+    if (school() === 'none') { const own = ownSnapshot(new Date(`${start}T08:00`)).days; return send(res, 200, { days: dates.map((d) => own.find((x) => x.date === d)) }); }
     if (dates.every((d) => known.some((x) => x.date === d))) return send(res, 200, { days: dates.map((d) => known.find((x) => x.date === d)) });
     if (hit && Date.now() - hit.at < 10 * 60e3) return send(res, 200, { days: hit.days });
     if (!load('config.json', {}).edupage) return send(res, 200, { days: [] });
@@ -609,7 +794,7 @@ const routes = {
       for (const d of dates) out.push(known.find((x) => x.date === d) || schoolDay(d, await ep.plan(d).then((p) => ep.lessons(p), () => [])));
       return out;
     });
-    weekCache.set(start, { at: Date.now(), days });
+    weekCache.set(`${home()}|${start}`, { at: Date.now(), days });
     send(res, 200, { days });
   },
   'GET /api/summary': (req, res) => send(res, 200, summary(new URL(req.url, 'http://x').searchParams.get('day'))),
@@ -618,7 +803,9 @@ const routes = {
     if (!KINDS[kind]) return send(res, 404, { error: 'unbekannt' });
     if (kind === 'photos') throw bad('Fotos bitte über /api/photos hochladen');
     const item = { id: crypto.randomUUID(), ...clean(kind, await readJson(req)), updated: new Date().toISOString() };
-    const d = db(); d[kind].push(item); save('db.json', d);
+    const d = db();
+    if (d[kind].length >= (kind === 'lessons' ? 100 : 5000)) throw bad('Hier sind schon zu viele Einträge.');
+    d[kind].push(item); save('db.json', d);
     send(res, 200, item);
   },
   'PUT /api/items/:kind/:id': async (req, res, kind, id) => {
@@ -632,13 +819,14 @@ const routes = {
   'DELETE /api/items/:kind/:id': (req, res, kind, id) => {
     if (!KINDS[kind]) return send(res, 404, { error: 'unbekannt' });
     const d = db();
-    if (kind === 'photos' && d.photos.some((x) => x.id === id)) fs.rmSync(path.join(PHOTOS, `${id}.jpg`), { force: true }); // id stammt vom Server
+    if (kind === 'photos' && d.photos.some((x) => x.id === id)) fs.rmSync(path.join(photoDir(), `${id}.jpg`), { force: true }); // id stammt vom Server
     d[kind] = d[kind].filter((x) => x.id !== id); save('db.json', d);
     send(res, 200, { ok: true });
   },
 
   'POST /api/edupage': async (req, res) => {
     if (DEMO) return send(res, 400, { error: 'Im Demo-Modus nicht möglich' });
+    if (school() !== 'edupage') throw bad('Dein Konto ist auf eine andere Schulsoftware eingestellt.');
     const b = await readJson(req);
     const cfg = {
       school: String(b.school || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\.edupage\.org.*$/, ''),
@@ -653,7 +841,7 @@ const routes = {
     } catch (e) {
       return send(res, 400, { error: e instanceof EduError ? e.message : `EduPage nicht erreichbar (${e.message})` });
     }
-    save('config.json', { ...load('config.json', {}), edupage: cfg });
+    save('config.json', { ...load('config.json', {}), edupage: { ...cfg, pass: seal(cfg.pass) } });
     save('status.json', {});
     const st = state(); st.eduSeeded = false; save('state.json', st); // neues Konto: Bestand nicht als neu melden
     await sync(0);
@@ -724,16 +912,18 @@ const routes = {
   'GET /api/focus': (req, res) => send(res, 200, schoolTimes(isoDay(addDays(new Date(), new URL(req.url, 'http://x').searchParams.get('day') === 'morgen' ? 1 : 0)))?.end || ''),
   // Tafelbilder: Bild als Formular-Datei (Base64, siehe readImage), Angaben in der Adresse
   'POST /api/photos': async (req, res) => {
+    if (OPEN_DEMO) throw bad('In der Demo kannst du keine Fotos hochladen.');
+    if (ACCOUNTS && db().photos.length >= 300) throw bad('Du hast schon 300 Tafelbilder. Lösch ein paar alte, dann ist wieder Platz.');
     const u = new URL(req.url, 'http://x').searchParams, buf = await readImage(req, 11e6);
     if (!buf.length) throw bad('Bitte ein Foto (JPEG) senden');
     const item = { id: crypto.randomUUID(), ...clean('photos', { subject: u.get('subject'), date: u.get('date'), caption: u.get('caption') }), updated: new Date().toISOString() };
-    fs.writeFileSync(path.join(PHOTOS, `${item.id}.jpg`), buf, { mode: 0o600 });
+    fs.writeFileSync(path.join(photoDir(), `${item.id}.jpg`), buf, { mode: 0o600 });
     const d = db(); d.photos.push(item); save('db.json', d);
     send(res, 200, item);
   },
   'GET /api/photos/:id': (req, res, id) => {
     if (!/^[0-9a-f-]{36}$/.test(id)) return send(res, 404, { error: 'nicht gefunden' });
-    fs.readFile(path.join(PHOTOS, `${id}.jpg`), (err, buf) => {
+    fs.readFile(path.join(photoDir(), `${id}.jpg`), (err, buf) => {
       if (err) return send(res, 404, { error: 'nicht gefunden' });
       res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
       res.end(buf);
@@ -819,6 +1009,7 @@ const routes = {
   },
   'GET /api/push/key': (req, res) => send(res, 200, { key: VAPID.publicKey }),
   'POST /api/push/subscribe': async (req, res) => {
+    if (OPEN_DEMO) throw bad('In der Demo gibt es keine Mitteilungen.');
     const s = await readJson(req);
     if (!/^https:\/\//.test(s.endpoint || '') || !s.keys?.p256dh || !s.keys?.auth) return send(res, 400, { error: 'ungültiges Abo' });
     const st = state();
@@ -835,7 +1026,8 @@ const routes = {
     const sent = await push({ title: 'Mitteilungen sind aktiv', body: 'So erfährst du ab jetzt von Vertretungen, Nachrichten und Erinnerungen.', url: '/', tag: 'test' });
     send(res, 200, { ok: sent > 0, sent });
   },
-  'GET /api/tokens': (req, res) => send(res, 200, TOKENS),
+  // Lese-Schlüssel fürs Widget gibt es je Konto; Cron nur für Admin bzw. die private App, PC-Schlüssel nur privat
+  'GET /api/tokens': (req, res) => send(res, 200, { widget: userTokens().widget, ...(!ACCOUNTS || me()?.admin ? { cron: TOKENS.cron } : {}), ...(PRIVATE ? { screen: TOKENS.screen } : {}) }),
 };
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.json': 'application/json', '.ico': 'image/x-icon' };
@@ -862,24 +1054,30 @@ const server = http.createServer(async (req, res) => {
       return serveStatic(req, res, url.pathname);
     }
     if (url.pathname === '/api/ping') return send(res, 200, 'ok'); // Selbst-Wachhalten, verrät nichts
+    if (url.pathname === '/api/info') return send(res, 200, { demo: DEMO, accounts: ACCOUNTS }); // für die Anmeldeseite
+    if (!PRIVATE && /^\/api\/(ha|shop|screen)(\/|$)/.test(url.pathname)) return send(res, 404, { error: 'unbekannt' });
     if (url.pathname === '/api/screen/agent') { // Fernsteuerungs-Programm auf dem PC, eigener Schlüssel statt Anmeldung
       if (req.method !== 'POST' || !same(req.headers['x-key'] || '', TOKENS.screen)) return send(res, 403, { error: 'falscher Schlüssel' }); // Header statt Adresse: landet nicht im Zugriffsprotokoll
       return await screenAgent(req, res, url.searchParams);
     }
     if (url.pathname === '/api/cron') { // geplante Aufgabe in Plesk bzw. cron-job.org ("URL abrufen")
       if (!same(url.searchParams.get('key') || '', TOKENS.cron)) return send(res, 403, { error: 'falscher Schlüssel' });
-      await sync(10 * 60e3);
-      return send(res, 200, { ok: true, status: load('status.json', {}) });
+      await eachUser(() => sync(10 * 60e3));
+      return send(res, 200, ACCOUNTS ? { ok: true } : { ok: true, status: load('status.json', {}) });
     }
+    if (OPEN_DEMO) { demoUse.at = Date.now(); if (req.method !== 'GET') demoUse.dirty = true; }
     const bearer = (req.headers.authorization || '').replace(/^Bearer /, '') || url.searchParams.get('key') || '';
-    const widgetRead = req.method === 'GET' && ['/api/data', '/api/summary', '/api/wake', '/api/focus'].includes(url.pathname) && bearer && same(bearer, TOKENS.widget);
-    if (url.pathname !== '/api/login' && !loggedIn(req) && !widgetRead) return send(res, 401, { error: 'login' });
+    const reader = req.method === 'GET' && ['/api/data', '/api/summary', '/api/wake', '/api/focus'].includes(url.pathname) && readerFor(bearer);
+    const user = sessionUser(req) || reader;
+    if (!['/api/login', '/api/register'].includes(url.pathname) && !user) return send(res, 401, { error: 'login' });
     const parts = url.pathname.split('/').filter(Boolean); // ['api', 'items', 'notes', '<id>']
     for (const [key, fn] of Object.entries(routes)) {
       const [method, pattern] = key.split(' '), p = pattern.split('/').filter(Boolean);
       if (method !== req.method || p.length !== parts.length) continue;
       const args = [];
-      if (p.every((seg, i) => (seg.startsWith(':') ? (args.push(decodeURIComponent(parts[i])), true) : seg === parts[i]))) return await fn(req, res, ...args);
+      if (!p.every((seg, i) => (seg.startsWith(':') ? (args.push(decodeURIComponent(parts[i])), true) : seg === parts[i]))) continue;
+      const run = () => fn(req, res, ...args);
+      return await (ACCOUNTS && user?.id ? asUser(user, run) : run()); // alles Weitere läuft im Datenordner dieses Kontos
     }
     send(res, 404, { error: 'unbekannt' });
   } catch (e) {

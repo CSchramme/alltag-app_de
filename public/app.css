@@ -406,13 +406,17 @@ button.row:active { background-color: var(--press); transition-duration: 0s; }
 .app-icon { display: block; margin: 0 auto 16px; border-radius: 20px; box-shadow: 0 8px 24px rgba(20, 50, 140, .25); }
 .login-card h1 { margin: 0; font-size: 28px; line-height: 34px; font-weight: 700; letter-spacing: -.022em; }
 .login-card p { margin: 6px 0 22px; font-size: 15px; line-height: 20px; letter-spacing: -.24px; color: var(--label2); text-wrap: balance; }
-.login-card input[type=password] {
+.login-fields { display: grid; gap: 10px; }
+.login-card .login-fields input:not([type=radio]) {
   width: 100%; height: 52px; padding: 0 18px; border: 0; border-radius: 16px; outline: none;
   font: 17px var(--font); letter-spacing: -.41px; color: var(--label);
   background: var(--input-bg); box-shadow: inset 0 0 0 .5px var(--sep), inset 0 1px 2px rgba(20, 28, 60, .06);
 }
-.login-card input[type=password]:focus { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--blue) 60%, transparent); }
+.login-card .login-fields input:not([type=radio]):focus { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--blue) 60%, transparent); }
+.login-card .login-fields p { margin: 4px 4px 0; font-size: 13px; line-height: 18px; text-align: left; }
 .login-card .login-error { min-height: 20px; margin: 8px 0 10px; color: var(--red); }
+.login-card .login-switch { margin-top: 10px; }
+.login-card .login-note { margin: 12px 0 0; font-size: 13px; line-height: 18px; }
 .shake { animation: shake .4s cubic-bezier(.36, .07, .19, .97); }
 @keyframes shake { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
 #boot { z-index: 49; pointer-events: none; }
@@ -733,3 +737,9 @@ button.banner { display: flex; text-align: left; }
   .glass::after { display: none; }
 }
 .new-tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+/* Konten: Codes gut lesbar, Lösch-Knopf rot */
+.code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .04em; }
+:root .btn-primary.danger-bg, :root[data-theme] .btn-primary.danger-bg { background: var(--red); box-shadow: none; }
+.code-actions { display: flex; gap: 20px; margin-top: 6px; }
+.code-actions .btn-plain { width: auto; padding: 4px 0; }

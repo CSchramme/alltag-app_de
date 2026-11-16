@@ -195,7 +195,7 @@ function boot(msg) { $('#boot').hidden = false; $('#boot p').textContent = msg; 
 
 function renderAll() {
   renderHeute(); renderKalender(); renderAufgaben(); renderNotizen(); renderSchule(); renderBadges();
-  $('#me').textContent = initials(S().student?.name || 'Ich');
+  $('#me').textContent = initials(S().student?.name || D.account?.name || 'Ich');
   $('#subjects').innerHTML = subjects().map((s) => `<option value="${esc(s)}">`).join('');
   updateAdd();
 }
@@ -240,7 +240,8 @@ function banners() {
   if (D.demo) out.push(['info', 'Demo-Modus', 'Du siehst Beispieldaten.']);
   if (!navigator.onLine) out.push(['warn', 'Offline', 'Angezeigt wird der zuletzt geladene Stand.']);
   else if (D.edupage.connected && D.status?.ok === false) out.push(['warn', 'EduPage-Abgleich fehlgeschlagen', D.status.error || '']);
-  if (!D.edupage.connected) out.push(['info', 'EduPage noch nicht verbunden', 'Tippe hier, um Stundenplan, Vertretungen und Nachrichten zu holen.', 'data-settings']);
+  if (D.school === 'none') { if (!D.db.lessons?.length) out.push(['info', 'Noch kein Stundenplan', 'Tippe hier und trag deine Stunden einmal ein. Sie gelten dann jede Woche.', 'data-settings']); }
+  else if (!D.edupage.connected) out.push(['info', 'EduPage noch nicht verbunden', 'Tippe hier, um Stundenplan, Vertretungen und Nachrichten zu holen.', 'data-settings']);
   return out.map(([k, t, s, attr]) => `<${attr ? `button ${attr}` : 'div'} class="card banner ${k}"><div><b>${esc(t)}</b>${esc(s)}</div></${attr ? 'button' : 'div'}>`).join('');
 }
 
@@ -1035,9 +1036,12 @@ async function toggleTask(key, btn) {
 }
 
 /* ---------------------------------------------------------------- Notizen */
-const NOTES = [['notizen', 'Notizen'], ['tafel', 'Tafelbilder'], ['einkauf', 'Einkauf']];
+const NOTES_ALL = [['notizen', 'Notizen'], ['tafel', 'Tafelbilder'], ['einkauf', 'Einkauf']];
+let NOTES = NOTES_ALL; // ohne Home Assistant (öffentliche Version) ohne Einkauf
 let notesSeg = 'notizen', notesSegCtl = null;
 function renderNotizen() {
+  NOTES = NOTES_ALL.filter(([k]) => k !== 'einkauf' || D.features?.ha !== false);
+  if (!NOTES.some(([k]) => k === notesSeg)) notesSeg = 'notizen';
   $('#view-notizen').innerHTML = `${largeTitle('Notizen', '')}${segHTML(NOTES, notesSeg, 'Bereich')}<div id="notes-body"></div>`;
   notesSegCtl = Seg($('#view-notizen .seg'), (i) => { notesSeg = NOTES[i][0]; notesSegCtl.glide(i); renderNotesBody(); });
   renderNotesBody();
@@ -1231,7 +1235,7 @@ const fRepeat = (it) => group(
   fRow('Endet', `<input type="date" name="until" value="${esc(it?.until)}">`));
 let justAdded = null; // frisch angelegter Eintrag federt in die Liste
 
-function formSheet(kind, item, title, fields) {
+function formSheet(kind, item, title, fields, after) {
   openSheet(title, `<form class="form" novalidate>${fields}
     <p class="form-error" role="alert"></p>
     <button class="btn-primary pressable" type="submit">${item ? 'Sichern' : 'Hinzufügen'}</button>
@@ -1249,6 +1253,7 @@ function formSheet(kind, item, title, fields) {
       D.db[kind] = [...D.db[kind].filter((x) => x.id !== saved.id), saved];
       if (!item) { justAdded = saved.id; setTimeout(() => { justAdded = null; }, 1200); }
       haptic();
+      if (after) return after();
       closeSheet();
       renderAll();
     } catch (x) { err.textContent = x.message === 'Pflichtfeld fehlt' ? 'Bitte fülle das erste Feld aus.' : x.message; }
@@ -1258,6 +1263,7 @@ function formSheet(kind, item, title, fields) {
     if (!del.dataset.sure) { del.dataset.sure = '1'; del.textContent = 'Wirklich löschen?'; return; } // zweites Tippen bestätigt
     await api(`/api/items/${kind}/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
     D.db[kind] = D.db[kind].filter((x) => x.id !== item.id);
+    if (after) return after();
     closeSheet();
     renderAll();
   };
@@ -1310,7 +1316,7 @@ function birthdayForm(b) {
 }
 
 function newChooser() {
-  const tiles = [['reminder', 'Erinnerung', ICON.check], ['event', 'Termin', ICON.cal], ['note', 'Notiz', ICON.note], ['grade', 'Note', ICON.cap], ['photo', 'Tafelbild', ICON.camera], ['timer', 'Lernzeit', ICON.timer], ['birthday', 'Geburtstag', ICON.gift]];
+  const tiles = [['reminder', 'Erinnerung', ICON.check], ['event', 'Termin', ICON.cal], ['note', 'Notiz', ICON.note], ['grade', 'Note', ICON.cap], ['photo', 'Tafelbild', ICON.camera], ['timer', 'Lernzeit', ICON.timer], ['birthday', 'Geburtstag', ICON.gift]].filter(([k]) => k !== 'photo' || D.features?.photos !== false);
   openSheet('Neu', `<div class="new-grid">${tiles.map(([k, l, i]) => `<button class="card new-tile pressable" data-new="${k}">${i}<span>${l}</span></button>`).join('')}</div>`);
 }
 const NEW = { reminder: () => reminderForm(), event: () => eventForm(null, planDay), note: () => noteForm(), grade: () => gradeForm(), birthday: () => birthdayForm(), photo: () => pickPhoto(), timer: () => openTimer() };
@@ -1655,9 +1661,11 @@ async function openSettings() {
   const s = S().student || {};
   openSheet('Profil', `
     <div class="card row" style="padding:16px">
-      <div class="avatar" style="--c:var(--blue);width:58px;height:58px;font-size:21px">${esc(initials(s.name || 'Ich'))}</div>
-      <div class="main"><div class="title">${esc(s.name || 'Alltag')}</div><div class="sub">${s.class ? `Klasse ${esc(s.class)}` : 'Schule und Privates'}</div></div>
+      <div class="avatar" style="--c:var(--blue);width:58px;height:58px;font-size:21px">${esc(initials(s.name || D.account?.name || 'Ich'))}</div>
+      <div class="main"><div class="title">${esc(D.account?.name || s.name || 'Alltag')}</div><div class="sub">${D.account ? `${esc(schoolName(D.school))}${D.account.admin ? ' · Admin' : ''}` : s.class ? `Klasse ${esc(s.class)}` : 'Schule und Privates'}</div></div>
     </div>
+    ${accountSection()}
+    ${D.school === 'none' ? `<p class="label-sm">Stundenplan</p><div id="own-plan">${ownPlan()}</div>` : ''}
     <p class="label-sm">Ferien</p>
     ${group(fRow('Bundesland', `<select id="state-select">${[['BW', 'Baden-Württemberg'], ['BY', 'Bayern'], ['BE', 'Berlin'], ['BB', 'Brandenburg'], ['HB', 'Bremen'], ['HH', 'Hamburg'], ['HE', 'Hessen'], ['MV', 'Mecklenburg-Vorpommern'], ['NI', 'Niedersachsen'], ['NW', 'Nordrhein-Westfalen'], ['RP', 'Rheinland-Pfalz'], ['SL', 'Saarland'], ['SN', 'Sachsen'], ['ST', 'Sachsen-Anhalt'], ['SH', 'Schleswig-Holstein'], ['TH', 'Thüringen']].map(([v, l]) => `<option value="${v}"${D.state === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`))}
     <p class="label-sm">Schulweg</p>
@@ -1673,6 +1681,7 @@ async function openSettings() {
       fRow('Gültig bis', `<input type="date" name="until" value="${esc(D.ticket?.until)}">`))}
       <button class="btn-plain pressable" type="submit">Ticket sichern</button></form>
     <p class="footnote" style="margin-top:0;text-align:left">Auf „Heute“ erscheint ein Knopf, der dein Ticket in der offiziellen App oder auf der Website öffnet. Vor dem Ablauf kommt eine Erinnerung (1 Woche, 1 Tag vorher und am Tag).</p>
+    ${D.features?.ha === false ? '' : `
     <p class="label-sm">Home Assistant</p>
     <div id="ha-section">${haSection()}</div>
     <p class="label-sm">PC-Bildschirm</p>
@@ -1682,6 +1691,7 @@ async function openSettings() {
       <button class="row" data-screen><span class="btn-plain">Bildschirm öffnen</span></button>
     </div>
     <p class="footnote" style="margin-top:8px;text-align:left">Das Programm enthält einen eigenen Schlüssel – nicht weitergeben. Solange es läuft, kann jeder mit deinem Alltag-Passwort den PC sehen und steuern. Bei gesperrtem Windows gibt es kein Bild.</p>
+    `}
     <p class="label-sm">Darstellung</p>
     <div class="card" style="padding:14px 16px">
       <div class="sub" style="margin-bottom:8px">Erscheinungsbild</div>
@@ -1690,8 +1700,7 @@ async function openSettings() {
       ${fChoice('glass', [['tinted', 'Getönt'], ['clear', 'Klar']], store.get('glass-ui', 'tinted'))}
       <p class="look-hint">„Klar“ ist durchsichtiger und lässt mehr vom Hintergrund durchscheinen, „Getönt“ ist besser lesbar.</p>
     </div>
-    <p class="label-sm">EduPage</p>
-    <div id="edu-section">${edupageSection()}</div>
+    ${D.school === 'none' ? '' : `<p class="label-sm">EduPage</p><div id="edu-section">${edupageSection()}</div>`}
     <p class="label-sm">Mitteilungen</p>
     <div class="list card">
       <label class="row"><div class="main"><div class="title">Mitteilungen</div><div class="sub">Vertretungen, Nachrichten, Erinnerungen, Termine und abends der Ausblick auf morgen</div></div>
@@ -1718,12 +1727,12 @@ async function openSettings() {
       <button class="row" id="sc-focus" disabled><span class="btn-plain">Fokus-Adresse kopieren</span></button>
     </div>
     <p class="footnote" id="sc-hint" style="margin-top:8px;text-align:left">Die Adresse enthält deinen Lese-Schlüssel – nicht weitergeben.</p>
-    <p class="label-sm">Hintergrund-Abgleich</p>
+    <div id="cron-box"><p class="label-sm">Hintergrund-Abgleich</p>
     <div class="list card">
       <div class="row"><div class="main"><div class="sub">Die App hält sich auf dem Server selbst wach und gleicht alle 15 Minuten ab. Nach einem Server-Neustart startet sie erst wieder, wenn du sie öffnest. Noch zuverlässiger: diese Adresse beim kostenlosen Dienst cron-job.org alle 15 Minuten aufrufen lassen.</div></div></div>
       <button class="row" id="cron-copy" disabled><span class="btn-plain">Adresse kopieren</span></button>
     </div>
-    <p class="footnote" id="cron-hint" style="margin-top:8px;text-align:left"></p>
+    <p class="footnote" id="cron-hint" style="margin-top:8px;text-align:left"></p></div>
     <div class="list card" style="margin-top:22px"><button class="row" id="logout"><span class="btn-plain danger">Abmelden</span></button></div>`);
 
   $('#logout').onclick = logout;
@@ -1736,7 +1745,8 @@ async function openSettings() {
     e.preventDefault();
     try { setData(await api('/api/settings', { method: 'POST', body: { ticket: Object.fromEntries(new FormData(e.target)) } })); haptic(); toast('Ticket gesichert'); } catch (x) { toast(x.message); }
   };
-  wireHa();
+  if (D.features?.ha !== false) wireHa();
+  wireAccount();
   $('#wake-lead').onchange = async (e) => {
     try { setData(await api('/api/settings', { method: 'POST', body: { wakeLead: Number(e.target.value) } })); haptic(); } catch (x) { toast(x.message); }
   };
@@ -1758,6 +1768,7 @@ async function openSettings() {
     const tpl = await fetch('/widget.js').then((r) => r.text());
     const script = tpl.replace('__SERVER__', location.origin).replace('__TOKEN__', widget);
     const cronUrl = `${location.origin}/api/cron?key=${cron}`;
+    $('#cron-box').hidden = !cron; // mit Konten nur für Admins
     $('#widget-copy').disabled = $('#cron-copy').disabled = false;
     $('#widget-copy').onclick = () => copy(script, $('#widget-hint'));
     $('#sc-today').disabled = $('#sc-tomorrow').disabled = $('#sc-wake').disabled = $('#sc-focus').disabled = false;
@@ -1766,6 +1777,7 @@ async function openSettings() {
     $('#sc-today').onclick = () => copy(`${location.origin}/api/summary?day=heute&key=${widget}`, $('#sc-hint'));
     $('#sc-tomorrow').onclick = () => copy(`${location.origin}/api/summary?day=morgen&key=${widget}`, $('#sc-hint'));
     $('#cron-copy').onclick = () => copy(cronUrl, $('#cron-hint'));
+    if (!tokens.screen || !$('#screen-dl')) return;
     const agent = (await fetch('/screen-agent.ps1').then((r) => r.text())).replace('__SERVER__', location.origin).replace('__KEY__', tokens.screen);
     $('#screen-dl').disabled = false;
     $('#screen-dl').onclick = () => { // mit BOM, damit Windows PowerShell die Datei als UTF-8 liest
@@ -1779,6 +1791,7 @@ async function openSettings() {
 
   const toggle = $('#push-toggle'), test = $('#push-test'), hint = $('#push-hint');
   const say = (t) => { hint.textContent = t; };
+  if (D.features?.push === false) { toggle.disabled = true; say('In der Demo gibt es keine Mitteilungen.'); return; }
   if (!pushReady()) {
     say(isIOS && !standalone()
       ? 'Tippe in Safari auf Teilen → „Zum Home-Bildschirm“ und öffne Alltag von dort, um Mitteilungen zu erhalten.'
@@ -1799,6 +1812,149 @@ async function openSettings() {
       .finally(() => { toggle.disabled = false; });
   };
   test.onclick = () => api('/api/push/test', { method: 'POST' }).then((r) => say(r.ok ? 'Gesendet – kommt gleich an.' : 'Kein Gerät registriert.')).catch((e) => say(e.message));
+}
+
+/* ---------------------------------------------------------------- Konto, Admin-Bereich, eigener Stundenplan */
+const schoolName = (k) => ({ edupage: 'EduPage', none: 'Ohne Schulsoftware' })[k] || k;
+const WEEKDAYS = [[1, 'Montag'], [2, 'Dienstag'], [3, 'Mittwoch'], [4, 'Donnerstag'], [5, 'Freitag'], [6, 'Samstag']];
+
+function accountSection() {
+  const a = D.account;
+  if (!a) return '';
+  return `<p class="label-sm">Konto</p>
+    ${group(fRow('Schulsoftware', `<select id="school-select">${SCHOOL_OPTS.map(([v, l]) => `<option value="${v}"${D.school === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`),
+      '<button class="row" data-account="password"><span class="btn-plain">Passwort ändern</span></button>',
+      a.admin ? `<button class="row" data-account="admin"><div class="main"><div class="title">Einladungen und Konten</div></div>${ICON.chev}</button>` : '',
+      '<button class="row" data-account="delete"><span class="btn-plain danger">Konto löschen</span></button>')}`;
+}
+function wireAccount() {
+  const sel = $('#school-select');
+  if (sel) {
+    sel.onchange = async () => {
+      try { setData(await api('/api/account', { method: 'POST', body: { school: sel.value } })); haptic(); openSettings(); }
+      catch (x) { toast(x.message); }
+    };
+  }
+  $$('#sheet [data-account]').forEach((b) => { b.onclick = { password: openPassword, admin: () => openAdmin(), delete: openDeleteAccount }[b.dataset.account]; });
+  $$('#sheet [data-lesson]').forEach((b) => { b.onclick = () => lessonForm(D.db.lessons.find((l) => l.id === b.dataset.lesson)); });
+  $('#sheet [data-new-lesson]')?.addEventListener('click', () => lessonForm());
+}
+function openPassword() {
+  openSheet('Passwort ändern', `<form class="form" novalidate>
+    ${group(fText('old', 'Bisheriges Passwort', '', 'type="password" autocomplete="current-password" required'),
+      fText('password', 'Neues Passwort (mindestens 8 Zeichen)', '', 'type="password" autocomplete="new-password" required minlength="8"'))}
+    <p class="form-error" role="alert"></p>
+    <button class="btn-primary pressable" type="submit">Ändern</button>
+    <p class="footnote" style="text-align:left">Auf deinen anderen Geräten musst du dich danach neu anmelden.</p>
+    <button class="btn-plain" type="button" data-back>Zurück</button></form>`);
+  const f = $('#sheet form');
+  $('[data-back]', f).onclick = openSettings;
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api('/api/account', { method: 'POST', body: Object.fromEntries(new FormData(f)) }); haptic(); toast('Passwort geändert'); openSettings(); }
+    catch (x) { $('.form-error', f).textContent = x.message; }
+  };
+}
+function openDeleteAccount() {
+  openSheet('Konto löschen', `<form class="form" novalidate>
+    <p class="footnote" style="text-align:left;margin-top:0">Dein Konto und alles, was darin gespeichert ist, wird sofort gelöscht: Termine, Erinnerungen, Notizen, Noten, Tafelbilder und dein Schulzugang. Das lässt sich nicht rückgängig machen.</p>
+    ${group(fText('password', 'Passwort zur Bestätigung', '', 'type="password" autocomplete="current-password" required'))}
+    <p class="form-error" role="alert"></p>
+    <button class="btn-primary danger-bg pressable" type="submit">Endgültig löschen</button>
+    <button class="btn-plain" type="button" data-back>Zurück</button></form>`);
+  const f = $('#sheet form');
+  $('[data-back]', f).onclick = openSettings;
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api('/api/account', { method: 'DELETE', body: Object.fromEntries(new FormData(f)) });
+      for (const k of await caches.keys().catch(() => [])) (await caches.open(k)).delete('/api/data');
+      closeSheet();
+      D = null;
+      showLogin();
+    } catch (x) { $('.form-error', f).textContent = x.message; }
+  };
+}
+
+async function openAdmin(data) {
+  try { data ||= await api('/api/admin'); } catch (x) { return toast(x.message); }
+  const nameOf = (id) => data.accounts.find((a) => a.id === id)?.name || 'gelöschtes Konto';
+  const open = data.invites.filter((i) => !i.usedBy), used = data.invites.filter((i) => i.usedBy).slice(-10).reverse();
+  openSheet('Einladungen und Konten', `
+    <form class="form" id="invite-form">${group(fText('note', 'Für wen? (siehst nur du)', '', 'maxlength="80"'))}
+      <button class="btn-primary pressable" type="submit">Einladungscode erstellen</button></form>
+    <p class="footnote" id="invite-hint" style="text-align:left"></p>
+    <p class="label-sm">Offene Codes</p>
+    ${open.length ? group(...open.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(i.code)}</div><div class="sub">${esc(i.note || 'ohne Notiz')} · ${esc(ago(i.created))}</div>
+        <div class="code-actions"><button class="btn-plain" type="button" data-copy-code="${esc(i.code)}">Kopieren</button><button class="btn-plain danger" type="button" data-del-code="${esc(i.code)}">Löschen</button></div></div></div>`))
+      : '<p class="footnote" style="text-align:left">Keine offenen Codes. Jeder Code funktioniert genau einmal.</p>'}
+    <p class="label-sm">Konten (${data.accounts.length})</p>
+    ${group(...data.accounts.map((a) => `<button class="row" data-acc="${esc(a.id)}"><div class="main"><div class="title">${esc(a.name)}${a.admin ? ' · Admin' : ''}${a.disabled ? ' · gesperrt' : ''}</div>
+      <div class="sub">${esc(schoolName(a.school))} · ${a.lastSeen ? `aktiv ${esc(ago(a.lastSeen))}` : `angelegt ${esc(ago(a.created))}`}</div></div>${ICON.chev}</button>`))}
+    ${used.length ? `<p class="label-sm">Zuletzt eingelöst</p>${group(...used.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(i.code)}</div><div class="sub">${esc(i.note || 'ohne Notiz')} → ${esc(nameOf(i.usedBy))}</div></div></div>`))}` : ''}
+    <button class="btn-plain" type="button" data-back style="margin-top:12px">Zurück</button>`);
+  const hint = $('#invite-hint');
+  $('#sheet [data-back]').onclick = openSettings;
+  $('#invite-form').onsubmit = async (e) => {
+    e.preventDefault();
+    try { const d = await api('/api/admin/invites', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); haptic(); openAdmin(d); } catch (x) { hint.textContent = x.message; }
+  };
+  $$('#sheet [data-copy-code]').forEach((b) => { b.onclick = () => copy(b.dataset.copyCode, hint); });
+  $$('#sheet [data-del-code]').forEach((b) => {
+    b.onclick = async () => {
+      if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Sicher?'; return; }
+      try { openAdmin(await api(`/api/admin/invites/${encodeURIComponent(b.dataset.delCode)}`, { method: 'DELETE' })); } catch (x) { toast(x.message); }
+    };
+  });
+  $$('#sheet [data-acc]').forEach((b) => { b.onclick = () => openAcc(data.accounts.find((a) => a.id === b.dataset.acc)); });
+}
+function openAcc(a, password) {
+  const self = a.id === D.account?.id;
+  openSheet(a.name, `
+    ${group(`<div class="row"><div class="main">Schulsoftware</div><div class="trail">${esc(schoolName(a.school))}</div></div>`,
+      `<div class="row"><div class="main">Angelegt</div><div class="trail">${esc(ago(a.created))}</div></div>`,
+      `<div class="row"><div class="main">Zuletzt aktiv</div><div class="trail">${esc(ago(a.lastSeen))}</div></div>`)}
+    ${password ? `<p class="label-sm">Neues Passwort</p>${group(`<div class="row"><div class="main"><div class="title code">${esc(password)}</div><div class="sub">Nur jetzt sichtbar. Gib es ${esc(a.name)} persönlich weiter.</div><div class="code-actions"><button class="btn-plain" type="button" data-copy-pw>Kopieren</button></div></div></div>`)}<p class="footnote" id="acc-hint" style="text-align:left"></p>` : ''}
+    ${self ? '<p class="footnote" style="text-align:left">Das ist dein eigenes Konto. Passwort und Löschen findest du im Profil unter „Konto“.</p>'
+      : group('<button class="row" data-do="reset"><span class="btn-plain">Passwort zurücksetzen</span></button>',
+        `<button class="row" data-do="admin"><span class="btn-plain">${a.admin ? 'Admin-Rechte entziehen' : 'Zum Admin machen'}</span></button>`,
+        `<button class="row" data-do="disable"><span class="btn-plain${a.disabled ? '' : ' danger'}">${a.disabled ? 'Entsperren' : 'Sperren'}</span></button>`,
+        '<button class="row" data-do="delete"><span class="btn-plain danger">Konto löschen</span></button>')}
+    <button class="btn-plain" type="button" data-back style="margin-top:12px">Zurück</button>`);
+  $('#sheet [data-back]').onclick = () => openAdmin();
+  const pwBtn = $('#sheet [data-copy-pw]');
+  if (pwBtn) pwBtn.onclick = () => copy(password, $('#acc-hint'));
+  const url = `/api/admin/accounts/${encodeURIComponent(a.id)}`;
+  $$('#sheet [data-do]').forEach((b) => {
+    b.onclick = async () => {
+      const act = b.dataset.do;
+      if ((act === 'delete' || act === 'reset') && !b.dataset.sure) { b.dataset.sure = '1'; $('span', b).textContent = act === 'delete' ? 'Wirklich löschen? Alle Daten sind dann weg.' : 'Wirklich zurücksetzen?'; return; }
+      try {
+        if (act === 'delete') return openAdmin(await api(url, { method: 'DELETE' }));
+        const body = act === 'reset' ? { reset: true } : act === 'admin' ? { admin: !a.admin } : { disabled: !a.disabled };
+        const d = await api(url, { method: 'POST', body });
+        haptic();
+        openAcc(d.accounts.find((x) => x.id === a.id), d.password);
+      } catch (x) { toast(x.message); }
+    };
+  });
+}
+
+// Ohne Schulsoftware: Stunden selbst eintragen, jede Woche gleich
+function ownPlan() {
+  const ls = D.db.lessons || [];
+  const rows = WEEKDAYS.flatMap(([n, name]) => ls.filter((l) => l.day === n).sort((a, b) => a.start.localeCompare(b.start)).map((l, i) =>
+    `<button class="row" data-lesson="${esc(l.id)}"><div class="main"><div class="title">${esc(l.subject)}</div><div class="sub">${i ? '' : `${name} · `}${esc(l.start)}–${esc(l.end)}${l.room ? ` · ${esc(room(l.room))}` : ''}${l.teacher ? ` · ${esc(l.teacher)}` : ''}</div></div>${ICON.chev}</button>`));
+  return `${group(...rows, '<button class="row" data-new-lesson><span class="btn-plain">Stunde hinzufügen</span></button>')}
+    <p class="footnote" style="margin-top:8px;text-align:left">Jede Woche gleich. In den Ferien bleibt der Plan leer (Bundesland unter „Ferien“).</p>`;
+}
+function lessonForm(l) {
+  const last = (D.db.lessons || []).at(-1); // neue Stunde: gleicher Tag wie zuletzt, beginnt nach deren Ende
+  formSheet('lessons', l, l ? l.subject : 'Neue Stunde', `
+    ${group(fText('subject', 'Fach', l?.subject, 'required list="subjects" maxlength="80"'), fText('room', 'Raum (optional)', l?.room, 'maxlength="40"'), fText('teacher', 'Lehrkraft (optional)', l?.teacher, 'maxlength="80"'))}
+    ${group(fRow('Tag', `<select name="day">${WEEKDAYS.map(([n, name]) => `<option value="${n}"${(l?.day ?? last?.day ?? 1) === n ? ' selected' : ''}>${name}</option>`).join('')}</select>`),
+      fRow('Beginn', `<input type="time" name="start" required value="${esc(l?.start || last?.end || '08:00')}">`),
+      fRow('Ende', `<input type="time" name="end" required value="${esc(l?.end || '')}">`))}`, () => load().then(openSettings));
 }
 
 // Home Assistant: verbinden, Einkaufsliste wählen, freigegebene Knöpfe (nur diese darf die App auslösen)
@@ -1918,26 +2074,59 @@ async function logout() {
   showLogin();
 }
 
-/* ---------------------------------------------------------------- Login */
-function showLogin() {
+/* ---------------------------------------------------------------- Anmelden und Registrieren */
+let info = null, registering = false; // info: Demo? Konten? (vom Server, ohne Anmeldung lesbar)
+const SCHOOL_OPTS = [['edupage', 'EduPage'], ['none', 'Keine']];
+function loginMode() {
+  const f = $('#login form'), acc = !!info?.accounts, user = f.username;
+  user.hidden = !acc;
+  user.required = acc;
+  if (acc && user.value === 'alltag') user.value = '';
+  f.password.placeholder = !acc ? 'App-Passwort' : registering ? 'Passwort, ab 8 Zeichen' : 'Passwort';
+  f.password.setAttribute('aria-label', f.password.placeholder);
+  f.password.autocomplete = registering ? 'new-password' : 'current-password';
+  $('.register', f)?.remove();
+  if (registering) {
+    $('.login-fields', f).insertAdjacentHTML('beforeend', `<div class="register login-fields">
+      <input name="code" placeholder="Einladungscode" aria-label="Einladungscode" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+      <p>Welche Schulsoftware nutzt deine Schule?</p>
+      ${fChoice('school', SCHOOL_OPTS, 'edupage')}
+      <p>Bei „Keine“ trägst du deinen Stundenplan selbst ein. WebUntis und Schulmanager kommen bald.</p></div>`);
+  }
+  $('button[type=submit]', f).textContent = registering ? 'Konto anlegen' : 'Anmelden';
+  const sw = $('.login-switch', f);
+  sw.hidden = !acc;
+  sw.textContent = registering ? 'Schon ein Konto? Anmelden' : 'Neu hier? Mit Einladungscode registrieren';
+  const note = $('.login-note', f);
+  note.hidden = !info?.demo;
+  if (info?.demo) { note.textContent = 'Das ist die Demo mit Beispieldaten. Das Passwort ist „demo“.'; f.password.value ||= 'demo'; }
+  $('.login-error', f).textContent = '';
+}
+async function showLogin() {
   $('#boot').hidden = true;
   $('#app').hidden = true;
   $('#login').hidden = false;
-  setTimeout(() => $('#login [name=password]').focus(), 60);
+  info ??= await fetch('/api/info').then((r) => r.json()).catch(() => null);
+  loginMode();
+  setTimeout(() => $(info?.accounts ? '#login [name=username]' : '#login [name=password]').focus(), 60);
 }
+$('#login .login-switch').onclick = () => { registering = !registering; loginMode(); };
 $('#login form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const f = e.currentTarget, btn = $('button', f), err = $('.login-error', f);
+  const f = e.currentTarget, btn = $('button[type=submit]', f), err = $('.login-error', f);
   btn.disabled = true;
   err.textContent = '';
   try {
-    await api('/api/login', { method: 'POST', body: { password: f.password.value } });
+    const body = { name: f.username.value, password: f.password.value };
+    if (registering) await api('/api/register', { method: 'POST', body: { ...body, code: f.code.value, school: f.school.value } });
+    else await api('/api/login', { method: 'POST', body });
     f.password.value = '';
+    registering = false;
     $('#login').hidden = true;
     boot('Lade Daten …');
     await load();
   } catch (x) {
-    err.textContent = x.status === 401 ? 'Das Passwort ist falsch.' : x.status === 429 ? x.message : 'Server nicht erreichbar.';
+    err.textContent = x.status === 401 ? (info?.accounts ? x.message : 'Das Passwort ist falsch.') : [400, 403, 429].includes(x.status) ? x.message : 'Server nicht erreichbar.';
     f.classList.remove('shake');
     void f.offsetWidth;
     f.classList.add('shake');
