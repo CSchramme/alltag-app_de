@@ -1041,6 +1041,7 @@ function serveStatic(req, res, pathname) {
   fs.readFile(fp, (err, buf) => {
     if (err) return send(res, 404, 'Not Found');
     const type = TYPES[path.extname(fp)] || 'application/octet-stream';
+    if (!PRIVATE && type.startsWith('text/html')) buf = Buffer.from(buf.toString('utf8').replace('<html lang="de">', '<html lang="de" data-skin="modern">')); // öffentliche Version: eigener Look
     res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', ...(type.startsWith('text/html') ? { 'Content-Security-Policy': CSP } : {}) });
     res.end(req.method === 'HEAD' ? undefined : buf);
   });

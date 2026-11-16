@@ -743,3 +743,97 @@ button.banner { display: flex; text-align: left; }
 :root .btn-primary.danger-bg, :root[data-theme] .btn-primary.danger-bg { background: var(--red); box-shadow: none; }
 .code-actions { display: flex; gap: 20px; margin-top: 6px; }
 .code-actions .btn-plain { width: auto; padding: 4px 0; }
+
+/* ================================================================ Öffentliche Version („modern“)
+   Der Server setzt data-skin="modern" für alltag-app.de und die Demo. Statt Glas: klare Flächen mit feinem Rand,
+   hell mit Punktraster, dunkel mit Sternenfeld, Überschriften mit Farbverlauf. Die private App bleibt bei Liquid Glass. */
+:root[data-skin="modern"] {
+  --bg: #f6f7fb;
+  --wall-base: #f6f7fb;
+  --dots: radial-gradient(rgba(15, 23, 42, .1) 1px, transparent 1.4px) 0 0 / 22px 22px;
+  --blue: #2e6bf0; --accent-2: #7c5cff; --indigo: #4f46e5;
+  --label: #0f172a; --label2: #5b6478; --label3: #9aa2b4;
+  --sep: #e7e9f0; --fill: rgba(15, 23, 42, .06);
+  --card: #ffffff; --card-edge: #e3e6ee; --rim-soft: transparent;
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, .04), 0 2px 8px rgba(16, 24, 40, .04);
+  --shadow-float: 0 10px 30px rgba(16, 24, 40, .1), 0 1px 3px rgba(16, 24, 40, .06);
+  --glass-top: rgba(255, 255, 255, .92); --glass-bottom: rgba(255, 255, 255, .88); --glass-hi: transparent;
+  --glass-blur: blur(12px) saturate(140%);
+  --rim: transparent; --rim-low: transparent; --edge-rgb: 246, 247, 251;
+  --sheet-bg: #ffffff; --sheet-hi: transparent; --input-bg: #f3f5f9; --soft-bg: #f3f5f9;
+  --hover: rgba(15, 23, 42, .03); --press: rgba(15, 23, 42, .05);
+  --lens-idle: rgba(46, 107, 240, .1); --lens-lift: rgba(46, 107, 240, .14);
+  --r-card: 16px;
+  --font: "Inter", -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, sans-serif;
+}
+:root[data-skin="modern"][data-theme="dark"] {
+  --bg: #0b0e17;
+  --wall-base: #0b0e17;
+  /* Sternenfeld: fünf Punktmuster mit großen, krummen Kachelmaßen, damit kein Raster zu erkennen ist */
+  --dots: radial-gradient(circle, rgba(190, 205, 255, .55) 0 .9px, transparent 1.4px) 37px 61px / 211px 197px,
+    radial-gradient(circle, rgba(190, 205, 255, .35) 0 .8px, transparent 1.3px) 149px 13px / 263px 239px,
+    radial-gradient(circle, rgba(255, 255, 255, .45) 0 .7px, transparent 1.2px) 89px 173px / 317px 293px,
+    radial-gradient(circle, rgba(120, 150, 255, .6) 0 1.1px, transparent 1.7px) 251px 97px / 379px 347px,
+    radial-gradient(circle, rgba(255, 255, 255, .25) 0 .7px, transparent 1.2px) 5px 229px / 443px 401px;
+  --blue: #6f8cff; --accent-2: #9d8cff;
+  --label: #eef1f8; --label2: #98a1b6; --label3: #5f677b;
+  --sep: #1f2536; --fill: rgba(255, 255, 255, .06);
+  --card: #11151f; --card-edge: #1e2433;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-float: 0 12px 34px rgba(0, 0, 0, .5);
+  --glass-top: rgba(17, 21, 31, .92); --glass-bottom: rgba(17, 21, 31, .88);
+  --edge-rgb: 11, 14, 23;
+  --sheet-bg: #10141d; --input-bg: #0b0e17; --soft-bg: #0f131c;
+  --hover: rgba(255, 255, 255, .03); --press: rgba(255, 255, 255, .05);
+  --lens-idle: rgba(111, 140, 255, .14); --lens-lift: rgba(111, 140, 255, .2);
+}
+:root[data-skin="modern"] body { letter-spacing: -.011em; }
+:root[data-skin="modern"] .wallpaper { background: var(--dots), var(--wall-base); }
+:root[data-skin="modern"] .card { box-shadow: 0 0 0 1px var(--card-edge), var(--shadow-card); }
+:root[data-skin="modern"] .glass { box-shadow: 0 0 0 1px var(--card-edge), var(--shadow-float); }
+:root[data-skin="modern"] .glass::after { display: none; }
+:root[data-skin="modern"] #sheet { border-radius: 22px 22px 0 0; box-shadow: 0 0 0 1px var(--card-edge), var(--shadow-float); }
+:root[data-skin="modern"] .large-title h1, :root[data-skin="modern"] .grad {
+  background: linear-gradient(100deg, var(--label) 30%, var(--blue) 75%, var(--accent-2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+:root[data-skin="modern"] .large-title h1 { letter-spacing: -.03em; }
+:root[data-skin="modern"] .btn-primary, :root[data-skin="modern"][data-theme="dark"] .btn-primary {
+  height: 48px; border-radius: 12px; font-size: 16px; letter-spacing: -.01em; background: var(--blue);
+  box-shadow: 0 8px 22px -8px color-mix(in srgb, var(--blue) 75%, transparent);
+}
+:root[data-skin="modern"][data-theme="dark"] .btn-primary { color: #0b0e17; }
+:root[data-skin="modern"] .banner { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c) 35%, var(--card-edge)), var(--shadow-card); }
+:root[data-skin="modern"] .look-glass { display: none; } /* Glas-Einstellung gibt es hier nicht */
+
+/* Startseite für Besucher: Botschaft links, Anmeldung rechts (auf dem Handy untereinander) */
+.landing { display: none; }
+.login-wrap { display: contents; }
+:root[data-skin="modern"] #login { overflow-y: auto; place-items: start center; padding: max(28px, var(--safe-t)) 20px 28px; }
+:root[data-skin="modern"] .login-wrap {
+  display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 380px); gap: 56px; align-items: center;
+  width: min(100%, 1080px); min-height: 100%; margin: 0 auto;
+}
+:root[data-skin="modern"] .landing { display: block; }
+.hero-badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  color: var(--blue); background: color-mix(in srgb, var(--blue) 10%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 22%, transparent); }
+.hero-badge b { padding: 2px 7px; border-radius: 6px; font-size: 11px; letter-spacing: .04em; color: #fff; background: var(--blue); }
+:root[data-theme="dark"] .hero-badge b { color: #0b0e17; }
+.hero-title { margin: 18px 0 0; font-size: clamp(34px, 5.4vw, 58px); line-height: 1.04; font-weight: 800; letter-spacing: -.035em; text-wrap: balance; }
+:root[data-theme="dark"] .hero-title .grad { filter: drop-shadow(0 0 22px color-mix(in srgb, var(--blue) 45%, transparent)); }
+.hero-sub { margin: 18px 0 0; max-width: 34em; font-size: 17px; line-height: 1.6; color: var(--label2); }
+.hero-points { display: flex; flex-wrap: wrap; gap: 8px; margin: 26px 0 0; padding: 0; list-style: none; }
+.hero-points li { padding: 8px 12px; border-radius: 10px; font-size: 14px; font-weight: 500; color: var(--label);
+  background: var(--card); box-shadow: 0 0 0 1px var(--card-edge), var(--shadow-card); }
+.hero-points li::before { content: "✓"; margin-right: 7px; font-weight: 700; color: var(--green); }
+:root[data-skin="modern"] .login-card { border-radius: 20px; text-align: left; padding: 28px 24px 22px; }
+:root[data-skin="modern"] .login-card .app-icon { margin: 0 0 14px; width: 56px; height: 56px; border-radius: 14px; }
+:root[data-skin="modern"] .login-card > p:not(.login-error):not(.login-note) { display: none; } /* Slogan steht schon links */
+:root[data-skin="modern"] .login-card h1 { margin-bottom: 18px; font-size: 24px; }
+:root[data-skin="modern"] .login-card .login-fields input:not([type=radio]) { height: 48px; border-radius: 12px; font-size: 16px; }
+:root[data-skin="modern"] .login-card .login-switch { text-align: center; }
+@media (max-width: 860px) {
+  :root[data-skin="modern"] .login-wrap { grid-template-columns: minmax(0, 1fr); gap: 28px; align-content: start; min-height: 0; }
+  .hero-points { display: none; }
+  .hero-sub { font-size: 16px; }
+}

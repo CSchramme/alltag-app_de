@@ -294,7 +294,8 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
 
     // statische Dateien, kein Ausbruch aus public/
     const index = await call('/');
-    assert.ok((await index.text()).includes('<title>Alltag</title>'));
+    const indexHtml = await index.text();
+    assert.ok(indexHtml.includes('<title>Alltag</title>') && !indexHtml.includes('data-skin')); // private App: Liquid Glass
     assert.ok(index.headers.get('content-security-policy'));
     assert.equal((await call('/..%2fapp.js')).status, 404);
     assert.equal((await call('/data/secret.json')).status, 404);
@@ -313,6 +314,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const post = (p, body, cookie) => call(p, { method: 'POST', body: JSON.stringify(body) }, cookie);
     const ck = (r) => r.headers.get('set-cookie').split(';')[0];
     assert.deepEqual(await (await call('/api/info')).json(), { demo: false, accounts: true });
+    assert.ok((await (await call('/')).text()).includes('<html lang="de" data-skin="modern">')); // öffentliche Version: eigener Look
     assert.equal((await post('/api/register', { name: 'chef', password: 'geheim123', code: 'falsch', school: 'edupage' })).status, 403);
     const r1 = await post('/api/register', { name: 'Chef', password: 'geheim123', code: 'start-code', school: 'edupage' });
     assert.equal(r1.status, 200);

@@ -1696,9 +1696,9 @@ async function openSettings() {
     <div class="card" style="padding:14px 16px">
       <div class="sub" style="margin-bottom:8px">Erscheinungsbild</div>
       ${fChoice('look', [['auto', 'Automatisch'], ['light', 'Hell'], ['dark', 'Dunkel']], store.get('look-ui', 'auto'))}
-      <div class="sub" style="margin:14px 0 8px">Liquid Glass</div>
+      <div class="look-glass"><div class="sub" style="margin:14px 0 8px">Liquid Glass</div>
       ${fChoice('glass', [['tinted', 'Getönt'], ['clear', 'Klar']], store.get('glass-ui', 'tinted'))}
-      <p class="look-hint">„Klar“ ist durchsichtiger und lässt mehr vom Hintergrund durchscheinen, „Getönt“ ist besser lesbar.</p>
+      <p class="look-hint">„Klar“ ist durchsichtiger und lässt mehr vom Hintergrund durchscheinen, „Getönt“ ist besser lesbar.</p></div>
     </div>
     ${D.school === 'none' ? '' : `<p class="label-sm">EduPage</p><div id="edu-section">${edupageSection()}</div>`}
     <p class="label-sm">Mitteilungen</p>
