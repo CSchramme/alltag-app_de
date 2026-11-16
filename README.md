@@ -31,7 +31,7 @@ Danach http://localhost:3000 öffnen. Das Passwort ist `demo`, angezeigt werden 
 ## Auf Plesk einrichten
 
 1. **Domain:** Lege eine Domain oder Subdomain an, zum Beispiel `alltag.deine-domain.de`, und aktiviere unter *SSL/TLS-Zertifikate* Let's Encrypt. Ohne HTTPS gibt es keine Mitteilungen.
-2. **Code:** Unter *Git* das Repository `https://github.com/CSchramme/private.git` mit dem Zweig `main` in den Ordner der Domain holen (bei dir `/prvt.chrdev.eu`). Bei einem privaten Repository den Zugang mit Token oder Deploy-Key einrichten.
+2. **Code:** Unter *Git* das Repository `https://github.com/CSchramme/alltag-app_de.git` mit dem Zweig `main` in den Ordner der Domain holen (bei dir `/prvt.chrdev.eu`). Bei einem privaten Repository den Zugang mit Token oder Deploy-Key einrichten.
 3. **Node.js** (unter *Websites & Domains* → Domain → *Node.js*):
    - Node.js-Version: 20 oder neuer
    - Anwendungsstamm: der Ordner mit `app.js` (bei dir `/prvt.chrdev.eu`)
@@ -54,7 +54,7 @@ Dieselbe App, nur mit Konten, Einladungscodes, eigenem Look und ohne Home Assist
 **Erst am PC:** `.env.beispiel` nach `.env` kopieren, ausfüllen, `npm start`, dann http://localhost:3000 öffnen. Alle Konten landen in `data-public/`. Für den Umzug auf den Server den Code per Git holen und **`.env` und `data-public/`** in den App-Ordner hochladen (neben `app.js`, nicht in `public/`). Beide kommen nie ins Git. Wichtig: Der `DATA_KEY` muss derselbe bleiben, sonst lassen sich die gespeicherten Schul-Passwörter nicht mehr entschlüsseln.
 
 1. **Domain** `alltag-app.de` in Plesk anlegen, unter *SSL/TLS-Zertifikate* Let's Encrypt aktivieren und **„Dauerhafte, SEO-sichere 301-Weiterleitung von HTTP zu HTTPS“** einschalten.
-2. **Git:** dasselbe Repository `CSchramme/private`, Zweig `main`, in den Ordner der neuen Domain holen.
+2. **Git:** dasselbe Repository `CSchramme/alltag-app_de`, Zweig `main`, in den Ordner der neuen Domain holen.
 3. **Node.js** wie oben (Anwendungsstamm = Ordner mit `app.js`, Dokumentenstamm = `public`, Startdatei `app.js`).
 4. **Umgebungsvariablen:**
 
