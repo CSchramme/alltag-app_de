@@ -16,6 +16,7 @@ edupage.js    EduPage-Zugriff (übertragen aus der Python-Bibliothek edupage-api
 push.js       Web-Push (RFC 8291/8292) mit Node-Bordmitteln
 demo.js       Beispieldaten
 public/       die Web-App (Dokumentenstamm), dazu widget.js für Scriptable
+pages/        die HTML-Seiten (Start, Impressum, Datenschutz) – liefert nur die App aus, nicht der Webserver
 data/         wird beim Start angelegt: Schlüssel, EduPage-Zugang, deine Einträge – geheim, nie veröffentlichen
 main.py       das ursprüngliche Python-Skript (wird von der App nicht gebraucht)
 ```
@@ -54,7 +55,7 @@ Dieselbe App, nur mit Konten, Einladungscodes, eigenem Look und ohne Home Assist
 **Erst am PC:** `.env.beispiel` nach `.env` kopieren, ausfüllen, `npm start`, dann http://localhost:3000 öffnen. Alle Konten landen in `data-public/`. Für den Umzug auf den Server den Code per Git holen und **`.env` und `data-public/`** in den App-Ordner hochladen (neben `app.js`, nicht in `public/`). Beide kommen nie ins Git. Wichtig: Der `DATA_KEY` muss derselbe bleiben, sonst lassen sich die gespeicherten Schul-Passwörter nicht mehr entschlüsseln.
 
 1. **Domain** `alltag-app.de` in Plesk anlegen, unter *SSL/TLS-Zertifikate* Let's Encrypt aktivieren und **„Dauerhafte, SEO-sichere 301-Weiterleitung von HTTP zu HTTPS“** einschalten.
-2. **Git:** dasselbe Repository `CSchramme/alltag-app_de`, Zweig `main`, in den Ordner der neuen Domain holen.
+2. **Git:** dasselbe Repository `CSchramme/alltag-app_de`, Zweig `main`. Den **Bereitstellungspfad** (Serverpfad) auf den Ordner der Domain stellen, z. B. `/alltag-app.de`, **nicht** auf `public`. Sonst landet das ganze Projekt im öffentlichen Ordner.
 3. **Node.js** wie oben (Anwendungsstamm = Ordner mit `app.js`, Dokumentenstamm = `public`, Startdatei `app.js`).
 4. **Umgebungsvariablen:**
 

@@ -1143,11 +1143,15 @@ const legal = (html) => html.replace(/\{\{(LEGAL_[A-Z_]+)\}\}/g, (m, k) => {
   return v ? escHtml(v) : `<mark>noch eintragen: ${k}</mark>`;
 });
 
+// Die HTML-Seiten liegen in pages/, nicht in public/: Plesk liefert alles in public/ direkt über nginx aus, an der App vorbei.
+// Dann fehlten Look, Impressum-Angaben und Sicherheits-Header. Nur die App liefert sie deshalb aus.
+const PAGES = path.join(__dirname, 'pages');
+const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html' };
 function serveStatic(req, res, pathname) {
   let rel;
-  try { rel = decodeURIComponent(pathname === '/' ? '/index.html' : pathname); } catch { return send(res, 400, 'Bad Request'); }
-  const fp = path.join(PUBLIC, rel);
-  if (!fp.startsWith(PUBLIC + path.sep)) return send(res, 404, 'Not Found');
+  try { rel = decodeURIComponent(pathname); } catch { return send(res, 400, 'Bad Request'); }
+  const page = PAGE_FILES[pathname], fp = page ? path.join(PAGES, page) : path.join(PUBLIC, rel);
+  if (!page && !fp.startsWith(PUBLIC + path.sep)) return send(res, 404, 'Not Found');
   fs.readFile(fp, (err, buf) => {
     if (err) return send(res, 404, 'Not Found');
     const type = TYPES[path.extname(fp)] || 'application/octet-stream';

@@ -292,6 +292,8 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'origin.json'), 'utf8')), `http://localhost:${port}`);
     assert.equal((await call('/api/push/subscribe', { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify({ endpoint: 'http://x' }) })).status, 400);
 
+    // HTML nie in public/: Plesk würde sie an der App vorbei ausliefern (ohne Look, Impressum-Angaben und CSP)
+    assert.ok(!fs.readdirSync(path.join(__dirname, 'public')).some((f) => f.endsWith('.html')));
     // statische Dateien, kein Ausbruch aus public/
     const index = await call('/');
     const indexHtml = await index.text();
