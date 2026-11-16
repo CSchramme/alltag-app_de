@@ -307,7 +307,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   // 6. Öffentliche Version mit Konten: Einladungscodes, getrennte Daten, keine privaten Funktionen
   const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-konten-'));
   const port2 = port + 100;
-  const srv2 = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, DEMO: '', PRIVATE: '', ACCOUNTS: '1', APP_PASSWORD: 'start-code', DATA_DIR: dir2, PORT: String(port2) }, stdio: 'pipe' });
+  const srv2 = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, DEMO: '', PRIVATE: '', ACCOUNTS: '1', APP_PASSWORD: 'start-code', LEGAL_NAME: 'Max <Muster>', LEGAL_EMAIL: '', DATA_DIR: dir2, PORT: String(port2) }, stdio: 'pipe' });
   try {
     await new Promise((resolve, reject) => { srv2.stdout.on('data', (b) => String(b).includes('läuft') && resolve()); srv2.on('exit', reject); });
     const call = (p, o = {}, cookie) => fetch(`http://localhost:${port2}${p}`, { ...o, headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...o.headers } });
@@ -315,6 +315,9 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const ck = (r) => r.headers.get('set-cookie').split(';')[0];
     assert.deepEqual(await (await call('/api/info')).json(), { demo: false, accounts: true });
     assert.ok((await (await call('/')).text()).includes('<html lang="de" data-skin="modern">')); // öffentliche Version: eigener Look
+    const imp = await (await call('/impressum.html')).text(); // Angaben aus Plesk-Variablen, sicher eingesetzt; fehlende sichtbar markiert
+    assert.ok(imp.includes('Max &#60;Muster&#62;') && imp.includes('noch eintragen: LEGAL_EMAIL') && !imp.includes('{{'));
+    assert.ok((await (await call('/datenschutz.html')).text()).includes('PEIN GbR'));
     assert.equal((await post('/api/register', { name: 'chef', password: 'geheim123', code: 'falsch', school: 'edupage' })).status, 403);
     const r1 = await post('/api/register', { name: 'Chef', password: 'geheim123', code: 'start-code', school: 'edupage' });
     assert.equal(r1.status, 200);

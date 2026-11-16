@@ -837,3 +837,9 @@ button.banner { display: flex; text-align: left; }
   .hero-points { display: none; }
   .hero-sub { font-size: 16px; }
 }
+
+/* Impressum und Datenschutz verlinken (nur öffentliche Version, die private App braucht das nicht) */
+.legal-links { display: none; }
+:root[data-skin="modern"] .legal-links { display: flex; justify-content: center; gap: 22px; margin: 18px 0 0; font-size: 14px; }
+:root[data-skin="modern"] .legal-links a { color: var(--label2); }
+:root[data-skin="modern"] #login .legal-links { grid-column: 1 / -1; padding-bottom: 8px; }

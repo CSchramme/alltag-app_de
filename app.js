@@ -1033,6 +1033,14 @@ const routes = {
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.json': 'application/json', '.ico': 'image/x-icon' };
 const CSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
+// Impressum und Datenschutz: persönliche Angaben kommen aus Umgebungsvariablen (Plesk), nicht aus dem Code auf GitHub
+const LEGAL_DEFAULTS = { LEGAL_HOSTER: 'PEIN GbR' };
+const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const legal = (html) => html.replace(/\{\{(LEGAL_[A-Z_]+)\}\}/g, (m, k) => {
+  const v = process.env[k] || LEGAL_DEFAULTS[k];
+  return v ? escHtml(v) : `<mark>noch eintragen: ${k}</mark>`;
+});
+
 function serveStatic(req, res, pathname) {
   let rel;
   try { rel = decodeURIComponent(pathname === '/' ? '/index.html' : pathname); } catch { return send(res, 400, 'Bad Request'); }
@@ -1041,7 +1049,11 @@ function serveStatic(req, res, pathname) {
   fs.readFile(fp, (err, buf) => {
     if (err) return send(res, 404, 'Not Found');
     const type = TYPES[path.extname(fp)] || 'application/octet-stream';
-    if (!PRIVATE && type.startsWith('text/html')) buf = Buffer.from(buf.toString('utf8').replace('<html lang="de">', '<html lang="de" data-skin="modern">')); // öffentliche Version: eigener Look
+    if (type.startsWith('text/html')) {
+      let html = buf.toString('utf8');
+      if (!PRIVATE) html = html.replace('<html lang="de">', '<html lang="de" data-skin="modern">'); // öffentliche Version: eigener Look
+      buf = Buffer.from(legal(html));
+    }
     res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', ...(type.startsWith('text/html') ? { 'Content-Security-Policy': CSP } : {}) });
     res.end(req.method === 'HEAD' ? undefined : buf);
   });

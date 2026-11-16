@@ -1733,7 +1733,8 @@ async function openSettings() {
       <button class="row" id="cron-copy" disabled><span class="btn-plain">Adresse kopieren</span></button>
     </div>
     <p class="footnote" id="cron-hint" style="margin-top:8px;text-align:left"></p></div>
-    <div class="list card" style="margin-top:22px"><button class="row" id="logout"><span class="btn-plain danger">Abmelden</span></button></div>`);
+    <div class="list card" style="margin-top:22px"><button class="row" id="logout"><span class="btn-plain danger">Abmelden</span></button></div>
+    <p class="legal-links"><a target="_blank" rel="noopener" href="/impressum.html">Impressum</a><a target="_blank" rel="noopener" href="/datenschutz.html">Datenschutz</a></p>`);
 
   $('#logout').onclick = logout;
   $('#lesson-push').onchange = async (e) => {
@@ -2091,7 +2092,8 @@ function loginMode() {
       <input name="code" placeholder="Einladungscode" aria-label="Einladungscode" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
       <p>Welche Schulsoftware nutzt deine Schule?</p>
       ${fChoice('school', SCHOOL_OPTS, 'edupage')}
-      <p>Bei „Keine“ trägst du deinen Stundenplan selbst ein. WebUntis und Schulmanager kommen bald.</p></div>`);
+      <p>Bei „Keine“ trägst du deinen Stundenplan selbst ein. WebUntis und Schulmanager kommen bald.</p>
+      <p>Was mit deinen Daten passiert, steht in der <a href="/datenschutz.html" target="_blank" rel="noopener">Datenschutzerklärung</a>.</p></div>`);
   }
   $('button[type=submit]', f).textContent = registering ? 'Konto anlegen' : 'Anmelden';
   const sw = $('.login-switch', f);
