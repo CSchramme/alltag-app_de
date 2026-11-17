@@ -144,8 +144,9 @@ const supportId = (a) => a.id.replace(/-/g, '').slice(0, 8).toUpperCase().replac
 const school = () => me()?.school || 'edupage';
 function admin() { if (!me()?.admin) throw Object.assign(new Error('Nur für Admins'), { status: 403 }); }
 const demoAccount = () => accounts().find((a) => a.demo && !a.disabled);
-const adminData = () => ({ accounts: accounts().map(pubAccount), contact: process.env.LEGAL_EMAIL || '', site: process.env.PUBLIC_URL || '',
-  invites: invites().slice(-300).map((x) => ({ ...x, expired: !x.usedBy && !inviteOpen(x), expires: new Date(inviteEnd(x)).toISOString() })) });
+const adminData = () => ({ accounts: accounts().map(pubAccount), site: process.env.PUBLIC_URL || '',
+  legal: { name: process.env.LEGAL_NAME || '', address: process.env.LEGAL_ADDRESS || '', email: process.env.LEGAL_EMAIL || '' }, // fürs Impressum auf dem Flyer
+  invites: invites().slice(-300).map(({ used, ...x }) => ({ ...x, usedCount: usedCount({ ...x, used }), open: inviteOpen({ ...x, used }), expires: new Date(inviteEnd(x)).toISOString() })) });
 const pubAccount = (a) => ({ id: a.id, support: supportId(a), name: a.name, school: a.school, admin: !!a.admin, disabled: !!a.disabled, demo: !!a.demo, jury: !!a.jury, created: a.created, lastSeen: a.lastSeen || null });
 // Hintergrund-Aufgaben nacheinander für jedes aktive Konto (ohne Konten: einmal für die App)
 async function eachUser(fn) {
@@ -158,7 +159,8 @@ async function eachUser(fn) {
 // und nach 30 falschen Codes in einer Stunde pausiert das Registrieren (die Anmeldung bleibt davon unberührt).
 const INVITE_DAYS = 7;
 const inviteEnd = (x) => Date.parse(x.created) + (x.days || INVITE_DAYS) * 864e5; // Flyer-Codes gelten 30 Tage
-const inviteOpen = (x) => !x.usedBy && Date.now() < inviteEnd(x);
+const usedCount = (x) => (x.uses ? (x.used || []).length : x.usedBy ? 1 : 0);
+const inviteOpen = (x) => usedCount(x) < (x.uses || 1) && Date.now() < inviteEnd(x); // Sammelcode (Flyer): gilt für `uses` Anmeldungen
 function newInvite(list) {
   let c;
   do c = String(crypto.randomInt(0, 1e6)).padStart(6, '0'); while (list.some((x) => x.code === c && !x.usedBy));
@@ -695,7 +697,7 @@ const routes = {
     const a = { id: crypto.randomUUID(), name, ...hashPw(pw), school: b.school, admin: first, created: new Date().toISOString(), ver: 0 };
     fs.mkdirSync(userDir(a.id), { recursive: true, mode: 0o700 });
     saveAccounts([...list, a]);
-    if (hit) { hit.usedBy = a.id; hit.usedAt = a.created; saveInvites(inv); }
+    if (hit?.uses) { hit.used = [...(hit.used || []), a.id]; saveInvites(inv); } else if (hit) { hit.usedBy = a.id; hit.usedAt = a.created; saveInvites(inv); }
     send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 365 * 86400, a) });
   },
   // Demo ansehen ohne Passwort (Knopf auf der Startseite, QR-Code mit #demo)
@@ -744,12 +746,14 @@ const routes = {
   'POST /api/admin/invites': async (req, res) => {
     admin();
     const b = await readJson(req), note = F.text(80)(b.note), list = invites();
-    const count = Math.min(40, Math.max(1, Math.trunc(Number(b.count)) || 1)), days = [30, 60, 90].includes(b.days) ? b.days : INVITE_DAYS; // Flyer: länger gültig, normale Einladung 7 Tage
+    const days = [30, 60, 90].includes(b.days) ? b.days : INVITE_DAYS; // Flyer: länger gültig, normale Einladung 7 Tage
+    const uses = Math.min(1000, Math.max(0, Math.trunc(Number(b.uses)) || 0)); // Sammelcode: ein Code für viele Anmeldungen
+    const count = uses ? 1 : Math.min(40, Math.max(1, Math.trunc(Number(b.count)) || 1));
     if (list.filter(inviteOpen).length + count > 200) throw bad('Es gibt schon zu viele offene Codes. Lösch erst ein paar.');
     const created = [];
     for (let i = 0; i < count; i++) {
       const code = newInvite(list);
-      list.push({ code, note, days, created: new Date().toISOString(), usedBy: null, usedAt: null });
+      list.push({ code, note, days, ...(uses ? { uses, used: [] } : {}), created: new Date().toISOString(), usedBy: null, usedAt: null });
       created.push(code);
     }
     saveInvites(list);
@@ -1146,7 +1150,7 @@ const legal = (html) => html.replace(/\{\{(LEGAL_[A-Z_]+)\}\}/g, (m, k) => {
 // Die HTML-Seiten liegen in pages/, nicht in public/: Plesk liefert alles in public/ direkt über nginx aus, an der App vorbei.
 // Dann fehlten Look, Impressum-Angaben und Sicherheits-Header. Nur die App liefert sie deshalb aus.
 const PAGES = path.join(__dirname, 'pages');
-const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html' };
+const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/admin': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html' };
 function serveStatic(req, res, pathname) {
   let rel;
   try { rel = decodeURIComponent(pathname); } catch { return send(res, 400, 'Bad Request'); }

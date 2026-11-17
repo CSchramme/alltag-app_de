@@ -1,10 +1,17 @@
-// Flyer zum Ausdrucken: 10 × 15 cm bei 300 dpi (Fotoformat, z. B. dm-Fotodruck), je Flyer ein eigener Einladungscode.
-// Alle Bilder kommen in eine ZIP-Datei. Wird erst geladen, wenn ein Admin Flyer erstellt.
-export const W = 1200, H = 1800;
+// Doppelseitiger Flyer A6 (105 × 148 mm) mit 3 mm Beschnitt, 300 dpi: Vorderseite (Botschaft) und Rückseite (Sammelcode,
+// Schritte, Kontakt). Ergebnis: ZIP mit zwei JPGs (z. B. dm-Fotodruck) und einer zweiseitigen Druck-PDF (Druckerei).
+// Wird erst geladen, wenn ein Admin einen Flyer erstellt.
+const MM = 300 / 25.4;                       // Pixel je Millimeter bei 300 dpi
+export const BLEED = 3, TRIM_W = 105, TRIM_H = 148;
+export const W = Math.round((TRIM_W + 2 * BLEED) * MM), H = Math.round((TRIM_H + 2 * BLEED) * MM); // 1311 × 1819
+const X = Math.round((BLEED + 6) * MM);      // Text mindestens 6 mm innerhalb der Schnittkante
 const SANS = 'Inter, "Segoe UI", -apple-system, system-ui, Roboto, sans-serif';
 const font = (weight, size) => `${weight} ${size}px ${SANS}`;
 
-// Zeilenumbruch für Canvas: gibt die y-Position nach dem letzten Absatz zurück
+function fit(g, text, weight, size, maxW) { // Schriftgröße verkleinern, bis der Text in die Breite passt
+  do g.font = font(weight, size); while (g.measureText(text).width > maxW && --size > 10);
+  return size;
+}
 function wrap(g, text, x, y, width, lineHeight) {
   let line = '';
   for (const word of text.split(' ')) {
@@ -19,62 +26,98 @@ function roundRect(g, x, y, w, h, r) {
   g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r);
   g.closePath();
 }
-
-function draw(g, icon, { code, until, email, site }) {
-  // Hintergrund wie die Startseite: fast schwarzes Blau mit Sternen (je Code etwas anders verteilt)
+function sky(g, seed) { // fast schwarzes Blau mit Sternen, wie die Startseite
   g.fillStyle = '#0b0e17';
   g.fillRect(0, 0, W, H);
-  let seed = Number(code) + 7;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  for (let i = 0; i < 240; i++) {
-    g.fillStyle = `rgba(190, 205, 255, ${0.12 + rnd() * 0.45})`;
+  for (let i = 0; i < 230; i++) {
+    g.fillStyle = `rgba(190, 205, 255, ${0.12 + rnd() * 0.42})`;
     g.beginPath(); g.arc(rnd() * W, rnd() * H, 0.8 + rnd() * 1.8, 0, Math.PI * 2); g.fill();
   }
-  const X = 90, inner = W - 2 * X;
-  g.drawImage(icon, X, 100, 150, 150);
-  g.fillStyle = '#eef1f8'; g.font = font(800, 96);
-  g.fillText('Alltag', X + 180, 208);
+}
+const gradient = (g, x, w) => {
+  const gr = g.createLinearGradient(x, 0, x + w, 0);
+  gr.addColorStop(0, '#a9bcff'); gr.addColorStop(1, '#a191ff');
+  return gr;
+};
 
-  g.font = font(800, 86);
-  ['Kalender,', 'Stundenplan,', 'Hausaufgaben.'].forEach((t, i) => g.fillText(t, X, 420 + i * 98));
-  const grad = g.createLinearGradient(X, 0, X + 880, 0);
-  grad.addColorStop(0, '#a9bcff'); grad.addColorStop(1, '#a191ff');
-  g.fillStyle = grad;
-  g.fillText('Alles in einer App.', X, 714);
+function front(g, icon, { site }) {
+  sky(g, 12345);
+  const inner = W - 2 * X;
+  g.drawImage(icon, X, 150, 170, 170);
+  g.fillStyle = '#eef1f8'; g.font = font(800, 104);
+  g.fillText('Alltag', X + 205, 270);
 
-  g.font = font(500, 38);
-  let y = 820;
-  for (const t of ['Stundenplan und Vertretungen aus deiner Schulsoftware', 'Mitteilung, wenn eine Stunde ausfällt', 'Termine, Hausaufgaben und Noten an einem Ort']) {
+  const size = fit(g, 'Hausaufgaben.', 800, 120, inner);
+  ['Kalender,', 'Stundenplan,', 'Hausaufgaben.'].forEach((t, i) => g.fillText(t, X, 560 + i * size * 1.08));
+  const last = 560 + 3 * size * 1.08;
+  fit(g, 'Alles in einer App.', 800, size, inner);
+  g.fillStyle = gradient(g, X, inner);
+  g.fillText('Alles in einer App.', X, last);
+
+  g.font = font(500, 42);
+  let y = last + 130;
+  for (const t of ['Stundenplan und Vertretungen aus deiner Schulsoftware', 'Mitteilung, wenn eine Stunde ausfällt', 'Hausaufgaben, Termine und Noten an einem Ort', 'Kostenlos und ohne Werbung']) {
     g.fillStyle = '#34d399'; g.fillText('✓', X, y);
-    g.fillStyle = '#c6cddd'; y = wrap(g, t, X + 52, y, inner - 52, 50) + 14;
+    g.fillStyle = '#c6cddd'; y = wrap(g, t, X + 58, y, inner - 58, 54) + 18;
   }
 
-  // Code-Karte
-  const cy = 1060;
-  roundRect(g, X, cy, inner, 390, 36);
-  g.fillStyle = '#121725'; g.fill();
-  g.lineWidth = 3; g.strokeStyle = '#2b3554'; g.stroke();
-  g.fillStyle = '#98a1b6'; g.font = font(600, 38);
-  g.fillText('Dein Einladungscode', X + 50, cy + 82);
-  g.fillStyle = '#ffffff'; g.font = font(800, 156);
-  if ('letterSpacing' in g) g.letterSpacing = '8px';
-  g.fillText(`${code.slice(0, 3)} ${code.slice(3)}`, X + 44, cy + 250);
-  if ('letterSpacing' in g) g.letterSpacing = '0px';
-  g.fillStyle = '#98a1b6'; g.font = font(500, 36);
-  g.fillText(`gültig bis ${until} · nur einmal nutzbar`, X + 50, cy + 330);
-
-  // So geht's
-  g.fillStyle = '#eef1f8'; g.font = font(600, 40);
-  [`1.  ${site} öffnen`, '2.  „Mit Einladungscode registrieren“', '3.  Code eingeben, fertig'].forEach((t, i) => g.fillText(t, X, 1550 + i * 62));
-
-  g.fillStyle = '#98a1b6'; g.font = font(500, 32);
-  if (email) g.fillText(`Fragen? ${email}`, X, 1750);
-  g.textAlign = 'right';
-  g.fillText('Jugend forscht 2027', W - X, 1750);
+  // unten: Abzeichen und Adresse
+  const by = H - X - 40;
+  g.font = font(600, 34);
+  const badge = 'Projekt bei Jugend forscht 2027', bw = g.measureText(badge).width + 56;
+  roundRect(g, X, by - 50, bw, 72, 36);
+  g.fillStyle = 'rgba(126, 166, 255, .14)'; g.fill();
+  g.lineWidth = 2; g.strokeStyle = 'rgba(126, 166, 255, .45)'; g.stroke();
+  g.fillStyle = '#a9bcff'; g.fillText(badge, X + 28, by - 2);
+  g.textAlign = 'right'; g.fillStyle = '#eef1f8'; g.font = font(700, 40);
+  g.fillText(site, W - X, by - 2);
   g.textAlign = 'left';
 }
 
-// ZIP ohne Kompression (JPEGs sind schon gepackt): Dateikopf je Datei, Inhaltsverzeichnis, Abschluss
+function back(g, icon, { code, until, email, site, name, address }) {
+  sky(g, 54321);
+  const inner = W - 2 * X;
+  g.drawImage(icon, X, 150, 96, 96);
+  g.fillStyle = '#eef1f8'; g.font = font(800, 92);
+  g.fillText('So bist du dabei', X + 124, 228);
+
+  const steps = [`${site} öffnen`, '„Mit Einladungscode registrieren“', 'Code unten eingeben, fertig'];
+  steps.forEach((t, i) => {
+    const y = 400 + i * 128;
+    g.beginPath(); g.arc(X + 38, y - 14, 38, 0, Math.PI * 2); g.fillStyle = '#7ea6ff'; g.fill();
+    g.fillStyle = '#0b0e17'; g.font = font(800, 44); g.textAlign = 'center'; g.fillText(String(i + 1), X + 38, y + 2);
+    g.textAlign = 'left'; g.fillStyle = '#eef1f8';
+    fit(g, t, 600, 46, inner - 100);
+    g.fillText(t, X + 100, y);
+  });
+  g.fillStyle = '#98a1b6'; g.font = font(500, 34);
+  wrap(g, 'Tipp fürs iPhone: In Safari auf „Teilen“ und „Zum Home-Bildschirm“, dann bekommst du Mitteilungen.', X, 840, inner, 46);
+
+  // Code-Karte
+  const cy = 1010, ch = 400;
+  roundRect(g, X, cy, inner, ch, 36);
+  g.fillStyle = '#121725'; g.fill();
+  g.lineWidth = 3; g.strokeStyle = '#2b3554'; g.stroke();
+  g.fillStyle = '#98a1b6'; g.font = font(600, 40);
+  g.fillText('Einladungscode', X + 50, cy + 90);
+  g.fillStyle = '#ffffff';
+  if ('letterSpacing' in g) g.letterSpacing = '10px';
+  fit(g, `${code.slice(0, 3)} ${code.slice(3)}`, 800, 170, inner - 100);
+  g.fillText(`${code.slice(0, 3)} ${code.slice(3)}`, X + 44, cy + 270);
+  if ('letterSpacing' in g) g.letterSpacing = '0px';
+  g.fillStyle = '#98a1b6'; g.font = font(500, 38);
+  g.fillText(`gültig bis ${until}`, X + 50, cy + 350);
+
+  let y = cy + ch + 110;
+  g.fillStyle = '#eef1f8'; g.font = font(600, 40);
+  if (email) { fit(g, `Fragen? ${email}`, 600, 40, inner); g.fillText(`Fragen? ${email}`, X, y); y += 70; }
+  g.fillStyle = '#98a1b6'; g.font = font(500, 30);
+  y = wrap(g, 'Alltag ist ein Schülerprojekt: kostenlos, ohne Werbung. Datenschutz und Impressum auf der Website.', X, y, inner, 42);
+  if (name) { g.font = font(500, 28); wrap(g, `Verantwortlich: ${[name, address].filter(Boolean).join(', ')}`, X, H - X - 30, inner, 38); }
+}
+
+// ZIP ohne Kompression (JPEG und PDF sind schon gepackt): Dateikopf je Datei, Inhaltsverzeichnis, Abschluss
 const CRC = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
 const crc32 = (d) => { let c = 0xffffffff; for (const b of d) c = CRC[(c ^ b) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
 export function zip(files, now = new Date()) {
@@ -100,20 +143,60 @@ export function zip(files, now = new Date()) {
   return new Blob([...parts, ...dir, new Uint8Array(end.buffer)], { type: 'application/zip' });
 }
 
-// Alle Flyer zeichnen → { zip, preview } (preview = Bild des ersten Flyers zum Anzeigen)
-export async function flyers({ codes, until, email, site }) {
+// PDF: je Bild eine Seite in Endformat + Beschnitt; TrimBox/BleedBox sagen der Druckerei, wo geschnitten wird
+export function pdf(images, trimW = TRIM_W, trimH = TRIM_H, bleed = BLEED) {
+  const pt = (mm) => (mm * 72 / 25.4).toFixed(2), enc = new TextEncoder();
+  const PW = pt(trimW + 2 * bleed), PH = pt(trimH + 2 * bleed), b = pt(bleed), tw = pt(trimW + bleed), th = pt(trimH + bleed);
+  const parts = [], offsets = [];
+  let size = 0;
+  const add = (x) => { const d = typeof x === 'string' ? enc.encode(x) : x; parts.push(d); size += d.length; };
+  const obj = (n, body) => { offsets[n] = size; add(`${n} 0 obj\n`); body(); add('\nendobj\n'); };
+  add('%PDF-1.4\n%âãÏÓ\n');
+  obj(1, () => add('<< /Type /Catalog /Pages 2 0 R >>'));
+  obj(2, () => add(`<< /Type /Pages /Kids [${images.map((_, i) => `${3 + i * 3} 0 R`).join(' ')}] /Count ${images.length} >>`));
+  images.forEach((im, i) => {
+    const p = 3 + i * 3, draw = `q ${PW} 0 0 ${PH} 0 0 cm /Im0 Do Q`;
+    obj(p, () => add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PW} ${PH}] /BleedBox [0 0 ${PW} ${PH}] /TrimBox [${b} ${b} ${tw} ${th}] /Resources << /XObject << /Im0 ${p + 2} 0 R >> >> /Contents ${p + 1} 0 R >>`));
+    obj(p + 1, () => add(`<< /Length ${draw.length} >>\nstream\n${draw}\nendstream`));
+    obj(p + 2, () => { add(`<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.data.length} >>\nstream\n`); add(im.data); add('\nendstream'); });
+  });
+  const count = 3 + images.length * 3, xref = size;
+  add(`xref\n0 ${count}\n0000000000 65535 f \n${offsets.slice(1).map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${count} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return new Blob(parts, { type: 'application/pdf' });
+}
+
+const README = `Alltag-Flyer, A6 doppelseitig
+
+Endformat: 105 x 148 mm (A6), Hochformat
+Dateien mit 3 mm Beschnitt auf jeder Seite (111 x 154 mm), 300 dpi
+
+alltag-flyer-vorne.jpg und alltag-flyer-hinten.jpg
+  Fuer Fotodruck oder Postkarten-Editor (z. B. dm): Vorderseite und Rueckseite einzeln hochladen.
+  Falls der Editor kein Beschnittformat kennt: Bild auf A6 einpassen, der Rand darf abgeschnitten werden.
+
+alltag-flyer-A6-druck.pdf
+  Fuer Online-Druckereien: Seite 1 = vorne, Seite 2 = hinten, Endformat A6 mit 3 mm Beschnitt.
+`;
+
+// Vorder- und Rückseite zeichnen → { zip, front, back } (front/back = Vorschaubilder)
+export async function flyerA6(info) {
   const icon = new Image();
   icon.src = '/icon.svg';
   await icon.decode();
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
-  const g = canvas.getContext('2d'), files = [];
-  let preview = '';
-  for (const [i, code] of codes.entries()) {
-    draw(g, icon, { code, until, email, site });
-    if (!i) preview = canvas.toDataURL('image/jpeg', 0.8);
+  const g = canvas.getContext('2d'), out = {}, images = [];
+  for (const [side, draw] of [['front', front], ['back', back]]) {
+    draw(g, icon, info);
+    out[side] = canvas.toDataURL('image/jpeg', 0.75);
     const blob = await new Promise((ok) => canvas.toBlob(ok, 'image/jpeg', 0.92));
-    files.push({ name: `alltag-flyer-${String(i + 1).padStart(2, '0')}-${code}.jpg`, data: new Uint8Array(await blob.arrayBuffer()) });
+    images.push({ data: new Uint8Array(await blob.arrayBuffer()), w: W, h: H });
   }
-  return { zip: zip(files), preview };
+  out.zip = zip([
+    { name: 'alltag-flyer-vorne.jpg', data: images[0].data },
+    { name: 'alltag-flyer-hinten.jpg', data: images[1].data },
+    { name: 'alltag-flyer-A6-druck.pdf', data: new Uint8Array(await pdf(images).arrayBuffer()) },
+    { name: 'LIESMICH.txt', data: new TextEncoder().encode(README) },
+  ]);
+  return out;
 }

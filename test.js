@@ -412,12 +412,21 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const fl999 = await (await post('/api/admin/invites', { count: 1, days: 999 }, c1)).json(); // unbekannte Dauer → 7 Tage
     assert.ok((Date.parse(fl999.invites.find((i) => i.code === fl999.created[0]).expires) - Date.now()) / 864e5 <= 7);
     assert.equal((await call('/flyer.mjs')).headers.get('content-type'), 'text/javascript; charset=utf-8');
+    // Sammelcode für Flyer: ein Code für mehrere Anmeldungen, danach geschlossen
+    const sc = await (await post('/api/admin/invites', { uses: 2, days: 90, note: 'Flyer Sammel' }, c1)).json();
+    assert.equal(sc.created.length, 1);
+    const scode = sc.created[0];
+    for (const n of ['flyer-a', 'flyer-b']) assert.equal((await post('/api/register', { name: n, password: 'gruene-wiese-9', code: scode, school: 'none' })).status, 200);
+    assert.equal((await post('/api/register', { name: 'flyer-c', password: 'gruene-wiese-9', code: scode, school: 'none' })).status, 403);
+    const scInv = (await (await call('/api/admin', {}, c1)).json()).invites.find((i) => i.code === scode);
+    assert.deepEqual([scInv.usedCount, scInv.uses, scInv.open, 'used' in scInv], [2, 2, false, false]); // Liste der Konten bleibt auf dem Server
+    assert.ok((await (await call('/admin')).text()).includes('data-skin="modern"')); // Verwaltung als eigene Seite
     // Codes laufen nach 7 Tagen ab
     const code4 = (await (await post('/api/admin/invites', { note: 'alt' }, c1)).json()).invites.find((i) => !i.usedBy && i.note === 'alt').code;
     const invFile = path.join(dir2, 'invites.json');
     fs.writeFileSync(invFile, JSON.stringify(JSON.parse(fs.readFileSync(invFile, 'utf8')).map((i) => (i.code === code4 ? { ...i, created: new Date(Date.now() - 8 * 864e5).toISOString() } : i))));
     assert.equal((await post('/api/register', { name: 'zu-spaet', password: 'gruene-wiese-8', code: code4, school: 'none' })).status, 403);
-    assert.ok((await (await call('/api/admin', {}, c1)).json()).invites.find((i) => i.code === code4).expired);
+    assert.ok((await (await call('/api/admin', {}, c1)).json()).invites.find((i) => i.code === code4).open === false);
     assert.equal((await post('/api/register', { name: 'leander', password: 'xxleanderxx', code: code3, school: 'none' })).status, 400);
     // Widget-Schlüssel erneuern: der alte gilt sofort nicht mehr
     const w1 = (await (await call('/api/tokens', {}, c1)).json()).widget;
@@ -446,6 +455,13 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   assert.equal(zbuf.readUInt16LE(zbuf.length - 12), 2);
   if (require('zlib').crc32) assert.equal(zbuf.readUInt32LE(14), require('zlib').crc32(Buffer.from('Hallo')));
   assert.equal(zbuf.subarray(35, 40).toString(), 'Hallo'); // 30 Byte Kopf + 5 Byte Name
+
+  // Druck-PDF: zwei Seiten A6 mit Beschnitt, Querverweise (xref) zeigen genau auf die Objekte
+  const { pdf } = await import(require('url').pathToFileURL(path.join(__dirname, 'public', 'flyer.mjs')).href);
+  const pbuf = Buffer.from(await pdf([{ data: Buffer.from([0xff, 0xd8, 0xff, 0xd9]), w: 2, h: 2 }, { data: Buffer.from([0xff, 0xd8, 0xff, 0xd9]), w: 2, h: 2 }]).arrayBuffer());
+  const ptxt = pbuf.toString('latin1'), xrefAt = Number(ptxt.match(/startxref\n(\d+)/)[1]);
+  assert.ok(ptxt.startsWith('%PDF-1.4') && ptxt.slice(xrefAt).startsWith('xref') && /\/Count 2/.test(ptxt) && /\/TrimBox \[8\.50 8\.50 306\.14 428\.03\]/.test(ptxt));
+  [...ptxt.slice(xrefAt).matchAll(/^(\d{10}) 00000 n $/gm)].forEach(([, off], i) => assert.ok(ptxt.startsWith(`${i + 1} 0 obj`, Number(off))));
 
   // 8. Mit Konten startet der Server nicht ohne ausreichend langen DATA_KEY
   const noKey = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, ENV_FILE: '', DEMO: '', ACCOUNTS: '1', APP_PASSWORD: 'x', DATA_KEY: 'kurz', DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-ohne-')), PORT: String(port + 200) }, stdio: 'pipe' });

@@ -189,6 +189,7 @@ function setData(d) {
   if (!calWeek().includes(planDay)) planDay = calWeek().includes(today()) ? today() : weekStart;
   renderAll();
   if (first) { measureTabs(); lensSet(tabGeo[tabIndex(tab)][0]); route(); }
+  if (first && ADMIN_PAGE) { if (D.account?.admin) openAdmin(); else location.replace('/'); }
 }
 
 function boot(msg) { $('#boot').hidden = false; $('#boot p').textContent = msg; }
@@ -1835,7 +1836,7 @@ function accountSection() {
     ${group(sid, fRow('Schulsoftware', `<select id="school-select">${SCHOOL_OPTS.map(([v, l]) => `<option value="${v}"${D.school === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`),
       '<button class="row" data-account="password"><span class="btn-plain">Passwort ändern</span></button>',
       '<button class="row" data-account="others"><span class="btn-plain">Auf allen anderen Geräten abmelden</span></button>',
-      a.admin ? `<button class="row" data-account="admin"><div class="main"><div class="title">Einladungen und Konten</div></div>${ICON.chev}</button>` : '',
+      a.admin ? `<a class="row" href="/admin"><div class="main"><div class="title">Verwaltung öffnen</div><div class="sub">Einladungen, Flyer und Konten</div></div>${ICON.chev}</a>` : '',
       '<button class="row" data-account="delete"><span class="btn-plain danger">Konto löschen</span></button>')}`;
 }
 function wireAccount() {
@@ -1849,7 +1850,7 @@ function wireAccount() {
   const sup = $('#sheet [data-copy-support]');
   if (sup) sup.onclick = () => copy(D.account.support, $('#support-hint'));
   const others = async () => { try { await api('/api/account', { method: 'POST', body: { logoutOthers: true } }); haptic(); toast('Andere Geräte sind abgemeldet'); } catch (x) { toast(x.message); } };
-  $$('#sheet [data-account]').forEach((b) => { b.onclick = { password: openPassword, admin: () => openAdmin(), delete: openDeleteAccount, others }[b.dataset.account]; });
+  $$('#sheet [data-account]').forEach((b) => { b.onclick = { password: openPassword, delete: openDeleteAccount, others }[b.dataset.account]; });
   $$('#sheet [data-lesson]').forEach((b) => { b.onclick = () => lessonForm(D.db.lessons.find((l) => l.id === b.dataset.lesson)); });
   $('#sheet [data-new-lesson]')?.addEventListener('click', () => lessonForm());
 }
@@ -1890,73 +1891,112 @@ function openDeleteAccount() {
   };
 }
 
+/* ---------------------------------------------------------------- Verwaltung: eigene Seite /admin, nur für Admins */
+const ADMIN_PAGE = location.pathname === '/admin';
+let adminState = null, lastFlyer = null;
+const shownCode = (c) => String(c).replace(/^(\d{3})(\d{3})$/, '$1 $2'); // 482 913 liest sich leichter vor
 async function openAdmin(data) {
-  try { data ||= await api('/api/admin'); } catch (x) { return toast(x.message); }
+  if (!ADMIN_PAGE) { location.href = '/admin'; return; }
+  try { data ||= await api('/api/admin'); } catch (x) { toast(x.message); return; }
+  adminState = data;
+  let el = $('#admin-page');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'admin-page';
+    el.className = 'admin-page';
+    document.body.append(el);
+    appEl.inert = true; // die App darunter ist hier nicht bedienbar, Sheets (Konto-Details) liegen darüber
+  }
   const nameOf = (id) => data.accounts.find((a) => a.id === id)?.name || 'gelöschtes Konto';
-  const valid = data.invites.filter((i) => !i.usedBy && !i.expired), used = data.invites.filter((i) => i.usedBy).slice(-10).reverse();
-  const isFlyer = (i) => /^Flyer /.test(i.note || ''), open = valid.filter((i) => !isFlyer(i));
-  const batches = Object.entries(Object.groupBy ? Object.groupBy(valid.filter(isFlyer), (i) => i.note) : valid.filter(isFlyer).reduce((m, i) => ((m[i.note] ||= []).push(i), m), {}));
-  const shown = (c) => String(c).replace(/^(\d{3})(\d{3})$/, '$1 $2'); // 482 913 liest sich leichter vor
-  openSheet('Einladungen und Konten', `
-    <form class="form" id="invite-form">${group(fText('note', 'Für wen? (siehst nur du)', '', 'maxlength="80"'))}
-      <button class="btn-primary pressable" type="submit">Einladungscode erstellen</button></form>
-    <p class="footnote" id="invite-hint" style="text-align:left"></p>
-    <p class="label-sm">Flyer zum Ausdrucken</p>
-    <form class="form" id="flyer-form">${group(
-      fRow('Anzahl', `<select name="count">${[10, 20, 30, 40].map((n) => `<option value="${n}">${n} Flyer</option>`).join('')}</select>`),
-      fRow('Gültig', `<select name="days">${[30, 60, 90].map((n) => `<option value="${n}">${n} Tage</option>`).join('')}</select>`),
-      fText('email', 'Deine E-Mail für Fragen', data.contact, 'type="email" inputmode="email" autocapitalize="off" spellcheck="false" maxlength="120"'),
-      fText('site', 'Adresse der App', (data.site || location.host).replace(/^https?:\/\//, '').replace(/\/$/, ''), 'autocapitalize="off" spellcheck="false" maxlength="60" required'))}
-      <button class="btn-primary pressable" type="submit">Flyer erstellen</button></form>
-    <p class="footnote" style="text-align:left">Jeder Flyer bekommt einen eigenen Code, so lange gültig wie oben gewählt. Je länger und je mehr offene Codes, desto leichter lässt sich einer erraten; nicht genutzte Codes kannst du jederzeit löschen. Du bekommst eine ZIP-Datei mit Bildern im Fotoformat 10 × 15 cm (300 dpi), z. B. für den Fotodruck bei dm.</p>
-    <div id="flyer-preview"></div>
-    ${batches.length ? `<p class="label-sm">Flyer im Umlauf</p>${group(...batches.map(([note, list]) => `<div class="row"><div class="main"><div class="title">${esc(note)}</div><div class="sub">${list.length} Codes noch offen · gültig bis ${esc(F.short.format(new Date(list[0].expires)))}</div></div></div>`))}` : ''}
-    <p class="label-sm">Offene Codes</p>
-    ${open.length ? group(...open.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shown(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} · gültig bis ${esc(F.short.format(new Date(i.expires)))}</div>
-        <div class="code-actions"><button class="btn-plain" type="button" data-copy-code="${esc(i.code)}">Kopieren</button><button class="btn-plain danger" type="button" data-del-code="${esc(i.code)}">Löschen</button></div></div></div>`))
-      : '<p class="footnote" style="text-align:left">Keine offenen Codes. Jeder Code funktioniert genau einmal und 7 Tage lang.</p>'}
-    <p class="label-sm">Konten (${data.accounts.length})</p>
-    ${group(`<label class="field"><input id="acc-q" type="search" placeholder="Name oder Support-ID" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`)}
-    <div class="list card" id="acc-list" style="margin-top:10px">${data.accounts.map((a) => `<button class="row" data-acc="${esc(a.id)}" data-q="${esc(`${a.name} ${a.support} ${a.support.replace('-', '')}`.toLowerCase())}"><div class="main"><div class="title">${esc(a.name)}${a.admin ? ' · Admin' : ''}${a.jury ? ' · Jugend forscht' : a.demo ? ' · Demo' : ''}${a.disabled ? ' · gesperrt' : ''}</div>
-      <div class="sub"><span class="code">${esc(a.support)}</span> · ${esc(schoolName(a.school))} · ${a.lastSeen ? `aktiv ${esc(ago(a.lastSeen))}` : `angelegt ${esc(ago(a.created))}`}</div></div>${ICON.chev}</button>`).join('')}</div>
-    ${used.length ? `<p class="label-sm">Zuletzt eingelöst</p>${group(...used.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shown(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} → ${esc(nameOf(i.usedBy))}</div></div></div>`))}` : ''}
-    <button class="btn-plain" type="button" data-back style="margin-top:12px">Zurück</button>`);
-  const hint = $('#invite-hint');
-  $('#sheet [data-back]').onclick = openSettings;
-  $('#invite-form').onsubmit = async (e) => {
+  const single = data.invites.filter((i) => !i.uses && i.open), flyers = data.invites.filter((i) => i.uses).reverse();
+  const used = data.invites.filter((i) => !i.uses && i.usedBy).slice(-10).reverse();
+  const active = data.accounts.filter((a) => a.lastSeen && Date.now() - Date.parse(a.lastSeen) < 7 * 864e5).length;
+  const site = (data.site || location.host).replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const opt = (name, values, label, sel) => `<select name="${name}">${values.map((v) => `<option value="${v}"${v === sel ? ' selected' : ''}>${label(v)}</option>`).join('')}</select>`;
+  el.innerHTML = `<div class="admin-wrap">
+    <header class="admin-head"><img src="/icon.svg" alt="" width="48" height="48"><div class="main"><p class="eyebrow">Alltag</p><h1>Verwaltung</h1></div><a class="btn-ghost" href="/">Zur App</a></header>
+    <div class="admin-stats">${[[data.accounts.length, 'Konten'], [active, 'aktiv in den letzten 7 Tagen'], [single.length, 'offene Einladungen'], [flyers.reduce((n, i) => n + i.usedCount, 0), 'über Flyer angemeldet']]
+      .map(([n, l]) => `<div class="card admin-stat"><b>${n}</b><span>${l}</span></div>`).join('')}</div>
+    <div class="admin-grid">
+      <section class="card admin-card">
+        <h2>Flyer (A6, doppelseitig)</h2>
+        <p class="sub">Ein Code für alle Flyer: Er gilt für die gewählte Zahl an Anmeldungen und bis zum Ablaufdatum. Du bekommst eine ZIP-Datei mit Vorder- und Rückseite als Bild (z. B. für den dm-Fotodruck) und eine Druck-PDF für Druckereien.</p>
+        <form class="form" id="flyer-form">${group(fRow('Anmeldungen', opt('uses', [50, 100, 200, 500], (v) => `bis zu ${v}`, 100)), fRow('Gültig', opt('days', [30, 60, 90], (v) => `${v} Tage`, 90)),
+          fText('email', 'Deine E-Mail für Fragen', data.legal?.email, 'type="email" inputmode="email" autocapitalize="off" spellcheck="false" maxlength="120"'),
+          fText('site', 'Adresse der App', site, 'autocapitalize="off" spellcheck="false" maxlength="60" required'))}
+          <button class="btn-primary pressable" type="submit">Code und Flyer erstellen</button></form>
+        <div id="flyer-preview" class="flyer-previews"></div>
+      </section>
+      <section class="card admin-card">
+        <h2>Einladung für eine Person</h2>
+        <p class="sub">6 Ziffern, nur einmal nutzbar, 7 Tage gültig.</p>
+        <form class="form" id="invite-form">${group(fText('note', 'Für wen? (siehst nur du)', '', 'maxlength="80"'))}
+          <button class="btn-primary pressable" type="submit">Einladungscode erstellen</button></form>
+        <p class="footnote" id="invite-hint" style="text-align:left"></p>
+        ${single.length ? group(...single.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shownCode(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} · gültig bis ${esc(F.short.format(new Date(i.expires)))}</div>
+          <div class="code-actions"><button class="btn-plain" type="button" data-copy-code="${esc(i.code)}">Kopieren</button><button class="btn-plain danger" type="button" data-del-code="${esc(i.code)}">Löschen</button></div></div></div>`))
+          : '<p class="footnote" style="text-align:left">Keine offenen Einladungen.</p>'}
+      </section>
+      <section class="card admin-card wide">
+        <h2>Flyer-Codes</h2>
+        ${flyers.length ? group(...flyers.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shownCode(i.code))}</div>
+          <div class="sub">${esc(i.note || 'Flyer')} · ${i.usedCount} von ${i.uses} Anmeldungen · ${i.open ? `gültig bis ${esc(F.short.format(new Date(i.expires)))}` : 'beendet'}</div>
+          ${i.open ? `<div class="code-actions"><button class="btn-plain" type="button" data-flyer="${esc(i.code)}">Flyer laden</button><button class="btn-plain danger" type="button" data-del-code="${esc(i.code)}">Stoppen</button></div>` : ''}</div></div>`))
+          : '<p class="footnote" style="text-align:left">Noch keine Flyer.</p>'}
+      </section>
+      <section class="card admin-card wide">
+        <h2>Konten (${data.accounts.length})</h2>
+        ${group(`<label class="field"><input id="acc-q" type="search" placeholder="Name oder Support-ID" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`)}
+        <div class="list card" id="acc-list">${data.accounts.map((a) => `<button class="row" data-acc="${esc(a.id)}" data-q="${esc(`${a.name} ${a.support} ${a.support.replace('-', '')}`.toLowerCase())}"><div class="main"><div class="title">${esc(a.name)}${a.admin ? ' · Admin' : ''}${a.jury ? ' · Jugend forscht' : a.demo ? ' · Demo' : ''}${a.disabled ? ' · gesperrt' : ''}</div>
+          <div class="sub"><span class="code">${esc(a.support)}</span> · ${esc(schoolName(a.school))} · ${a.lastSeen ? `aktiv ${esc(ago(a.lastSeen))}` : `angelegt ${esc(ago(a.created))}`}</div></div>${ICON.chev}</button>`).join('')}</div>
+      </section>
+      ${used.length ? `<section class="card admin-card wide"><h2>Zuletzt eingelöste Einladungen</h2>${group(...used.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shownCode(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} → ${esc(nameOf(i.usedBy))}</div></div></div>`))}</section>` : ''}
+    </div></div>`;
+  const hint = $('#invite-hint', el), preview = () => { if (lastFlyer) $('#flyer-preview', el).innerHTML = `<img src="${lastFlyer.front}" alt="Vorderseite des Flyers"><img src="${lastFlyer.back}" alt="Rückseite des Flyers">`; };
+  preview();
+  $('#invite-form', el).onsubmit = async (e) => {
     e.preventDefault();
     try { const d = await api('/api/admin/invites', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); haptic(); openAdmin(d); } catch (x) { hint.textContent = x.message; }
   };
-  $$('#sheet [data-copy-code]').forEach((b) => { b.onclick = () => copy(b.dataset.copyCode, hint); });
-  $('#flyer-form').onsubmit = async (e) => {
-    e.preventDefault();
-    const f = e.target, btn = $('button[type=submit]', f), body = Object.fromEntries(new FormData(f));
-    btn.disabled = true;
-    btn.textContent = 'Erstelle Flyer …';
-    try {
-      const d = await api('/api/admin/invites', { method: 'POST', body: { count: Number(body.count), days: Number(body.days), note: `Flyer ${F.short.format(now())}` } });
-      const until = new Date(d.invites.find((i) => i.code === d.created[0]).expires).toLocaleDateString('de-DE');
-      const { flyers } = await import('/flyer.mjs');
-      const out = await flyers({ codes: d.created, until, email: body.email.trim(), site: body.site.trim() });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(out.zip);
-      a.download = `alltag-flyer-${today()}.zip`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-      haptic();
-      toast(`${d.created.length} Flyer erstellt`);
-      await openAdmin(d);
-      $('#flyer-preview').innerHTML = `<img class="flyer-preview" src="${out.preview}" alt="Vorschau des ersten Flyers">`;
-    } catch (x) { toast(x.message); btn.disabled = false; btn.textContent = 'Flyer erstellen'; }
-  };
-  $$('#sheet [data-del-code]').forEach((b) => {
+  $$('[data-copy-code]', el).forEach((b) => { b.onclick = () => copy(b.dataset.copyCode, hint); });
+  $$('[data-del-code]', el).forEach((b) => {
     b.onclick = async () => {
       if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Sicher?'; return; }
       try { openAdmin(await api(`/api/admin/invites/${encodeURIComponent(b.dataset.delCode)}`, { method: 'DELETE' })); } catch (x) { toast(x.message); }
     };
   });
-  $$('#sheet [data-acc]').forEach((b) => { b.onclick = () => openAcc(data.accounts.find((a) => a.id === b.dataset.acc)); });
-  $('#acc-q').oninput = (e) => { const q = e.target.value.trim().toLowerCase(); $$('#acc-list [data-acc]').forEach((b) => { b.hidden = !!q && !b.dataset.q.includes(q); }); };
+  const form = $('#flyer-form', el), opts = () => Object.fromEntries(new FormData(form));
+  const makeFlyer = async (inv, btn) => {
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Erstelle Flyer …';
+    try {
+      const { flyerA6 } = await import('/flyer.mjs');
+      lastFlyer = await flyerA6({ code: inv.code, until: new Date(inv.expires).toLocaleDateString('de-DE'), email: opts().email.trim(), site: opts().site.trim(), name: data.legal?.name, address: data.legal?.address });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(lastFlyer.zip);
+      a.download = `alltag-flyer-${inv.code}.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      haptic();
+      preview();
+    } catch (x) { toast(x.message); }
+    btn.disabled = false;
+    btn.textContent = label;
+  };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = $('button[type=submit]', form);
+    try {
+      const b = opts(), d = await api('/api/admin/invites', { method: 'POST', body: { uses: Number(b.uses), days: Number(b.days), note: `Flyer ${F.short.format(now())}` } });
+      await makeFlyer(d.invites.find((i) => i.code === d.created[0]), btn);
+      toast('Flyer erstellt');
+      openAdmin(d);
+    } catch (x) { toast(x.message); }
+  };
+  $$('[data-flyer]', el).forEach((b) => { b.onclick = () => makeFlyer(data.invites.find((i) => i.code === b.dataset.flyer), b); });
+  $$('[data-acc]', el).forEach((b) => { b.onclick = () => openAcc(data.accounts.find((a) => a.id === b.dataset.acc)); });
+  $('#acc-q', el).oninput = (e) => { const q = e.target.value.trim().toLowerCase(); $$('#acc-list [data-acc]', el).forEach((b) => { b.hidden = !!q && !b.dataset.q.includes(q); }); };
 }
 function openAcc(a, password) {
   const self = a.id === D.account?.id;
@@ -1975,7 +2015,7 @@ function openAcc(a, password) {
         `<button class="row" data-do="disable"><span class="btn-plain${a.disabled ? '' : ' danger'}">${a.disabled ? 'Entsperren' : 'Sperren'}</span></button>`,
         '<button class="row" data-do="delete"><span class="btn-plain danger">Konto löschen</span></button>')}
     <button class="btn-plain" type="button" data-back style="margin-top:12px">Zurück</button>`);
-  $('#sheet [data-back]').onclick = () => openAdmin();
+  $('#sheet [data-back]').onclick = () => closeSheet();
   const pwBtn = $('#sheet [data-copy-pw]');
   if (pwBtn) pwBtn.onclick = () => copy(password, $('#acc-hint'));
   const url = `/api/admin/accounts/${encodeURIComponent(a.id)}`;
@@ -1985,11 +2025,12 @@ function openAcc(a, password) {
       const ask = { delete: 'Wirklich löschen? Alle Daten sind dann weg.', reset: 'Wirklich zurücksetzen?', resetDemo: 'Wirklich? Alles, was Besucher eingetragen haben, ist dann weg.', demo: a.demo ? 'Wirklich beenden? Das Konto ist danach leer.' : 'Wirklich? Alle Daten des Kontos werden durch Beispieldaten ersetzt.' }[act];
       if (ask && !b.dataset.sure) { b.dataset.sure = '1'; $('span', b).textContent = ask; return; }
       try {
-        if (act === 'delete') return openAdmin(await api(url, { method: 'DELETE' }));
+        if (act === 'delete') { const d = await api(url, { method: 'DELETE' }); closeSheet(); return openAdmin(d); }
         const body = act === 'reset' ? { reset: true } : act === 'admin' ? { admin: !a.admin } : act === 'demo' ? { demo: !a.demo } : act === 'jury' ? { jury: !a.jury } : act === 'resetDemo' ? { resetDemo: true } : { disabled: !a.disabled };
         const d = await api(url, { method: 'POST', body });
         haptic();
         if (act === 'resetDemo') toast('Demo-Daten zurückgesetzt');
+        openAdmin(d);
         openAcc(d.accounts.find((x) => x.id === a.id), d.password);
       } catch (x) { toast(x.message); }
     };
