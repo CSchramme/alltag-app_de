@@ -3,6 +3,7 @@
 Kalender, Stundenplan, Hausaufgaben. Alles in einer App: eine Web-App im Stil von iOS Liquid Glass für iPhone und PC, die EduPage mit Terminen, Erinnerungen, Notizen und Noten zusammenführt.
 
 - **Schule (EduPage):** Stundenplan mit Vertretung/Entfall an der Stunde, Hausaufgaben (Abhaken landet auch in EduPage), Prüfungen, als „fehlt“ markierte Hausaufgaben, Nachrichten lesen, schreiben, beantworten und markieren, „Wo ist Lehrkraft X gerade?“
+- **Schule (WebUntis, Schulmanager Online):** Stundenplan mit Vertretung/Entfall, Hausaufgaben, Prüfungen (mit Lernplan) und Mitteilungen der Schule bzw. Elternbriefe. Nur lesen; noch nicht mit einem echten Schulzugang geprüft. Ohne Schulsoftware trägt man den Stundenplan selbst ein.
 - **Lernplan:** zu jeder angekündigten Prüfung automatisch Lern-Erinnerungen 7, 3 und 1 Tag vorher
 - **Privat:** Erinnerungen und Termine (auch wiederkehrend: täglich, werktags, wöchentlich, alle 2 Wochen, monatlich), Notizen
 - **Noten:** trägst du selbst ein; Durchschnitt mit Gewichtung und Zielrechner („Welche Note brauche ich?“)
@@ -13,6 +14,8 @@ Kalender, Stundenplan, Hausaufgaben. Alles in einer App: eine Web-App im Stil vo
 ```
 app.js        Server und Startdatei für Plesk (Node.js ≥ 20, keine npm-Pakete nötig)
 edupage.js    EduPage-Zugriff (übertragen aus der Python-Bibliothek edupage-api 0.13.3 und dem EduPage-Webclient)
+untis.js      WebUntis (JSON-RPC, dazu Hausaufgaben/Prüfungen/Nachrichten wie der Webclient; Vorlage: Node-Bibliothek webuntis)
+schulmanager.js  Schulmanager Online (Salz + PBKDF2 + JWT, Daten über /api/calls; Vorlagen: schulmanager-mcp, Home-Assistant-Integration)
 push.js       Web-Push (RFC 8291/8292) mit Node-Bordmitteln
 demo.js       Beispieldaten
 public/       die Web-App (Dokumentenstamm), dazu widget.js für Scriptable
@@ -41,7 +44,7 @@ Danach http://localhost:3000 öffnen. Das Passwort ist `demo`, angezeigt werden 
    - Anwendungsmodus: `production`
 4. Unter **Benutzerdefinierte Umgebungsvariablen** `APP_PASSWORD` auf dein Passwort für die App setzen.
 5. **Node.js aktivieren** bzw. **App neu starten**.
-6. Die Domain öffnen und dich anmelden. Unter **Profil (oben rechts) → EduPage** Schul-Adresse, Benutzername und Passwort eintragen und auf **Verbinden** tippen.
+6. Die Domain öffnen und dich anmelden. Unter **Profil (oben rechts) → EduPage** Schul-Adresse, Benutzername und Passwort eintragen und auf **Verbinden** tippen. Bei WebUntis sucht man dort zuerst die Schule (Name oder Ort), bei Schulmanager reichen Benutzername bzw. E-Mail und Passwort.
 7. **Regelmäßiger Abgleich:** Plesk beendet Node-Apps, wenn eine Weile niemand die Seite aufruft. Die App hält sich deshalb selbst wach (Aufruf der eigenen Adresse alle 2 Minuten) und gleicht alle 15 Minuten mit EduPage ab. Nach einem Neustart des Servers läuft sie erst wieder, wenn du sie einmal öffnest. Noch zuverlässiger wird es, wenn du unter **Profil → Hintergrund-Abgleich** die Adresse kopierst und sie alle 15 Minuten aufrufen lässt: entweder in Plesk unter *Geplante Aufgaben* → **URL abrufen**, falls dein Hoster das anbietet, oder beim kostenlosen Dienst **cron-job.org**.
 
 Wichtig: `data/` liegt außerhalb des Dokumentenstamms und darf nie in `public/` landen. Dort stehen dein EduPage-Passwort und deine Einträge, also gehört der Ordner in deine Datensicherung.
@@ -70,6 +73,7 @@ Dieselbe App, nur mit Konten, Einladungscodes, eigenem Look und ohne Home Assist
 5. **App neu starten**, die Domain öffnen, **„Neu hier? Mit Einladungscode registrieren“** und als Code dein `APP_PASSWORD` eingeben. Dieses erste Konto ist Admin.
 6. **Demo für die Jury:** Im Profil unter *Einladungen und Konten* einen Code erstellen, damit ein zweites Konto registrieren (z. B. `demo`), es dann in der Liste suchen und **„Als Demo-Konto einrichten“** wählen. Ab dann gibt es auf der Startseite „Demo ansehen“, und `https://alltag-app.de/#demo` öffnet die Demo direkt (gut für einen QR-Code). Was Besucher dort ändern, setzt sich nach 15 Minuten ohne Nutzung zurück.
 7. **Datensicherung:** In Plesk unter *Backup-Manager* eine regelmäßige Sicherung einrichten. `data/` enthält alle Konten.
+8. **Statistik:** Die Verwaltung (`/admin`) zeigt Besucher pro Tag, Konten in der App, Geräte, Schulsoftware und welche Funktionen genutzt werden. Gezählt wird ohne Cookies und ohne fremde Dienste: Besucher als Hash aus IP, Browser und einem Tages-Salz, das am nächsten Tag samt Hashes gelöscht wird (`stats.json`, 400 Tage nur Zahlen).
 
 ### Sicherheit auf einen Blick
 

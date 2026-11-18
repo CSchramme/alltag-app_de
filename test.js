@@ -109,6 +109,42 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   assert.equal(regularDay(tables, '-156', '2026-11-18').length, 0); // Mittwoch: keine Karte
   assert.equal(regularDay(tables, '-156', '2026-11-15').length, 0); // Sonntag
 
+  // WebUntis (nachgebaute Antworten): Raster, Vertretung über orgid, Entfall, Hausaufgaben, Prüfungen, Mitteilungen
+  const U = require('./untis');
+  const grid = [{ day: 4, timeUnits: [{ name: '1', startTime: 800, endTime: 845 }, { name: '2', startTime: 845, endTime: 930 }] }]; // Untis: 4 = Mittwoch
+  const ul = U.untisLessons([
+    { id: 1, date: 20261118, startTime: 845, endTime: 930, su: [{ id: 3, name: 'M', longname: 'Mathematik' }], te: [{ id: 7, name: 'BEC', orgid: 9, orgname: 'TAL' }], ro: [{ id: 5, name: '104', orgid: 6, orgname: '205' }], kl: [{ name: '7a' }], substText: 'Aufgaben im Buch' },
+    { id: 2, date: 20261118, startTime: 800, endTime: 845, su: [{ name: 'D', longname: 'Deutsch' }], te: [], ro: [], code: 'cancelled' },
+    { id: 3, date: 20261119, startTime: 800, endTime: 845, su: [{ name: 'E' }], code: 'irregular' },
+  ], grid);
+  const uw = ul.get('2026-11-18');
+  assert.deepEqual(uw.map((l) => [l.period, l.start, l.end, l.subject, l.cancelled]), [[1, '08:00', '08:45', 'Deutsch', true], [2, '08:45', '09:30', 'Mathematik', false]]);
+  assert.deepEqual([uw[1].changes, uw[1].teachers, uw[1].rooms, uw[1].topic], [['Vertretung für TAL', 'Raumänderung, sonst 205'], ['BEC'], ['104'], 'Aufgaben im Buch']);
+  assert.deepEqual([ul.get('2026-11-19')[0].changes, ul.get('2026-11-19')[0].period], [['Vertretung'], null]); // Donnerstag fehlt im Raster
+  assert.deepEqual(require('./edupage').schoolDay('2026-11-18', uw).changes.map((c) => c.kind), ['cancel', 'change']);
+  const uhw = U.untisHomework({ lessons: [{ id: 11, subject: 'Mathematik' }], teachers: [{ id: 4, name: 'Becker' }], records: [{ homeworkId: 21, teacherId: 4 }],
+    homeworks: [{ id: 21, lessonId: 11, date: 20261116, dueDate: 20261120, text: 'S. 12 Nr. 3' }, { id: 22, lessonId: 11, date: 20261110, dueDate: 20261113, text: 'alt' }] }, '2026-11-18');
+  assert.deepEqual(uhw.map((t) => [t.id, t.subject, t.due, t.author, t.title]), [['hw:21', 'Mathematik', '2026-11-20', 'Becker', 'S. 12 Nr. 3']]);
+  assert.deepEqual(U.untisExams([{ id: 5, examType: 'Schulaufgabe', name: '1. SchA', subject: 'Deutsch', examDate: 20261125, teachers: ['TAL'] }], '2026-11-18')
+    .map((t) => [t.kind, t.label, t.title, t.due, t.author]), [['exam', 'Schulaufgabe', '1. SchA', '2026-11-25', 'TAL']]);
+  assert.equal(U.untisNews({ messagesOfDay: [{ id: 8, subject: 'Wandertag', text: '<p>Festes Schuhwerk &amp; Brotzeit</p>' }] }, '2026-11-18')[0].text, 'Wandertag\n\nFestes Schuhwerk & Brotzeit');
+  assert.throws(() => new U.Untis({ server: 'localhost:3000', school: 'x' }), { code: 'config' }); // nur *.webuntis.com
+
+  // Schulmanager (nachgebaute Antworten): Stundenzeiten je Wochentag, Vertretung aus Original und Ist, Entfall
+  const SMO = require('./schulmanager');
+  const smHours = [{ id: 1, number: '1', from: '08:00:00', until: '08:45:00' }, { id: 2, number: '2.', from: '08:45:00', until: '09:30:00', fromByDay: [null, null, null, '08:50:00'] }];
+  const sl = SMO.smLessons([
+    { date: '2026-11-18', classHour: { id: 2, number: '2.' }, type: 'substitution', actualLesson: { subject: { name: 'Mathematik', abbreviation: 'M' }, teachers: [{ firstname: 'Bea', lastname: 'Becker' }], room: { name: '104' } },
+      originalLessons: [{ subject: { name: 'Mathematik' }, teachers: [{ firstname: 'Tom', lastname: 'Tal' }], room: { name: '205' } }] },
+    { date: '2026-11-18', classHour: { id: 1, number: '1' }, type: 'cancelledLesson', originalLessons: [{ subject: { name: 'Deutsch' }, room: { name: '101' } }] },
+  ], smHours);
+  assert.deepEqual(sl.get('2026-11-18').map((l) => [l.period, l.start, l.subject, l.cancelled, l.changes.join('|')]),
+    [[1, '08:00', 'Deutsch', true, ''], [2, '08:50', 'Mathematik', false, 'Vertretung für Tom Tal|Raumänderung, sonst 205']]);
+  assert.deepEqual(SMO.smHomework([{ date: '2026-11-17', subject: 'Mathematik', homework: 'AB 2' }, { date: '2026-11-01', subject: 'Mathematik', homework: 'alt' }], '2026-11-18')
+    .map((t) => [t.subject, t.title, t.due, t.created.slice(0, 10)]), [['Mathematik', 'AB 2', null, '2026-11-17']]); // Fälligkeit ergänzt der Server
+  assert.deepEqual(SMO.smExams([{ id: 3, date: '2026-11-24', subject: { name: 'Englisch' }, type: { name: 'Schulaufgabe' } }], '2026-11-18').map((t) => [t.id, t.title, t.due]),
+    [['ex:3', 'Schulaufgabe Englisch', '2026-11-24']]);
+
   // Wiederholungen (gemeinsam für Server und App)
   const R = require('./public/recur');
   assert.ok(R.occursOn({ date: '2026-11-17', repeat: 'weekly' }, '2026-11-24'));
@@ -345,8 +381,20 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const wk = await (await call(`/api/week?start=${isoDay(far)}`, {}, c2)).json();
     assert.deepEqual([wk.days.length, wk.days[0].lessons[0].subject, wk.days[0].lessons[0].rooms[0], wk.days[1].lessons.length], [5, 'Mathe', '104', 0]);
     assert.equal((await post('/api/edupage', {}, c2)).status, 400);
+    // WebUntis: nur echte WebUntis-Server, Suche ab 3 Zeichen; EduPage-Funktionen gibt es dort nicht
+    const su = await (await post('/api/account', { school: 'untis' }, c2)).json();
+    assert.deepEqual([su.school, su.link.connected], ['untis', false]);
+    assert.equal((await post('/api/link', { server: 'localhost:3000', school: 'x', user: 'a', pass: 'b' }, c2)).status, 400);
+    assert.equal((await call('/api/untis/schools?q=ab', {}, c2)).status, 400);
+    assert.equal((await post('/api/messages/x/like', { liked: true }, c2)).status, 400);
+    assert.equal((await post('/api/account', { school: 'none' }, c2)).status, 200);
     // Rechte: Ben ist kein Admin; Home Assistant und PC-Bildschirm gibt es hier nicht
     assert.equal((await call('/api/admin', {}, c2)).status, 403);
+    // eigene Statistik: Besuch, neues Konto, aktive Konten; gespeichert werden nur Hashes, keine IP
+    const st = (await (await call('/api/admin', {}, c1)).json()).stats, td = st.days.at(-1);
+    assert.deepEqual([st.days.length, td.signups, td.active, td.visitors >= 1, st.schools.none, st.accounts], [30, 1, 1, true, 1, 2]);
+    const rawStats = JSON.parse(fs.readFileSync(path.join(dir2, 'stats.json'), 'utf8'));
+    assert.ok(rawStats.days[td.date].visitors.every((h) => /^[0-9a-f]{16}$/.test(h)) && !JSON.stringify(rawStats).includes('127.0.0.1'));
     assert.equal((await call('/api/ha/pc', {}, c1)).status, 404);
     assert.equal((await call('/api/screen/frame?after=0', {}, c1)).status, 404);
     const t2 = await (await call('/api/tokens', {}, c2)).json();

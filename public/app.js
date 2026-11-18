@@ -241,9 +241,9 @@ function banners() {
   if (D.account?.jury) out.push(['info', 'Jugend forscht Version · Full Access', 'Alle Funktionen sind freigeschaltet. Die Beispieldaten setzt der Betreiber nach der Vorstellung zurück.']);
   else if (D.demo) out.push(['info', 'Demo-Modus', 'Du siehst Beispieldaten.']);
   if (!navigator.onLine) out.push(['warn', 'Offline', 'Angezeigt wird der zuletzt geladene Stand.']);
-  else if (D.edupage.connected && D.status?.ok === false) out.push(['warn', 'EduPage-Abgleich fehlgeschlagen', D.status.error || '']);
+  else if (D.link.connected && D.status?.ok === false) out.push(['warn', `${linkName()}-Abgleich fehlgeschlagen`, D.status.error || '']);
   if (D.school === 'none' && !D.demo) { if (!D.db.lessons?.length) out.push(['info', 'Noch kein Stundenplan', 'Tippe hier und trag deine Stunden einmal ein. Sie gelten dann jede Woche.', 'data-settings']); }
-  else if (!D.edupage.connected) out.push(['info', 'EduPage noch nicht verbunden', 'Tippe hier, um Stundenplan, Vertretungen und Nachrichten zu holen.', 'data-settings']);
+  else if (!D.link.connected) out.push(['info', `${linkName()} noch nicht verbunden`, 'Tippe hier, um Stundenplan, Vertretungen und Nachrichten zu holen.', 'data-settings']);
   return out.map(([k, t, s, attr]) => `<${attr ? `button ${attr}` : 'div'} class="card banner ${k}"><div><b>${esc(t)}</b>${esc(s)}</div></${attr ? 'button' : 'div'}>`).join('');
 }
 
@@ -334,7 +334,7 @@ function msgRow(m) {
   const confirm = m.important && !m.confirmed ? chip('Bestätigen', 'var(--orange)', true) : '';
   return `<button class="row msg${read.has(m.id) ? '' : ' unread'}" data-msg="${esc(m.id)}">
     <div class="avatar" style="--c:${colorOf(m.author)}">${esc(initials(m.author))}</div>
-    <div class="main"><div class="head"><div class="title">${m.starred ? '<span class="star">★</span> ' : ''}${esc(m.author || 'EduPage')}</div><time>${esc(stamp(m.last || m.time))}</time></div>
+    <div class="main"><div class="head"><div class="title">${m.starred ? '<span class="star">★</span> ' : ''}${esc(m.author || linkName())}</div><time>${esc(stamp(m.last || m.time))}</time></div>
       <div class="sub clamp2">${esc(m.text)}</div>
       ${extra.length || confirm ? `<div class="meta-line">${confirm}${extra.map((x) => chip(x, 'var(--blue)')).join('')}</div>` : ''}</div></button>`;
 }
@@ -861,7 +861,7 @@ function renderHeute() {
       ${pcCard()}
       ${bdays.length ? `<h2 class="section-title">Geburtstage<button data-bdays>Alle</button></h2><div class="list card">${bdays.slice(0, 3).map(({ b, d }) => bdayItem(b, d)).join('')}</div>` : ''}
     </div></div>
-    ${D.edupage.connected ? `<p class="footnote">EduPage aktualisiert ${esc(ago(D.snap?.updated))} · <button class="btn-link" data-refresh>Jetzt aktualisieren</button>${S().bells?.length ? ' · <button class="btn-link" data-bells>Klingelzeiten</button>' : ''}</p>` : ''}`;
+    ${D.link.connected ? `<p class="footnote">${linkName()} aktualisiert ${esc(ago(D.snap?.updated))} · <button class="btn-link" data-refresh>Jetzt aktualisieren</button>${S().bells?.length ? ' · <button class="btn-link" data-bells>Klingelzeiten</button>' : ''}</p>` : ''}`;
 }
 
 /* ---------------------------------------------------------------- Segment-Steuerung mit gleitendem Daumen */
@@ -899,7 +899,7 @@ const segHTML = (items, sel, label) => `<div class="seg-bar"><div class="seg gla
 /* ---------------------------------------------------------------- Kalender (Woche Mo–So, wechselbar) */
 function loadWeek(start) {
   const have = calWeek().slice(0, 5).every((d) => dayOf(d));
-  if (!D.edupage.connected || (have && loadedWeeks.has(start)) || loadedWeeks.get(start) === 'loading') return;
+  if (!D.link.connected || (have && loadedWeeks.has(start)) || loadedWeeks.get(start) === 'loading') return;
   if (have && start === mondayOf(today())) return;
   loadedWeeks.set(start, 'loading');
   api(`/api/week?start=${start}`).then(({ days }) => {
@@ -1071,14 +1071,15 @@ function renderNotesBody() {
 }
 
 /* ---------------------------------------------------------------- Schule: Nachrichten + Noten */
-const SCHOOL = [['nachrichten', 'Nachrichten'], ['noten', 'Noten'], ['lehrer', 'Lehrkräfte']];
+const schoolSegs = () => [['nachrichten', 'Nachrichten'], ['noten', 'Noten'], ...(eduLike() ? [['lehrer', 'Lehrkräfte']] : [])]; // Lehrkräfte-Suche gibt es nur mit EduPage
 let schoolSegCtl = null;
 function renderSchule() {
-  const s = S().student;
-  $('#view-schule').innerHTML = `${largeTitle('Schule', s?.class ? `Klasse ${s.class}` : D.edupage.connected ? 'EduPage' : 'Nicht verbunden')}${segHTML(SCHOOL, schoolSeg, 'Bereich')}<div id="school-body"></div>`;
-  schoolSegCtl = Seg($('#view-schule .seg'), (i) => { schoolSeg = SCHOOL[i][0]; schoolSegCtl.glide(i); renderSchoolBody(); updateAdd(); });
+  const s = S().student, segs = schoolSegs();
+  if (!segs.some(([k]) => k === schoolSeg)) schoolSeg = 'nachrichten';
+  $('#view-schule').innerHTML = `${largeTitle('Schule', s?.class ? `Klasse ${s.class}` : D.link.connected ? linkName() : 'Nicht verbunden')}${segHTML(segs, schoolSeg, 'Bereich')}<div id="school-body"></div>`;
+  schoolSegCtl = Seg($('#view-schule .seg'), (i) => { schoolSeg = segs[i][0]; schoolSegCtl.glide(i); renderSchoolBody(); updateAdd(); });
   renderSchoolBody();
-  if (tab === 'schule') requestAnimationFrame(() => schoolSegCtl.track(SCHOOL.findIndex(([k]) => k === schoolSeg)));
+  if (tab === 'schule') requestAnimationFrame(() => schoolSegCtl.track(segs.findIndex(([k]) => k === schoolSeg)));
 }
 
 function renderSchoolBody() {
@@ -1086,8 +1087,8 @@ function renderSchoolBody() {
   if (schoolSeg === 'lehrer') return renderTeachers(el);
   if (schoolSeg === 'nachrichten') {
     const msgs = S().messages;
-    el.innerHTML = !D.edupage.connected
-      ? `<button class="card empty" data-settings>${ICON.bubble}Verbinde EduPage im Profil, um deine Nachrichten zu sehen.</button>`
+    el.innerHTML = !D.link.connected
+      ? `<button class="card empty" data-settings>${ICON.bubble}Verbinde ${linkName()} im Profil, um deine Nachrichten zu sehen.</button>`
       : msgs.length ? `<div class="list card">${msgs.map(msgRow).join('')}</div>` : emptyCard('bubble', 'Keine Nachrichten.');
     return;
   }
@@ -1325,7 +1326,7 @@ const NEW = { reminder: () => reminderForm(), event: () => eventForm(null, planD
 const ADD = { heute: newChooser, kalender: () => eventForm(null, planDay), aufgaben: () => reminderForm(),
   notizen: () => (notesSeg === 'tafel' ? pickPhoto() : notesSeg === 'einkauf' ? $('#shop-add input')?.focus() : noteForm()),
   schule: () => (schoolSeg === 'noten' ? gradeForm() : composeMessage()) };
-const updateAdd = () => { $('#add').hidden = tab === 'schule' && (schoolSeg === 'lehrer' || (schoolSeg === 'nachrichten' && !D.edupage.connected)); };
+const updateAdd = () => { $('#add').hidden = tab === 'schule' && (schoolSeg === 'lehrer' || (schoolSeg === 'nachrichten' && !(D.link.connected && eduLike()))); }; // Nachrichten schreiben nur über EduPage
 
 /* ---------------------------------------------------------------- Detail-Sheets */
 function openLesson(date, i) {
@@ -1354,7 +1355,7 @@ function openEduTask(id) {
     <div class="card bubble">${linkify(t.title)}${t.details ? `\n\n${linkify(t.details)}` : ''}</div>
     <div class="card"><dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl></div>
     ${t.kind !== 'event' ? `<button class="btn-primary pressable" data-toggle-key="e:${esc(t.id)}">${t.done ? 'Als offen markieren' : 'Als erledigt markieren'}</button>` : ''}
-    <p class="footnote">Aus EduPage – ändern kannst du den Eintrag nur dort.</p>`);
+    <p class="footnote">Aus ${linkName()} – ändern kannst du den Eintrag nur dort.</p>`);
 }
 
 function openMessage(id) {
@@ -1369,11 +1370,11 @@ function openMessage(id) {
       : `<div class="card banner warn"><div><b>Lesebestätigung erbeten</b>Die Lehrkraft möchte wissen, dass du die Nachricht gelesen hast.</div></div>
          <button class="btn-primary pressable" data-confirm="${esc(m.id)}">Gelesen bestätigen</button>`) : ''}
     <div class="card bubble">${linkify(m.text)}</div>
-    <div class="msg-actions"><button class="pill like pressable${m.liked ? ' on' : ''}" data-like="${esc(m.id)}" aria-pressed="${!!m.liked}">${m.liked ? '♥' : '♡'} Gefällt mir${m.likes ? ` · ${m.likes}` : ''}</button>
+    <div class="msg-actions">${eduLike() ? `<button class="pill like pressable${m.liked ? ' on' : ''}" data-like="${esc(m.id)}" aria-pressed="${!!m.liked}">${m.liked ? '♥' : '♡'} Gefällt mir${m.likes ? ` · ${m.likes}` : ''}</button>` : ''}
       <button class="pill pressable${m.starred ? ' on' : ''}" data-star="${esc(m.id)}" aria-pressed="${!!m.starred}">${m.starred ? '★ Markiert' : '☆ Markieren'}</button></div>
     ${m.attachments.length ? `<div class="list card">${m.attachments.map((a) => `<a class="row attach" href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener">${ICON.clip}<span class="main">${esc(a.name)}</span>${ICON.chev}</a>`).join('')}</div>` : ''}
     ${m.replies.length ? `<p class="label-sm">Antworten (${m.replies.length})</p><div class="thread">${m.replies.map((r) => `<div class="reply bubble${r.author === S().student?.name ? ' mine' : ''}"><b>${esc(r.author)} · ${esc(stamp(r.time))}</b>${linkify(r.text)}</div>`).join('')}</div>` : ''}
-    ${D.edupage.connected ? `<form class="composer" data-reply="${esc(m.id)}">
+    ${D.link.connected && eduLike() ? `<form class="composer" data-reply="${esc(m.id)}">
       ${group(fArea('text', `Antwort an ${m.author || 'alle'}`, '', 3))}
       <p class="form-error" role="alert"></p>
       <button class="btn-primary pressable" type="submit">Antworten</button></form>` : ''}`);
@@ -1534,7 +1535,7 @@ function teacherRow(p, mine) {
     <div class="main"><div class="title">${esc(p.name)}</div>${mine ? `<div class="meta-line">${chip('unterrichtet dich', 'var(--blue)')}</div>` : ''}</div>${ICON.chev}</button>`;
 }
 function renderTeachers(el) {
-  if (!D.edupage.connected) { el.innerHTML = `<button class="card empty" data-settings>${ICON.cap}Verbinde EduPage im Profil, um Lehrkräfte zu finden.</button>`; return; }
+  if (!D.link.connected) { el.innerHTML = `<button class="card empty" data-settings>${ICON.cap}Verbinde EduPage im Profil, um Lehrkräfte zu finden.</button>`; return; }
   const mine = new Set(S().days.flatMap((d) => d.lessons.flatMap((l) => l.teachers)));
   const people = [...(S().people || [])].sort((a, b) => mine.has(b.name) - mine.has(a.name));
   el.innerHTML = `<div class="search-field card"><input id="teacher-q" type="search" placeholder="Lehrkraft suchen" autocomplete="off" aria-label="Lehrkraft suchen"></div><div class="list card" id="teacher-list"></div>`;
@@ -1638,16 +1639,42 @@ function copy(text, hint) {
   });
 }
 
+let untisChoice = null, untisFound = []; // WebUntis: erst Schule suchen und wählen, dann anmelden
+function untisPick() {
+  const c = untisChoice;
+  if (c) {
+    return `${group(`<div class="row"><div class="main"><div class="title">${esc(c.name)}</div><div class="sub">${esc(c.address || c.server)}</div></div><button type="button" class="btn-link" data-untis-change>Ändern</button></div>`)}
+      <input type="hidden" name="server" value="${esc(c.server)}"><input type="hidden" name="school" value="${esc(c.school)}"><input type="hidden" name="name" value="${esc(c.name)}">`;
+  }
+  return `${group(fRow('Schule', '<input id="untis-q" placeholder="Name oder Ort" autocapitalize="off" spellcheck="false" enterkeyhint="search">'),
+    '<button type="button" class="row" data-untis-search><span class="btn-plain">Schule suchen</span></button>')}
+    <div id="untis-results">${untisFound.length ? `<div class="list card">${untisFound.map((s, i) => `<button type="button" class="row" data-untis-school="${i}"><div class="main"><div class="title">${esc(s.name)}</div><div class="sub">${esc(s.address)}</div></div>${ICON.chev}</button>`).join('')}</div>` : ''}</div>`;
+}
+const LINK_HELP = {
+  untis: 'Such deine Schule wie in der Untis-App und melde dich mit deinem WebUntis-Zugang an. Anmeldungen über Microsoft oder mit Zwei-Faktor-Code gehen noch nicht. Die Zugangsdaten liegen verschlüsselt auf dem Server und gehen nur an WebUntis.',
+  schulmanager: 'Benutzername oder E-Mail und Passwort wie auf schulmanager-online.de. Mit Zwei-Faktor-Anmeldung geht es noch nicht. Die Zugangsdaten liegen verschlüsselt auf dem Server und gehen nur an Schulmanager.',
+};
 function edupageSection() {
-  const e = D.edupage;
-  if (D.demo) return group(`<div class="row"><div class="main"><div class="title">Demo-Daten</div><div class="sub">Im Demo-Modus ist EduPage nicht verbunden.</div></div></div>`);
+  const e = D.link, kind = D.school === 'none' ? 'edupage' : D.school;
+  if (D.demo) return group(`<div class="row"><div class="main"><div class="title">Demo-Daten</div><div class="sub">Im Demo-Modus ist keine Schulsoftware verbunden.</div></div></div>`);
   if (e.connected && !$('#sheet')?.dataset.editEdu) {
-    return `${group(`<div class="row"><div class="main"><div class="title">Verbunden</div><div class="sub">${esc(e.user)} · ${esc(e.school)}.edupage.org</div></div></div>`,
+    const where = kind === 'untis' ? e.name || e.school : kind === 'schulmanager' ? 'Schulmanager' : `${e.school}.edupage.org`;
+    return `${group(`<div class="row"><div class="main"><div class="title">Verbunden</div><div class="sub">${esc(e.user)} · ${esc(where)}</div></div></div>`,
       `<div class="row"><div class="main">Letzter Abgleich</div><div class="trail">${esc(ago(D.snap?.updated))}</div></div>`,
       `<button class="row" data-refresh><span class="btn-plain">Jetzt aktualisieren</span></button>`,
       `<button class="row" data-edit-edu><span class="btn-plain">Zugang ändern</span></button>`,
       `<button class="row" data-disconnect><span class="btn-plain danger">Verbindung trennen</span></button>`)}
       ${D.status?.ok === false ? `<p class="footnote warn-text">${esc(D.status.error)}</p>` : ''}`;
+  }
+  if (kind !== 'edupage') {
+    if (kind === 'untis' && !untisChoice && e.server) untisChoice = { name: e.name || e.school, school: e.school, server: e.server, address: '' };
+    return `<form class="form" id="edu-form" autocomplete="off">
+      ${kind === 'untis' ? `<div id="untis-pick">${untisPick()}</div>` : ''}
+      ${group(fText('user', kind === 'schulmanager' ? 'Benutzername oder E-Mail' : 'Benutzername', e.user, 'autocapitalize="off" spellcheck="false" required'),
+        fText('pass', 'Passwort', '', 'type="password" autocomplete="new-password" required'))}
+      <p class="form-error" role="alert"></p>
+      <button class="btn-primary pressable" type="submit">${e.connected ? 'Sichern' : 'Verbinden'}</button>
+      <p class="footnote" style="text-align:left">${LINK_HELP[kind]}</p></form>`;
   }
   return `<form class="form" id="edu-form" autocomplete="off">
     ${group(fRow('Schule', `<input name="school" placeholder="meineschule" value="${esc(e.school)}" autocapitalize="off" spellcheck="false" required><em class="suffix">.edupage.org</em>`),
@@ -1702,7 +1729,7 @@ async function openSettings() {
       ${fChoice('glass', [['tinted', 'Getönt'], ['clear', 'Klar']], store.get('glass-ui', 'tinted'))}
       <p class="look-hint">„Klar“ ist durchsichtiger und lässt mehr vom Hintergrund durchscheinen, „Getönt“ ist besser lesbar.</p></div>
     </div>
-    ${D.school === 'none' ? '' : `<p class="label-sm">EduPage</p><div id="edu-section">${edupageSection()}</div>`}
+    ${D.school === 'none' ? '' : `<p class="label-sm">${linkName()}</p><div id="edu-section">${edupageSection()}</div>`}
     <p class="label-sm">Mitteilungen</p>
     <div class="list card">
       <label class="row"><div class="main"><div class="title">Mitteilungen</div><div class="sub">Vertretungen, Nachrichten, Erinnerungen, Termine und abends der Ausblick auf morgen</div></div>
@@ -1824,7 +1851,9 @@ async function openSettings() {
 }
 
 /* ---------------------------------------------------------------- Konto, Admin-Bereich, eigener Stundenplan */
-const schoolName = (k) => ({ edupage: 'EduPage', none: 'Ohne Schulsoftware' })[k] || k;
+const schoolName = (k) => ({ edupage: 'EduPage', untis: 'WebUntis', schulmanager: 'Schulmanager', none: 'Ohne Schulsoftware' })[k] || k;
+const linkName = () => schoolName(D?.school && D.school !== 'none' ? D.school : 'edupage');
+const eduLike = () => !!D?.demo || D?.school === 'edupage'; // Antworten, Gefällt mir, Lehrkräfte: nur EduPage (Demo-Daten sehen wie EduPage aus)
 const WEEKDAYS = [[1, 'Montag'], [2, 'Dienstag'], [3, 'Mittwoch'], [4, 'Donnerstag'], [5, 'Freitag'], [6, 'Samstag']];
 
 function accountSection() {
@@ -1895,9 +1924,50 @@ function openDeleteAccount() {
 const ADMIN_PAGE = location.pathname === '/admin';
 let adminState = null, lastFlyer = null;
 const shownCode = (c) => String(c).replace(/^(\d{3})(\d{3})$/, '$1 $2'); // 482 913 liest sich leichter vor
+// Balken je Tag (eine Reihe, eine Farbe). Tooltip beim Zeigen, Zahlen zusätzlich als Tabelle.
+function dayBars(days, key, unit) {
+  const W = 360, H = 136, B = 114, n = days.length, gap = 2, bw = (W - (n - 1) * gap) / n, max = Math.max(1, ...days.map((d) => d[key])); // ~Handybreite: Schrift bleibt lesbar
+  const y = (v) => B - (v / max) * (B - 22), day = (d) => F.short.format(parseDay(d.date));
+  const bars = days.map((d, i) => {
+    const x = i * (bw + gap), v = d[key], top = y(v), r = Math.min(4, bw / 2, B - top);
+    const shape = v ? `<path d="M${x} ${B}V${top + r}Q${x} ${top} ${x + r} ${top}H${x + bw - r}Q${x + bw} ${top} ${x + bw} ${top + r}V${B}Z"/>` : '';
+    return `<g><title>${esc(day(d))}: ${v} ${unit}</title><rect class="hit" x="${x - gap / 2}" y="0" width="${bw + gap}" height="${B}"/>${shape}</g>`;
+  }).join('');
+  const total = days.reduce((s, d) => s + d[key], 0), last = days.at(-1);
+  return `<svg class="day-bars" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(`${unit} pro Tag, letzte ${n} Tage: zusammen ${total}, höchstens ${max}, heute ${last[key]}`)}">
+    <line class="grid" x1="0" x2="${W}" y1="22" y2="22"/><text x="0" y="14">${max}</text>${bars}<line class="base" x1="0" x2="${W}" y1="${B}" y2="${B}"/>
+    <text x="0" y="${H - 4}">${esc(day(days[0]))}</text><text x="${W}" y="${H - 4}" text-anchor="end">heute</text></svg>`;
+}
+function statsSection(s) {
+  if (!s) return '';
+  const sum = (k, n = 30) => s.days.slice(-n).reduce((a, d) => a + d[k], 0), today = s.days.at(-1);
+  const share = (obj, total) => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="row"><div class="main"><div class="title">${esc(k)}</div>
+    <div class="meter" aria-hidden="true"><i style="width:${total ? Math.round((v / total) * 100) : 0}%"></i></div></div><div class="trail">${v}${total ? ` · ${Math.round((v / total) * 100)} %` : ''}</div></div>`).join('');
+  const dev = Object.values(s.platforms).reduce((a, b) => a + b, 0);
+  const USE = [['link', 'Schulsoftware verbunden oder Stundenplan eingetragen'], ['push', 'Mitteilungen an'], ['events', 'Termine'], ['reminders', 'Erinnerungen'], ['grades', 'Noten'], ['notes', 'Notizen'], ['photos', 'Tafelbilder']];
+  const table = `<details class="stats-table"><summary>Zahlen als Tabelle</summary><table><thead><tr><th>Tag</th><th>Besucher</th><th>Aufrufe</th><th>Aktive Konten</th><th>Neue Konten</th><th>Demo</th></tr></thead>
+    <tbody>${s.days.slice().reverse().map((d) => `<tr><td>${esc(F.short.format(parseDay(d.date)))}</td><td>${d.visitors}</td><td>${d.views}</td><td>${d.active}</td><td>${d.signups}</td><td>${d.demo}</td></tr>`).join('')}</tbody></table></details>`;
+  return `<section class="card admin-card wide">
+      <h2>Statistik</h2>
+      <p class="sub">Ohne Cookies und ohne fremde Dienste. Besucher zählen je Tag einmal, eigene Besuche als Admin und Demo-Konten zählen nicht.</p>
+      <div class="admin-stats">${[[today.visitors, 'Besucher heute'], [sum('visitors'), 'Besuche in 30 Tagen'], [today.active, 'Konten heute in der App'], [sum('signups'), 'neue Konten in 30 Tagen']]
+        .map(([n, l]) => `<div class="card admin-stat"><b>${n}</b><span>${l}</span></div>`).join('')}</div>
+      <div class="stats-charts"><figure><figcaption>Besucher der Website pro Tag</figcaption>${dayBars(s.days, 'visitors', 'Besucher')}</figure>
+        <figure><figcaption>Konten pro Tag in der App</figcaption>${dayBars(s.days, 'active', 'Konten')}</figure></div>
+      ${table}
+      <div class="stats-lists">
+        <div><h3>Geräte der Besucher (30 Tage)</h3>${dev ? group(share(s.platforms, dev)) : '<p class="footnote">Noch keine Besuche.</p>'}</div>
+        <div><h3>Schulsoftware der Konten</h3>${s.accounts ? group(share(Object.fromEntries(Object.entries(s.schools).map(([k, v]) => [schoolName(k), v])), s.accounts)) : '<p class="footnote">Noch keine Konten.</p>'}</div>
+        <div><h3>Was genutzt wird (von ${s.accounts} Konten)</h3>${group(...USE.map(([k, l]) => `<div class="row"><div class="main"><div class="title">${l}</div></div><div class="trail">${s.use[k]}</div></div>`))}</div>
+        <div><h3>Aktivität</h3>${group(...[[s.active.day, 'aktiv in 24 Stunden'], [s.active.week, 'aktiv in 7 Tagen'], [s.active.month, 'aktiv in 30 Tagen'], [sum('logins'), 'Anmeldungen in 30 Tagen'], [sum('demo'), 'Demo gestartet in 30 Tagen'], [sum('views'), 'Seitenaufrufe in 30 Tagen']]
+          .map(([v, l]) => `<div class="row"><div class="main"><div class="title">${l}</div></div><div class="trail">${v}</div></div>`))}</div>
+      </div>
+    </section>`;
+}
 async function openAdmin(data) {
   if (!ADMIN_PAGE) { location.href = '/admin'; return; }
   try { data ||= await api('/api/admin'); } catch (x) { toast(x.message); return; }
+  data.stats ||= adminState?.stats; // nach Aktionen schickt der Server keine neue Statistik mit
   adminState = data;
   let el = $('#admin-page');
   if (!el) {
@@ -1918,6 +1988,7 @@ async function openAdmin(data) {
     <div class="admin-stats">${[[data.accounts.length, 'Konten'], [active, 'aktiv in den letzten 7 Tagen'], [single.length, 'offene Einladungen'], [flyers.reduce((n, i) => n + i.usedCount, 0), 'über Flyer angemeldet']]
       .map(([n, l]) => `<div class="card admin-stat"><b>${n}</b><span>${l}</span></div>`).join('')}</div>
     <div class="admin-grid">
+      ${statsSection(data.stats)}
       <section class="card admin-card">
         <h2>Flyer (A6, doppelseitig)</h2>
         <p class="sub">Ein Code für alle Flyer: Er gilt für die gewählte Zahl an Anmeldungen und bis zum Ablaufdatum. Du bekommst eine ZIP-Datei mit Vorder- und Rückseite als Bild (z. B. für den dm-Fotodruck) und eine Druck-PDF für Druckereien.</p>
@@ -2141,24 +2212,51 @@ function openChooser(kind) {
   if (cur) $('#choose-clear').onclick = () => choose(null);
 }
 
+function wireUntisPick() {
+  const box = $('#untis-pick');
+  if (!box) return;
+  const redraw = () => { box.innerHTML = untisPick(); wireUntisPick(); };
+  const search = async () => {
+    const q = $('#untis-q').value.trim(), out = $('#untis-results'), err = $('#edu-form .form-error');
+    err.textContent = '';
+    if (q.length < 3) { err.textContent = 'Bitte mindestens 3 Zeichen eingeben.'; return; }
+    out.innerHTML = '<p class="footnote">Suche …</p>';
+    try {
+      untisFound = (await api(`/api/untis/schools?q=${encodeURIComponent(q)}`)).schools;
+      if (!untisFound.length) { out.innerHTML = '<p class="footnote">Keine Schule gefunden. Versuch es mit dem Ort oder einem Teil des Namens.</p>'; return; }
+      redraw();
+      $('#untis-q').value = q;
+    } catch (x) { out.innerHTML = ''; err.textContent = x.message; }
+  };
+  const q = $('#untis-q');
+  if (q) q.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); search(); } };
+  const btn = $('[data-untis-search]', box);
+  if (btn) btn.onclick = search;
+  $$('[data-untis-school]', box).forEach((b) => { b.onclick = () => { untisChoice = untisFound[Number(b.dataset.untisSchool)]; untisFound = []; redraw(); haptic(); }; });
+  const change = $('[data-untis-change]', box);
+  if (change) change.onclick = () => { untisChoice = null; redraw(); $('#untis-q').focus(); };
+}
 function wireEduForm() {
   const f = $('#edu-form');
   if (!f) return;
+  wireUntisPick();
   f.onsubmit = async (e) => {
     e.preventDefault();
     const btn = $('button[type=submit]', f), err = $('.form-error', f);
+    if ($('#untis-pick') && !untisChoice) { err.textContent = 'Bitte such zuerst deine Schule und wähl sie aus.'; return; }
     btn.disabled = true;
-    btn.textContent = 'Verbinde mit EduPage …';
+    btn.textContent = `Verbinde mit ${linkName()} …`;
     err.textContent = '';
     try {
-      setData(await api('/api/edupage', { method: 'POST', body: Object.fromEntries(new FormData(f)) }));
+      setData(await api(eduLike() ? '/api/edupage' : '/api/link', { method: 'POST', body: Object.fromEntries(new FormData(f)) }));
+      untisChoice = null;
       delete sheet.dataset.editEdu;
       haptic();
       $('#edu-section').innerHTML = edupageSection();
     } catch (x) {
       err.textContent = x.message;
       btn.disabled = false;
-      btn.textContent = D.edupage.connected ? 'Sichern' : 'Verbinden';
+      btn.textContent = D.link.connected ? 'Sichern' : 'Verbinden';
     }
   };
 }
@@ -2173,7 +2271,7 @@ async function logout() {
 
 /* ---------------------------------------------------------------- Anmelden und Registrieren */
 let info = null, registering = false; // info: Demo? Konten? (vom Server, ohne Anmeldung lesbar)
-const SCHOOL_OPTS = [['edupage', 'EduPage'], ['none', 'Keine']];
+const SCHOOL_OPTS = [['edupage', 'EduPage'], ['untis', 'WebUntis'], ['schulmanager', 'Schulmanager'], ['none', 'Keine']];
 function loginMode() {
   const f = $('#login form'), acc = !!info?.accounts, user = f.username;
   user.hidden = !acc;
@@ -2187,8 +2285,8 @@ function loginMode() {
     $('.login-fields', f).insertAdjacentHTML('beforeend', `<div class="register login-fields">
       <input name="code" placeholder="Einladungscode (6 Ziffern)" aria-label="Einladungscode" inputmode="numeric" autocomplete="one-time-code" maxlength="20" spellcheck="false" required>
       <p>Welche Schulsoftware nutzt deine Schule?</p>
-      ${fChoice('school', SCHOOL_OPTS, 'edupage')}
-      <p>Bei „Keine“ trägst du deinen Stundenplan selbst ein. WebUntis und Schulmanager kommen bald.</p>
+      <div class="choice-grid">${fChoice('school', SCHOOL_OPTS, 'edupage')}</div>
+      <p>Bei „Keine“ trägst du deinen Stundenplan selbst ein. Den Zugang zur Schulsoftware gibst du danach im Profil ein.</p>
       <p>Was mit deinen Daten passiert, steht in der <a href="/datenschutz.html" target="_blank" rel="noopener">Datenschutzerklärung</a>.</p></div>`);
   }
   $('button[type=submit]', f).textContent = info?.setup ? 'Admin-Konto anlegen' : registering ? 'Konto anlegen' : 'Anmelden';
@@ -2315,7 +2413,7 @@ function selectTab(name, { fromBar = false } = {}) {
   updateAdd();
   if (name === 'kalender') syncPlan();
   if (name === 'aufgaben') { taskSeg.measure(); taskSeg.track(FILTERS.findIndex(([k]) => k === taskFilter)); }
-  if (name === 'schule') { schoolSegCtl.measure(); schoolSegCtl.track(SCHOOL.findIndex(([k]) => k === schoolSeg)); }
+  if (name === 'schule') { schoolSegCtl.measure(); schoolSegCtl.track(schoolSegs().findIndex(([k]) => k === schoolSeg)); }
   if (name === 'notizen') { notesSegCtl.measure(); notesSegCtl.track(NOTES.findIndex(([k]) => k === notesSeg)); }
 }
 
@@ -2375,7 +2473,7 @@ document.addEventListener('click', async (e) => {
   if ('editEdu' in ds) { sheet.dataset.editEdu = '1'; $('#edu-section').innerHTML = edupageSection(); return wireEduForm(); }
   if ('disconnect' in ds) {
     if (!ds.sure) { ds.sure = '1'; $('span', el).textContent = 'Wirklich trennen?'; return; }
-    setData(await api('/api/edupage', { method: 'DELETE' }));
+    setData(await api('/api/link', { method: 'DELETE' }));
     $('#edu-section').innerHTML = edupageSection();
     return wireEduForm();
   }

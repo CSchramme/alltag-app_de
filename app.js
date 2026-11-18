@@ -10,6 +10,8 @@ const crypto = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
 const { generateVapidKeys, sendPush } = require('./push');
 const { Edupage, EduError, snapshot, schoolDay, regularDay, SNAPSHOT_VERSION, isoDay, addDays } = require('./edupage');
+const { Untis, UntisError, searchSchools, SERVER_RE } = require('./untis');
+const { Schulmanager } = require('./schulmanager');
 const demo = require('./demo');
 const { occursOn, birthdayOn, ageOn } = require('./public/recur');
 
@@ -135,7 +137,8 @@ const invites = () => atRoot(() => load('invites.json', []));
 const saveInvites = (list) => atRoot(() => save('invites.json', list));
 const hashPw = (pw, salt = crypto.randomBytes(16).toString('hex')) => ({ salt, hash: crypto.scryptSync(String(pw), salt, 64).toString('hex') });
 const checkPw = (a, pw) => crypto.timingSafeEqual(Buffer.from(hashPw(pw, a.salt).hash, 'hex'), Buffer.from(a.hash, 'hex'));
-const SCHOOLS = ['edupage', 'none']; // später: untis, schulmanager
+const SCHOOLS = ['edupage', 'untis', 'schulmanager', 'none'];
+const SCHOOL_NAMES = { edupage: 'EduPage', untis: 'WebUntis', schulmanager: 'Schulmanager' };
 const asUser = (a, fn) => ctx.run({ dir: userDir(a.id), account: a }, fn);
 const me = () => ctx.getStore()?.account || null;
 const isDemo = () => DEMO || !!me()?.demo; // Beispieldaten statt Schulsoftware
@@ -148,6 +151,64 @@ const adminData = () => ({ accounts: accounts().map(pubAccount), site: process.e
   legal: { name: process.env.LEGAL_NAME || '', address: process.env.LEGAL_ADDRESS || '', email: process.env.LEGAL_EMAIL || '' }, // fürs Impressum auf dem Flyer
   invites: invites().slice(-300).map(({ used, ...x }) => ({ ...x, usedCount: usedCount({ ...x, used }), open: inviteOpen({ ...x, used }), expires: new Date(inviteEnd(x)).toISOString() })) });
 const pubAccount = (a) => ({ id: a.id, support: supportId(a), name: a.name, school: a.school, admin: !!a.admin, disabled: !!a.disabled, demo: !!a.demo, jury: !!a.jury, created: a.created, lastSeen: a.lastSeen || null });
+/* ------------------------------------------------------------------ Eigene Statistik (nur mit Konten): ohne Cookies, ohne fremde Dienste */
+// Besucher = Hash aus IP, Browserkennung und einem Tages-Salz. Das Salz und die Hashes gibt es nur am selben Tag,
+// danach bleiben nur Zahlen. Aktive Konten zählen über das Laden der App-Daten (die App selbst kommt oft aus dem Cache).
+const BOT_RE = /bot|crawl|spider|slurp|curl|wget|python|httpclient|monitor|uptime|headless|preview|facebookexternalhit|lighthouse/i;
+const platformOf = (ua) => (/iPhone|iPad|iPod/.test(ua) ? 'iPhone/iPad' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Macintosh/.test(ua) ? 'Mac' : 'Andere');
+const count = (x) => (Array.isArray(x) ? x.length : x || 0);
+function track(fn) {
+  if (!ACCOUNTS) return;
+  atRoot(() => {
+    const s = load('stats.json', { days: {} }), today = isoDay(new Date()), fresh = s.salt?.day !== today;
+    if (fresh) {
+      s.salt = { day: today, v: crypto.randomBytes(16).toString('hex') };
+      for (const [d, x] of Object.entries(s.days)) {
+        if (d < isoDay(addDays(new Date(), -400))) delete s.days[d];
+        else if (d < today) Object.assign(x, { visitors: count(x.visitors), active: count(x.active) });
+      }
+    }
+    const t = (s.days[today] ||= { views: 0, visitors: [], active: [], logins: 0, signups: 0, demo: 0, platforms: {} });
+    if (fn(t, s.salt.v) !== false || fresh) save('stats.json', s);
+  });
+}
+function trackView(req) {
+  const ua = String(req.headers['user-agent'] || '');
+  if (!ACCOUNTS || !ua || BOT_RE.test(ua) || sessionUser(req)?.admin) return; // eigene Besuche als Admin zählen nicht
+  track((t, salt) => {
+    t.views++;
+    const h = crypto.createHash('sha256').update(`${salt}|${clientIp(req)}|${ua}`).digest('hex').slice(0, 16);
+    if (t.visitors.includes(h) || t.visitors.length >= 50000) return;
+    t.visitors.push(h);
+    t.platforms[platformOf(ua)] = (t.platforms[platformOf(ua)] || 0) + 1;
+  });
+}
+const trackCount = (k) => track((t) => { t[k] = (t[k] || 0) + 1; });
+const trackActive = (a) => track((t) => (a.admin || t.active.includes(a.id) ? false : void t.active.push(a.id)));
+function statsData() {
+  track(() => false); // neuer Tag: Hashes von gestern zu Zahlen machen
+  const s = atRoot(() => load('stats.json', { days: {} })), list = accounts().filter((a) => !a.demo), now = Date.now();
+  const days = [];
+  for (let i = 29; i >= 0; i--) {
+    const date = isoDay(addDays(new Date(), -i)), x = s.days[date] || {};
+    days.push({ date, visitors: count(x.visitors), views: x.views || 0, active: count(x.active), logins: x.logins || 0, signups: x.signups || 0, demo: x.demo || 0 });
+  }
+  const platforms = {};
+  for (const d of days) for (const [k, v] of Object.entries(s.days[d.date]?.platforms || {})) platforms[k] = (platforms[k] || 0) + v;
+  const seen = (ms) => list.filter((a) => a.lastSeen && now - Date.parse(a.lastSeen) < ms).length;
+  const schools = {}, use = { link: 0, push: 0, events: 0, reminders: 0, grades: 0, notes: 0, photos: 0 };
+  for (const a of list) {
+    schools[a.school] = (schools[a.school] || 0) + 1;
+    asUser(a, () => { // nur ob etwas genutzt wird, nie was drinsteht
+      const c = load('config.json', {}), d = load('db.json', {});
+      if (a.school === 'none' ? (d.lessons || []).length : c[a.school || 'edupage']) use.link++;
+      if ((load('state.json', {}).subs || []).length) use.push++;
+      for (const k of ['events', 'reminders', 'grades', 'notes', 'photos']) if ((d[k] || []).length) use[k]++;
+    });
+  }
+  return { days, platforms, schools, use, accounts: list.length, active: { day: seen(864e5), week: seen(7 * 864e5), month: seen(30 * 864e5) } };
+}
+
 // Hintergrund-Aufgaben nacheinander für jedes aktive Konto (ohne Konten: einmal für die App)
 async function eachUser(fn) {
   if (!ACCOUNTS) return fn();
@@ -370,6 +431,7 @@ async function connect(cfg) {
 
 
 async function edupageDo(fn) {
+  if (school() !== 'edupage') throw bad('Das geht nur mit EduPage.');
   const cfg = load('config.json', {}).edupage;
   if (!cfg) throw bad('EduPage ist nicht verbunden');
   try { return await fn(await connect(cfg)); } catch (e) { throw e.status ? e : bad(e.message); }
@@ -519,15 +581,46 @@ function ownSnapshot(from = new Date()) {
 }
 const snapNow = () => (me()?.demo ? demo.snapshot() : school() === 'none' ? ownSnapshot() : load('snapshot.json', null));
 
+// WebUntis und Schulmanager: gleiche Form wie der EduPage-Snapshot, damit Mitteilungen, Lernplan und Ansichten gleich bleiben
+const LINKS = { untis: Untis, schulmanager: Schulmanager };
+const linkClient = (cfg) => new LINKS[school()]({ ...cfg, pass: unseal(cfg.pass) }, loadSession());
+async function linkSnapshot(cfg, now = new Date()) {
+  const c = linkClient(cfg), errors = [], today = isoDay(now), until = isoDay(addDays(now, 28));
+  const part = async (label, fn, fallback) => {
+    try { return await fn(); } catch (e) { if (e.code) throw e; errors.push(`${label}: ${e.message}`); return fallback; }
+  };
+  const dates = [0, 1, 2, 3, 4, 5, 6].map((i) => addDays(now, i)).filter((d) => d.getDay() % 6).map(isoDay);
+  try {
+    const plan = await c.lessons(dates[0], dates.at(-1)); // ohne Stundenplan kein neuer Stand, der alte bleibt
+    const days = dates.map((d) => schoolDay(d, plan.get(d) || []));
+    const tasks = [...await part('Hausaufgaben', () => c.homework(today, until), []), ...await part('Prüfungen', () => c.exams(today, until), [])];
+    for (const t of tasks) { // Schulmanager: fällig in der nächsten Stunde des Fachs
+      t.due ||= days.find((d) => d.date > t.created.slice(0, 10) && d.lessons.some((l) => !l.cancelled && (l.subject === t.subject || l.short === t.subject)))?.date || null;
+    }
+    return {
+      v: SNAPSHOT_VERSION, updated: new Date().toISOString(), student: await part('Name', () => c.student(), { name: '', class: '' }),
+      days, tasks, missing: [], people: [], bells: await part('Klingelzeiten', () => c.bells(), []),
+      messages: (await part('Mitteilungen', () => c.messages(today), [])).sort((a, b) => b.time.localeCompare(a.time)).slice(0, 100), errors,
+    };
+  } finally { saveSession(c.session); }
+}
+async function linkWeek(cfg, dates, known) {
+  const c = linkClient(cfg);
+  try {
+    const plan = await c.lessons(dates[0], dates.at(-1));
+    return dates.map((d) => known.find((x) => x.date === d) || schoolDay(d, plan.get(d) || []));
+  } catch (e) { throw e.status ? e : bad(e.message); } finally { saveSession(c.session); }
+}
+
 async function syncEdupage() {
   if (isDemo()) { const s = demo.snapshot(); save('snapshot.json', s); return s; }
   if (school() === 'none') return ownSnapshot();
-  const cfg = load('config.json', {}).edupage;
+  const cfg = load('config.json', {})[school()];
   if (!cfg) return null;
   const status = load('status.json', {});
   if (status.blockedUntil > Date.now()) return load('snapshot.json', null); // nach Captcha eine Stunde Ruhe
   try {
-    const s = await snapshot(await connect(cfg), { school: cfg.school });
+    const s = school() === 'edupage' ? await snapshot(await connect(cfg), { school: cfg.school }) : await linkSnapshot(cfg);
     save('snapshot.json', s);
     save('status.json', { ok: true, at: s.updated, error: null });
     s.errors.forEach((e) => console.warn('Teilfehler:', e));
@@ -537,7 +630,7 @@ async function syncEdupage() {
     const pause = { captcha: 3600e3, credentials: 365 * 864e5, twofactor: 365 * 864e5 }[e.code] || 0;
     save('status.json', { ok: false, at: new Date().toISOString(), error: e.message, blockedUntil: pause && Date.now() + pause });
     if (e.code) saveSession({});
-    console.error('EduPage-Abgleich fehlgeschlagen:', e.message);
+    console.error(`${SCHOOL_NAMES[school()]}-Abgleich fehlgeschlagen:`, e.message);
     return load('snapshot.json', null);
   }
 }
@@ -595,7 +688,7 @@ function settings() {
     ha: c.ha ? { connected: true, url: c.ha.url, todo: c.ha.todo || '', pc: c.ha.pc || [] } : { connected: false } }; // Token bleibt auf dem Server
 }
 function payload() {
-  const st = state(), snap = snapNow(), cfg = load('config.json', {}).edupage;
+  const st = state(), snap = snapNow(), cfg = load('config.json', {})[school()];
   return {
     app: APP, demo: isDemo(), status: load('status.json', {}),
     features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited(), push: !limited() },
@@ -603,7 +696,8 @@ function payload() {
     ...settings(), holidays: load('holidays.json', null)?.list || [],
     weather: isDemo() ? demo.weather() : load('weather.json', null)?.hours || [],
     timer: st.timer || null,
-    edupage: isDemo() ? { connected: true, school: 'demo', user: 'demo' } : cfg ? { connected: true, school: cfg.school, user: cfg.user } : { connected: false },
+    // Verbindung zur Schulsoftware des Kontos (EduPage, WebUntis oder Schulmanager), ohne Passwort
+    link: isDemo() ? { connected: true, school: 'demo', user: 'demo' } : cfg && school() !== 'none' ? { connected: true, school: cfg.school || '', name: cfg.name || '', server: cfg.server || '', user: cfg.user } : { connected: false },
     snap: snap && {
       ...snap,
       tasks: [...snap.tasks.map((t) => ({ ...t, done: st.done[t.id] ?? t.done })), ...study(snap, st.done)],
@@ -670,6 +764,7 @@ const routes = {
     if (!a) { hashPw(String(password)); return fail(res, 401, 'Benutzername oder Passwort stimmt nicht.', ip); } // gleiche Rechenzeit wie bei echtem Konto
     if (!checkPw(a, password ?? '')) return fail(res, 401, 'Benutzername oder Passwort stimmt nicht.', ip, who);
     if (a.disabled) return send(res, 403, { error: 'Dieses Konto ist gesperrt.' });
+    if (!a.admin) trackCount('logins');
     send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 365 * 86400, a) });
   },
   'POST /api/logout': (req, res) => send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 0) }),
@@ -698,12 +793,14 @@ const routes = {
     fs.mkdirSync(userDir(a.id), { recursive: true, mode: 0o700 });
     saveAccounts([...list, a]);
     if (hit?.uses) { hit.used = [...(hit.used || []), a.id]; saveInvites(inv); } else if (hit) { hit.usedBy = a.id; hit.usedAt = a.created; saveInvites(inv); }
+    if (!first) trackCount('signups');
     send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 365 * 86400, a) });
   },
   // Demo ansehen ohne Passwort (Knopf auf der Startseite, QR-Code mit #demo)
   'POST /api/demo': (req, res) => {
     const a = ACCOUNTS && demoAccount();
     if (!a) return send(res, 404, { error: 'Gerade gibt es keine Demo.' });
+    trackCount('demo');
     send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 7 * 86400, a) });
   },
   // Eigenes Konto: Passwort oder Schulsoftware ändern, Konto mit allen Daten löschen
@@ -724,9 +821,13 @@ const routes = {
       a.ver = (a.ver || 0) + 1;
       cookie = { 'Set-Cookie': sessionCookie(req, 365 * 86400, a) };
     }
-    if (b.school !== undefined) {
+    if (b.school !== undefined && b.school !== a.school) {
       if (!SCHOOLS.includes(b.school)) throw bad('Unbekannte Schulsoftware');
       a.school = b.school;
+      asUser(a, () => { // Stand der alten Schulsoftware gilt nicht mehr
+        for (const n of ['snapshot.json', 'session.json', 'status.json']) fs.rmSync(file(n), { force: true });
+        const st = state(); st.eduSeeded = false; save('state.json', st);
+      });
     }
     saveAccounts(list);
     send(res, 200, asUser(a, payload), cookie);
@@ -742,7 +843,7 @@ const routes = {
     send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 0) });
   },
   // Admin: Einladungscodes und Konten verwalten
-  'GET /api/admin': (req, res) => { admin(); send(res, 200, adminData()); },
+  'GET /api/admin': (req, res) => { admin(); send(res, 200, { ...adminData(), stats: statsData() }); },
   'POST /api/admin/invites': async (req, res) => {
     admin();
     const b = await readJson(req), note = F.text(80)(b.note), list = invites();
@@ -799,6 +900,7 @@ const routes = {
     const origin = `${https(req) ? 'https' : 'http'}://${req.headers.host}`;
     if (loggedIn(req) && /^[\w.:-]+$/.test(req.headers.host || '') && atRoot(() => load('origin.json', null)) !== origin) atRoot(() => save('origin.json', origin));
     const a = me();
+    if (a && !a.demo) trackActive(a);
     if (a && Date.now() - Date.parse(a.lastSeen || 0) > 3600e3) { // „zuletzt aktiv“ für die Konten-Übersicht, höchstens stündlich schreiben
       const list = accounts(), x = list.find((y) => y.id === a.id);
       if (x) { x.lastSeen = new Date().toISOString(); saveAccounts(list); }
@@ -888,8 +990,9 @@ const routes = {
     if (school() === 'none') { const own = ownSnapshot(new Date(`${start}T08:00`)).days; return send(res, 200, { days: dates.map((d) => own.find((x) => x.date === d)) }); }
     if (dates.every((d) => known.some((x) => x.date === d))) return send(res, 200, { days: dates.map((d) => known.find((x) => x.date === d)) });
     if (hit && Date.now() - hit.at < 10 * 60e3) return send(res, 200, { days: hit.days });
-    if (!load('config.json', {}).edupage) return send(res, 200, { days: [] });
-    const days = await edupageDo(async (ep) => {
+    const cfg = load('config.json', {})[school()];
+    if (!cfg) return send(res, 200, { days: [] });
+    const days = LINKS[school()] ? await linkWeek(cfg, dates, known) : await edupageDo(async (ep) => {
       const out = [];
       for (const d of dates) out.push(known.find((x) => x.date === d) || schoolDay(d, await ep.plan(d).then((p) => ep.lessons(p), () => [])));
       return out;
@@ -947,8 +1050,35 @@ const routes = {
     await sync(0);
     send(res, 200, payload());
   },
-  'DELETE /api/edupage': (req, res) => {
-    const c = load('config.json', {}); delete c.edupage; save('config.json', c);
+  // WebUntis und Schulmanager verbinden: erst anmelden, nur bei Erfolg den Zugang (verschlüsselt) speichern
+  'POST /api/link': async (req, res) => {
+    if (isDemo()) return send(res, 400, { error: 'Im Demo-Modus nicht möglich' });
+    const kind = school(), Link = LINKS[kind];
+    if (!Link) throw bad('Dein Konto ist auf eine andere Schulsoftware eingestellt.');
+    const b = await readJson(req), cfg = { user: String(b.user || '').trim().slice(0, 200), pass: String(b.pass || '') };
+    if (kind === 'untis') Object.assign(cfg, { server: String(b.server || '').trim().toLowerCase(), school: String(b.school || '').trim().slice(0, 100), name: F.text(160, true)(b.name) });
+    if (kind === 'untis' && (!SERVER_RE.test(cfg.server) || !cfg.school)) throw bad('Bitte such zuerst deine Schule und wähl sie aus.');
+    if (!cfg.user || !cfg.pass) throw bad('Bitte Benutzername und Passwort angeben.');
+    try {
+      const c = new Link(cfg);
+      await c.login();
+      saveSession(c.session);
+    } catch (e) {
+      return send(res, 400, { error: e.code ? e.message : `${SCHOOL_NAMES[kind]} nicht erreichbar (${e.message})` });
+    }
+    save('config.json', { ...load('config.json', {}), [kind]: { ...cfg, pass: seal(cfg.pass) } });
+    save('status.json', {});
+    const st = state(); st.eduSeeded = false; save('state.json', st); // neuer Zugang: Bestand nicht als neu melden
+    await sync(0);
+    send(res, 200, payload());
+  },
+  'GET /api/untis/schools': async (req, res) => {
+    const q = String(new URL(req.url, 'http://x').searchParams.get('q') || '').trim();
+    if (q.length < 3 || q.length > 80) throw bad('Bitte mindestens 3 Zeichen eingeben.');
+    try { send(res, 200, { schools: await searchSchools(q) }); } catch (e) { throw bad(e instanceof UntisError ? e.message : 'Die Schulsuche von WebUntis antwortet gerade nicht.'); }
+  },
+  'DELETE /api/link': (req, res) => {
+    const c = load('config.json', {}); delete c[school()]; save('config.json', c);
     for (const n of ['snapshot.json', 'session.json', 'status.json']) fs.rmSync(file(n), { force: true });
     const st = state(); st.eduSeeded = false; save('state.json', st);
     send(res, 200, payload());
@@ -1156,6 +1286,7 @@ function serveStatic(req, res, pathname) {
   try { rel = decodeURIComponent(pathname); } catch { return send(res, 400, 'Bad Request'); }
   const page = PAGE_FILES[pathname], fp = page ? path.join(PAGES, page) : path.join(PUBLIC, rel);
   if (!page && !fp.startsWith(PUBLIC + path.sep)) return send(res, 404, 'Not Found');
+  if (page && pathname !== '/admin' && req.method === 'GET') trackView(req);
   fs.readFile(fp, (err, buf) => {
     if (err) return send(res, 404, 'Not Found');
     const type = TYPES[path.extname(fp)] || 'application/octet-stream';
