@@ -1,5 +1,5 @@
 // Service Worker (Alltag): immer zuerst frisch vom eigenen Server, offline der letzte Stand. Dazu Push-Mitteilungen.
-const CACHE = 'alltag-v3'; // hochzählen, wenn sich Dateien der App-Hülle ändern (z. B. Icons)
+const CACHE = 'alltag-v4'; // hochzählen, wenn sich Dateien der App-Hülle ändern (z. B. Icons)
 const SHELL = ['/', '/app.css', '/app.js', '/recur.js', '/theme.js', '/manifest.webmanifest', '/icon-192.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -18,7 +18,7 @@ self.addEventListener('fetch', (e) => {
   if (url.pathname.startsWith('/api/') && url.pathname !== '/api/data') return;
   // Netz zuerst: der Server steht zu Hause, neue Versionen sollen sofort ankommen
   const key = e.request.mode === 'navigate' ? '/' : url.pathname;
-  e.respondWith(fetch(e.request).then((res) => {
+  e.respondWith(fetch(e.request, { cache: 'no-cache' }).then((res) => { // immer beim Server nachfragen (ETag), nie eine alte Kopie aus dem Browser-Cache
     if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(key, copy)); }
     return res;
   }).catch(() => caches.match(key).then((r) => r || Response.error())));

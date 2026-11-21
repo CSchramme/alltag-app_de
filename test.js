@@ -334,6 +334,8 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const index = await call('/');
     const indexHtml = await index.text();
     assert.ok(indexHtml.includes('<title>Alltag</title>') && !indexHtml.includes('data-skin')); // private App: Liquid Glass
+    assert.match(indexHtml, /src="\/app\.js\?v=[0-9a-z]+"/); // Versionsnummer: nach Updates keine alten Skripte aus dem Browser-Cache
+    assert.match(indexHtml, /href="\/app\.css\?v=[0-9a-z]+"/);
     assert.ok(index.headers.get('content-security-policy'));
     assert.equal((await call('/..%2fapp.js')).status, 404);
     assert.equal((await call('/data/secret.json')).status, 404);

@@ -1242,6 +1242,13 @@ function serveStatic(req, res, pathname) {
     if (type.startsWith('text/html')) {
       let html = buf.toString('utf8');
       if (!PRIVATE) html = html.replace('<html lang="de">', '<html lang="de" data-skin="modern">'); // öffentliche Version: eigener Look
+      // Versionsnummer an Skripte/Stile: nginx liefert public/ ohne Cache-Control, Browser hielten sonst stundenlang alte Dateien,
+      // die nicht zum neuen HTML passen (nach einem Update blieb die App beim Laden hängen)
+      html = html.replace(/(["'])\/(app\.css|app\.js|recur\.js|theme\.js)\1/g, (m, q, f) => {
+        let v = '0';
+        try { v = Math.floor(fs.statSync(path.join(PUBLIC, f)).mtimeMs).toString(36); } catch { /* Datei fehlt: ohne Version */ }
+        return `${q}/${f}?v=${v}${q}`;
+      });
       buf = Buffer.from(legal(html));
     }
     res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
