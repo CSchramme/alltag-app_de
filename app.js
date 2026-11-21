@@ -248,7 +248,8 @@ function statsData() {
 // Hintergrund-Aufgaben nacheinander für jedes aktive Konto (ohne Konten: einmal für die App)
 async function eachUser(fn) {
   if (!ACCOUNTS) return fn();
-  for (const a of accounts().filter((x) => !x.disabled && (x.emailOk || x.demo))) { // unbestätigte Konten haben noch keine Daten
+  // neue, noch unbestätigte Konten haben noch keinen Datenordner; umgezogene Konten ohne bestätigte E-Mail gleichen weiter ab
+  for (const a of accounts().filter((x) => !x.disabled && (x.emailOk || x.demo || fs.existsSync(userDir(x.id))))) {
     try { await asUser(a, fn); } catch (e) { console.error(`Konto ${a.name}:`, e); }
   }
 }
