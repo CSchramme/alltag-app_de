@@ -33,9 +33,17 @@ const PRIVATE = process.env.PRIVATE === '1' || (!ACCOUNTS && !DEMO); // Home Ass
 const OPEN_DEMO = DEMO && !PRIVATE; // öffentliche Demo: keine Fotos und Mitteilungen von Fremden, Daten setzen sich zurück
 const PUBLIC = path.join(__dirname, 'public');
 const DATA = process.env.DATA_DIR || path.join(__dirname, DEMO ? 'data-demo' : 'data');
-const PASSWORD = DEMO ? 'demo' : process.env.APP_PASSWORD; // mit Konten: Code für das allererste Konto (Admin)
-if (!PASSWORD) {
+const PASSWORD = DEMO ? 'demo' : process.env.APP_PASSWORD; // private App: das eine Passwort
+if (!PASSWORD && !ACCOUNTS) {
   console.error('APP_PASSWORD fehlt. In Plesk unter Node.js → „Benutzerdefinierte Umgebungsvariablen“ setzen.');
+  process.exit(1);
+}
+// Mit Konten: Registrieren, Anmelden, E-Mail und Passwort laufen über den eigenen Konto-Dienst (accounts.alltag-app.de, eigenes Git).
+// Die App bekommt nach dem Anmelden einen Einmal-Code und tauscht ihn mit dem gemeinsamen Schlüssel gegen die Kontodaten.
+const ACCOUNTS_URL = String(process.env.ACCOUNTS_URL || '').replace(/\/+$/, '');
+const ACCOUNTS_SECRET = process.env.ACCOUNTS_SECRET || '';
+if (ACCOUNTS && (!/^https?:\/\/[^/]+$/.test(ACCOUNTS_URL) || ACCOUNTS_SECRET.length < 32)) {
+  console.error('Mit Konten braucht die App ACCOUNTS_URL (Adresse des Konto-Dienstes, z. B. https://accounts.alltag-app.de) und ACCOUNTS_SECRET (mindestens 32 Zeichen, derselbe Wert wie dort).');
   process.exit(1);
 }
 if (ACCOUNTS && String(process.env.DATA_KEY || '').length < 32) { // Schulpasswörter fremder Leute nie mit einem Schlüssel, der neben den Daten liegt
@@ -131,12 +139,36 @@ const cookies = (req) => Object.fromEntries((req.headers.cookie || '').split(';'
 const https = (req) => req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
 /* ------------------------------------------------------------------ Konten (nur mit ACCOUNTS=1) */
 const userDir = (id) => path.join(DATA, 'users', id);
-const accounts = () => atRoot(() => load('accounts.json', []));
-const saveAccounts = (list) => atRoot(() => save('accounts.json', list));
-const invites = () => atRoot(() => load('invites.json', []));
-const saveInvites = (list) => atRoot(() => save('invites.json', list));
-const hashPw = (pw, salt = crypto.randomBytes(16).toString('hex')) => ({ salt, hash: crypto.scryptSync(String(pw), salt, 64).toString('hex') });
-const checkPw = (a, pw) => crypto.timingSafeEqual(Buffer.from(hashPw(pw, a.salt).hash, 'hex'), Buffer.from(a.hash, 'hex'));
+const accounts = () => atRoot(() => load('konten.json', [])); // Abbild der Konten vom Konto-Dienst, ohne Passwörter
+const seenAt = () => atRoot(() => load('seen.json', {})); // zuletzt in der App aktiv, je Konto
+async function accountsApi(p, method = 'GET', body) {
+  const r = await fetch(`${ACCOUNTS_URL}${p}`, { method, body: body && JSON.stringify(body), signal: AbortSignal.timeout(10000),
+    headers: { Authorization: `Bearer ${ACCOUNTS_SECRET}`, 'Content-Type': 'application/json' } })
+    .catch(() => { throw Object.assign(new Error('Der Konto-Dienst ist gerade nicht erreichbar.'), { status: 503 }); });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(j.error || `Konto-Dienst: Fehler ${r.status}`), { status: r.status >= 500 ? 502 : 400, code: r.status });
+  return j;
+}
+// Abbild neu laden. Daten löscht die App nur bei einer ausdrücklichen Löschnotiz, nie weil ein Konto in der Liste fehlt.
+async function refreshAccounts() {
+  const { accounts: list, deleted = [] } = await accountsApi('/api/accounts');
+  if (!Array.isArray(list)) return;
+  atRoot(() => save('konten.json', list));
+  for (const d of deleted) if (/^[0-9a-f-]{36}$/i.test(d.id) && !list.some((a) => a.id === d.id)) fs.rmSync(userDir(d.id), { recursive: true, force: true });
+}
+const keepAccount = (a) => atRoot(() => save('konten.json', [...accounts().filter((x) => x.id !== a.id), a]));
+// Umzug: Konten aus der Zeit vor dem Konto-Dienst einmal dorthin übergeben (Passwörter bleiben gültig, E-Mail wird beim ersten Anmelden nachgetragen)
+async function migrateAccounts() {
+  const old = atRoot(() => load('accounts.json', null));
+  if (!Array.isArray(old) || !old.length) return;
+  const r = await accountsApi('/api/import', 'POST', { accounts: old, invites: atRoot(() => load('invites.json', [])) }).catch((e) => e);
+  if (r instanceof Error && r.code !== 409) throw r; // 409: dort gibt es schon Konten, dann gilt deren Stand
+  atRoot(() => {
+    save('seen.json', { ...Object.fromEntries(old.filter((a) => a.lastSeen).map((a) => [a.id, a.lastSeen])), ...load('seen.json', {}) });
+    for (const n of ['accounts.json', 'invites.json']) if (fs.existsSync(file(n))) fs.renameSync(file(n), file(n.replace('.json', '-vor-konto-dienst.json')));
+  });
+  console.log(r instanceof Error ? 'Konto-Dienst hatte schon Konten, alte Liste nur gesichert.' : `${r.imported} Konten an den Konto-Dienst übergeben.`);
+}
 const SCHOOLS = ['edupage', 'untis', 'schulmanager', 'none'];
 const SCHOOL_NAMES = { edupage: 'EduPage', untis: 'WebUntis', schulmanager: 'Schulmanager' };
 const asUser = (a, fn) => ctx.run({ dir: userDir(a.id), account: a }, fn);
@@ -147,10 +179,14 @@ const supportId = (a) => a.id.replace(/-/g, '').slice(0, 8).toUpperCase().replac
 const school = () => me()?.school || 'edupage';
 function admin() { if (!me()?.admin) throw Object.assign(new Error('Nur für Admins'), { status: 403 }); }
 const demoAccount = () => accounts().find((a) => a.demo && !a.disabled);
-const adminData = () => ({ accounts: accounts().map(pubAccount), site: process.env.PUBLIC_URL || '',
-  legal: { name: process.env.LEGAL_NAME || '', address: process.env.LEGAL_ADDRESS || '', email: process.env.LEGAL_EMAIL || '' }, // fürs Impressum auf dem Flyer
-  invites: invites().slice(-300).map(({ used, ...x }) => ({ ...x, usedCount: usedCount({ ...x, used }), open: inviteOpen({ ...x, used }), expires: new Date(inviteEnd(x)).toISOString() })) });
-const pubAccount = (a) => ({ id: a.id, support: supportId(a), name: a.name, school: a.school, admin: !!a.admin, disabled: !!a.disabled, demo: !!a.demo, jury: !!a.jury, created: a.created, lastSeen: a.lastSeen || null });
+async function adminData(extra = {}) { // Konten aus dem Abbild, Einladungscodes direkt vom Konto-Dienst
+  const seen = seenAt();
+  return { accounts: accounts().map((a) => pubAccount(a, seen)), site: process.env.PUBLIC_URL || '',
+    legal: { name: process.env.LEGAL_NAME || '', address: process.env.LEGAL_ADDRESS || '', email: process.env.LEGAL_EMAIL || '' }, // fürs Impressum auf dem Flyer
+    invites: extra.invites || (await accountsApi('/api/invites')).invites, ...extra };
+}
+const pubAccount = (a, seen = seenAt()) => ({ id: a.id, support: supportId(a), name: a.name, email: a.email || '', emailOk: !!a.emailOk, school: a.school, admin: !!a.admin,
+  disabled: !!a.disabled, demo: !!a.demo, jury: !!a.jury, created: a.created, lastSeen: seen[a.id] || null });
 /* ------------------------------------------------------------------ Eigene Statistik (nur mit Konten): ohne Cookies, ohne fremde Dienste */
 // Besucher = Hash aus IP, Browserkennung und einem Tages-Salz. Das Salz und die Hashes gibt es nur am selben Tag,
 // danach bleiben nur Zahlen. Aktive Konten zählen über das Laden der App-Daten (die App selbst kommt oft aus dem Cache).
@@ -187,15 +223,15 @@ const trackCount = (k) => track((t) => { t[k] = (t[k] || 0) + 1; });
 const trackActive = (a) => track((t) => (a.admin || t.active.includes(a.id) ? false : void t.active.push(a.id)));
 function statsData() {
   track(() => false); // neuer Tag: Hashes von gestern zu Zahlen machen
-  const s = atRoot(() => load('stats.json', { days: {} })), list = accounts().filter((a) => !a.demo), now = Date.now();
+  const s = atRoot(() => load('stats.json', { days: {} })), list = accounts().filter((a) => !a.demo), now = Date.now(), last = seenAt();
   const days = [];
-  for (let i = 29; i >= 0; i--) {
+  for (let i = 29; i >= 0; i--) { // neue Konten zählt der Konto-Dienst mit (Anlegedatum), alles andere die App
     const date = isoDay(addDays(new Date(), -i)), x = s.days[date] || {};
-    days.push({ date, visitors: count(x.visitors), views: x.views || 0, active: count(x.active), logins: x.logins || 0, signups: x.signups || 0, demo: x.demo || 0 });
+    days.push({ date, visitors: count(x.visitors), views: x.views || 0, active: count(x.active), logins: x.logins || 0, signups: list.filter((a) => isoDay(new Date(a.created)) === date).length, demo: x.demo || 0 });
   }
   const platforms = {};
   for (const d of days) for (const [k, v] of Object.entries(s.days[d.date]?.platforms || {})) platforms[k] = (platforms[k] || 0) + v;
-  const seen = (ms) => list.filter((a) => a.lastSeen && now - Date.parse(a.lastSeen) < ms).length;
+  const seen = (ms) => list.filter((a) => last[a.id] && now - Date.parse(last[a.id]) < ms).length;
   const schools = {}, use = { link: 0, push: 0, events: 0, reminders: 0, grades: 0, notes: 0, photos: 0 };
   for (const a of list) {
     schools[a.school] = (schools[a.school] || 0) + 1;
@@ -212,25 +248,9 @@ function statsData() {
 // Hintergrund-Aufgaben nacheinander für jedes aktive Konto (ohne Konten: einmal für die App)
 async function eachUser(fn) {
   if (!ACCOUNTS) return fn();
-  for (const a of accounts().filter((x) => !x.disabled)) {
+  for (const a of accounts().filter((x) => !x.disabled && (x.emailOk || x.demo))) { // unbestätigte Konten haben noch keine Daten
     try { await asUser(a, fn); } catch (e) { console.error(`Konto ${a.name}:`, e); }
   }
-}
-// Einladungscodes: 6 Ziffern, leicht abzutippen. Damit Raten nichts bringt: 7 Tage gültig, nur einmal nutzbar,
-// und nach 30 falschen Codes in einer Stunde pausiert das Registrieren (die Anmeldung bleibt davon unberührt).
-const INVITE_DAYS = 7;
-const inviteEnd = (x) => Date.parse(x.created) + (x.days || INVITE_DAYS) * 864e5; // Flyer-Codes gelten 30 Tage
-const usedCount = (x) => (x.uses ? (x.used || []).length : x.usedBy ? 1 : 0);
-const inviteOpen = (x) => usedCount(x) < (x.uses || 1) && Date.now() < inviteEnd(x); // Sammelcode (Flyer): gilt für `uses` Anmeldungen
-function newInvite(list) {
-  let c;
-  do c = String(crypto.randomInt(0, 1e6)).padStart(6, '0'); while (list.some((x) => x.code === c && !x.usedBy));
-  return c;
-}
-const regFails = []; // Zeitpunkte falscher Einladungscodes (alle zusammen)
-function newCode() { // für zurückgesetzte Passwörter: länger, gut abzutippen (ohne 0/O, 1/I/L)
-  const abc = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', b = crypto.randomBytes(8);
-  return `${[...b.subarray(0, 4)].map((x) => abc[x % abc.length]).join('')}-${[...b.subarray(4)].map((x) => abc[x % abc.length]).join('')}`;
 }
 
 // Sitzung: ohne Konten „Ablauf.Signatur“, mit Konten „Konto.Ablauf.Signatur“. Die Signatur enthält die Version des Kontos –
@@ -263,10 +283,6 @@ async function fail(res, status, error, ...keys) {
   send(res, status, { error });
 }
 const TOO_MANY = { error: 'Zu viele Versuche. Bitte in 15 Minuten erneut.' };
-// zu leicht zu erraten: kurze Muster, Wörter rund um die App und der eigene Name
-const WEAK = /^(.)\1+$|^(0?123456789?0?|12345678|87654321|passwort\d*|password\d*|qwertz\w*|qwerty\w*|asdfghjk\w*|alltag\w*|schule\w*|edupage\w*)$/i;
-const weakPw = (pw, name) => WEAK.test(pw) || (String(name).length >= 4 && pw.toLowerCase().includes(String(name).toLowerCase()));
-
 /* ------------------------------------------------------------------ Eigene Einträge: erlaubte Felder */
 const bad = (m) => Object.assign(new Error(m), { status: 400 });
 const F = {
@@ -691,7 +707,7 @@ function payload() {
   const st = state(), snap = snapNow(), cfg = load('config.json', {})[school()];
   return {
     app: APP, demo: isDemo(), status: load('status.json', {}),
-    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited(), push: !limited() },
+    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
     account: me() && pubAccount(me()), school: school(),
     ...settings(), holidays: load('holidays.json', null)?.list || [],
     weather: isDemo() ? demo.weather() : load('weather.json', null)?.hours || [],
@@ -753,49 +769,15 @@ async function screenAgent(req, res, q) {
 
 const teacherCache = new Map(), weekCache = new Map();
 const routes = {
+  // private App: ein Passwort. Mit Konten meldet man sich beim Konto-Dienst an (siehe /auth/callback).
   'POST /api/login': async (req, res) => {
-    const { name, password } = await readJson(req), ip = `ip:${clientIp(req)}`, who = `name:${String(name || '').trim().toLowerCase()}`;
-    if (throttled(ip, who)) return send(res, 429, TOO_MANY);
-    if (!ACCOUNTS) {
-      if (!same(password ?? '', PASSWORD)) return fail(res, 401, 'Falsches Passwort', ip);
-      return send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 365 * 86400) });
-    }
-    const a = accounts().find((x) => x.name === String(name || '').trim().toLowerCase());
-    if (!a) { hashPw(String(password)); return fail(res, 401, 'Benutzername oder Passwort stimmt nicht.', ip); } // gleiche Rechenzeit wie bei echtem Konto
-    if (!checkPw(a, password ?? '')) return fail(res, 401, 'Benutzername oder Passwort stimmt nicht.', ip, who);
-    if (a.disabled) return send(res, 403, { error: 'Dieses Konto ist gesperrt.' });
-    if (!a.admin) trackCount('logins');
-    send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 365 * 86400, a) });
-  },
-  'POST /api/logout': (req, res) => send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 0) }),
-  // Registrieren nur mit Einladungscode; das allererste Konto mit APP_PASSWORD als Code und wird Admin
-  'POST /api/register': async (req, res) => {
-    if (!ACCOUNTS) return send(res, 404, { error: 'unbekannt' });
-    const ip = `ip:${clientIp(req)}`;
+    if (ACCOUNTS) return send(res, 404, { error: 'Anmelden geht über die Konto-Seite.' });
+    const { password } = await readJson(req), ip = `ip:${clientIp(req)}`;
     if (throttled(ip)) return send(res, 429, TOO_MANY);
-    const b = await readJson(req), name = String(b.name || '').trim().toLowerCase(), pw = String(b.password || ''), code = String(b.code || '').trim();
-    if (!/^[a-z0-9._-]{3,30}$/.test(name)) throw bad('Benutzername: 3 bis 30 Zeichen, nur Buchstaben, Ziffern, Punkt, Bindestrich und Unterstrich.');
-    if (pw.length < 8) throw bad('Das Passwort braucht mindestens 8 Zeichen.');
-    if (weakPw(pw, name)) throw bad('Dieses Passwort ist zu leicht zu erraten. Nimm zum Beispiel drei Wörter, die nichts miteinander zu tun haben.');
-    if (!SCHOOLS.includes(b.school)) throw bad('Bitte wähle aus, welche Schulsoftware deine Schule nutzt.');
-    const list = accounts(), inv = invites(), first = !list.length;
-    if (!first) {
-      while (regFails.length && regFails[0] < Date.now() - 3600e3) regFails.shift();
-      if (regFails.length >= 30) return send(res, 429, { error: 'Registrieren ist gerade kurz pausiert. Bitte versuch es in einer Stunde noch einmal.' });
-    }
-    const hit = first ? null : inv.find((x) => inviteOpen(x) && same(x.code, code.replace(/\D/g, '')));
-    if (first ? !same(code.replace(/\s/g, ''), String(PASSWORD).replace(/\s/g, '')) : !hit) {
-      if (!first) regFails.push(Date.now());
-      return fail(res, 403, 'Dieser Einladungscode passt nicht, ist abgelaufen oder wurde schon benutzt.', ip);
-    }
-    if (list.some((x) => x.name === name)) throw bad('Diesen Benutzernamen gibt es schon.');
-    const a = { id: crypto.randomUUID(), name, ...hashPw(pw), school: b.school, admin: first, created: new Date().toISOString(), ver: 0 };
-    fs.mkdirSync(userDir(a.id), { recursive: true, mode: 0o700 });
-    saveAccounts([...list, a]);
-    if (hit?.uses) { hit.used = [...(hit.used || []), a.id]; saveInvites(inv); } else if (hit) { hit.usedBy = a.id; hit.usedAt = a.created; saveInvites(inv); }
-    if (!first) trackCount('signups');
-    send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 365 * 86400, a) });
+    if (!same(password ?? '', PASSWORD)) return fail(res, 401, 'Falsches Passwort', ip);
+    send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 365 * 86400) });
   },
+  'POST /api/logout': (req, res) => send(res, 200, { ok: true, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '' }, { 'Set-Cookie': sessionCookie(req, 0) }),
   // Demo ansehen ohne Passwort (Knopf auf der Startseite, QR-Code mit #demo)
   'POST /api/demo': (req, res) => {
     const a = ACCOUNTS && demoAccount();
@@ -803,107 +785,74 @@ const routes = {
     trackCount('demo');
     send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 7 * 86400, a) });
   },
-  // Eigenes Konto: Passwort oder Schulsoftware ändern, Konto mit allen Daten löschen
+  // Eigenes Konto: hier nur die Schulsoftware. E-Mail, Passwort, Geräte und Löschen gibt es auf der Konto-Seite.
   'POST /api/account': async (req, res) => {
-    const b = await readJson(req), list = accounts(), a = list.find((x) => x.id === me()?.id);
+    const b = await readJson(req), a = me();
     if (!a) return send(res, 404, { error: 'unbekannt' });
     if (a.demo) throw bad('Im Demo-Konto lässt sich das nicht ändern.');
-    let cookie = {};
-    const acc = `acc:${a.id}`;
-    if (b.password !== undefined) {
-      if (throttled(acc)) return send(res, 429, TOO_MANY);
-      if (!checkPw(a, b.old ?? '')) return fail(res, 400, 'Das bisherige Passwort stimmt nicht.', acc);
-      if (String(b.password).length < 8) throw bad('Das neue Passwort braucht mindestens 8 Zeichen.');
-      if (weakPw(String(b.password), a.name)) throw bad('Dieses Passwort ist zu leicht zu erraten. Nimm zum Beispiel drei Wörter, die nichts miteinander zu tun haben.');
-      Object.assign(a, hashPw(b.password));
-    }
-    if (b.password !== undefined || b.logoutOthers === true) { // andere Geräte werden abgemeldet, dieses bleibt angemeldet
-      a.ver = (a.ver || 0) + 1;
-      cookie = { 'Set-Cookie': sessionCookie(req, 365 * 86400, a) };
-    }
     if (b.school !== undefined && b.school !== a.school) {
       if (!SCHOOLS.includes(b.school)) throw bad('Unbekannte Schulsoftware');
-      a.school = b.school;
-      asUser(a, () => { // Stand der alten Schulsoftware gilt nicht mehr
-        for (const n of ['snapshot.json', 'session.json', 'status.json']) fs.rmSync(file(n), { force: true });
-        const st = state(); st.eduSeeded = false; save('state.json', st);
-      });
+      const { account } = await accountsApi(`/api/accounts/${a.id}`, 'PATCH', { school: b.school });
+      keepAccount(account);
+      for (const n of ['snapshot.json', 'session.json', 'status.json']) fs.rmSync(file(n), { force: true }); // Stand der alten Schulsoftware gilt nicht mehr
+      const st = state(); st.eduSeeded = false; save('state.json', st);
+      return send(res, 200, asUser(account, payload));
     }
-    saveAccounts(list);
-    send(res, 200, asUser(a, payload), cookie);
+    send(res, 200, payload());
   },
-  'DELETE /api/account': async (req, res) => {
-    const { password } = await readJson(req), list = accounts(), a = list.find((x) => x.id === me()?.id);
-    if (a?.demo) throw bad('Das Demo-Konto kann nur ein Admin löschen.');
-    if (a && throttled(`acc:${a.id}`)) return send(res, 429, TOO_MANY);
-    if (!a || !checkPw(a, password ?? '')) return fail(res, 400, 'Das Passwort stimmt nicht.', `acc:${a?.id}`);
-    if (a.admin && !list.some((x) => x.admin && x.id !== a.id)) throw bad('Du bist der einzige Admin. Mach vorher ein anderes Konto zum Admin.');
-    saveAccounts(list.filter((x) => x.id !== a.id));
-    fs.rmSync(userDir(a.id), { recursive: true, force: true });
-    send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, 0) });
+  // Admin: Einladungscodes und Konten verwalten. Gespeichert wird beides beim Konto-Dienst.
+  'GET /api/admin': async (req, res) => { admin(); send(res, 200, { ...await adminData(), stats: statsData() }); },
+  'GET /api/admin/health': async (req, res) => { // Konto-Dienst erreichbar? Mailversand eingerichtet?
+    admin();
+    try { send(res, 200, { ok: true, ...await accountsApi('/api/health') }); } catch (e) { send(res, 200, { ok: false, error: e.message }); }
   },
-  // Admin: Einladungscodes und Konten verwalten
-  'GET /api/admin': (req, res) => { admin(); send(res, 200, { ...adminData(), stats: statsData() }); },
   'POST /api/admin/invites': async (req, res) => {
     admin();
-    const b = await readJson(req), note = F.text(80)(b.note), list = invites();
-    const days = [30, 60, 90].includes(b.days) ? b.days : INVITE_DAYS; // Flyer: länger gültig, normale Einladung 7 Tage
-    const uses = Math.min(1000, Math.max(0, Math.trunc(Number(b.uses)) || 0)); // Sammelcode: ein Code für viele Anmeldungen
-    const count = uses ? 1 : Math.min(40, Math.max(1, Math.trunc(Number(b.count)) || 1));
-    if (list.filter(inviteOpen).length + count > 200) throw bad('Es gibt schon zu viele offene Codes. Lösch erst ein paar.');
-    const created = [];
-    for (let i = 0; i < count; i++) {
-      const code = newInvite(list);
-      list.push({ code, note, days, ...(uses ? { uses, used: [] } : {}), created: new Date().toISOString(), usedBy: null, usedAt: null });
-      created.push(code);
-    }
-    saveInvites(list);
-    send(res, 200, { ...adminData(), created });
+    const b = await readJson(req);
+    const r = await accountsApi('/api/invites', 'POST', { note: F.text(80)(b.note), days: Number(b.days) || 0, uses: Number(b.uses) || 0, count: Number(b.count) || 1 });
+    send(res, 200, await adminData({ invites: r.invites, created: r.created }));
   },
-  'DELETE /api/admin/invites/:code': (req, res, code) => {
+  'DELETE /api/admin/invites/:code': async (req, res, code) => {
     admin();
-    saveInvites(invites().filter((x) => x.code !== code || x.usedBy));
-    send(res, 200, adminData());
+    send(res, 200, await adminData({ invites: (await accountsApi(`/api/invites/${encodeURIComponent(code)}`, 'DELETE')).invites }));
   },
   'POST /api/admin/accounts/:id': async (req, res, id) => {
     admin();
-    const b = await readJson(req), list = accounts(), a = list.find((x) => x.id === id);
+    const b = await readJson(req), a = accounts().find((x) => x.id === id);
     if (!a) return send(res, 404, { error: 'nicht gefunden' });
     if (a.id === me().id && (b.disabled || b.admin === false)) throw bad('Dein eigenes Konto kannst du hier nicht sperren oder herabstufen.');
-    let password = null;
-    if (b.reset) { password = newCode().toLowerCase(); Object.assign(a, hashPw(password)); a.ver = (a.ver || 0) + 1; }
-    if (typeof b.disabled === 'boolean') { a.disabled = b.disabled; a.ver = (a.ver || 0) + 1; }
-    if (typeof b.admin === 'boolean') { if (b.admin && a.demo) throw bad('Ein Demo-Konto kann kein Admin sein.'); a.admin = b.admin; }
-    if (typeof b.jury === 'boolean') { if (!a.demo) throw bad('Erst als Demo-Konto einrichten.'); a.jury = b.jury; }
-    if (b.resetDemo === true) { if (!a.demo) throw bad('Nur Demo-Konten lassen sich zurücksetzen.'); asUser(a, demoReset); }
+    if (b.resetDemo === true) { // Beispieldaten liegen in der App
+      if (!a.demo) throw bad('Nur Demo-Konten lassen sich zurücksetzen.');
+      asUser(a, demoReset);
+      return send(res, 200, await adminData());
+    }
+    const patch = Object.fromEntries(['reset', 'disabled', 'admin', 'demo', 'jury'].filter((k) => typeof b[k] === 'boolean').map((k) => [k, b[k]]));
+    const r = await accountsApi(`/api/accounts/${id}`, 'PATCH', patch);
     if (typeof b.demo === 'boolean' && b.demo !== !!a.demo) { // Demo an: Beispieldaten statt eigener Daten. Demo aus: Konto ist danach leer.
-      if (b.demo && a.admin) throw bad('Ein Admin-Konto kann kein Demo-Konto sein.');
-      a.demo = b.demo; a.ver = (a.ver || 0) + 1;
-      if (!a.demo) delete a.jury;
       fs.rmSync(userDir(a.id), { recursive: true, force: true });
       fs.mkdirSync(userDir(a.id), { recursive: true, mode: 0o700 });
-      if (a.demo) asUser(a, demoReset);
+      if (b.demo) asUser(r.account, demoReset);
     }
-    saveAccounts(list);
-    send(res, 200, { ...adminData(), password }); // neues Passwort nur in dieser einen Antwort
+    keepAccount(r.account);
+    send(res, 200, await adminData({ password: r.password })); // neues Passwort nur in dieser einen Antwort
   },
-  'DELETE /api/admin/accounts/:id': (req, res, id) => {
+  'DELETE /api/admin/accounts/:id': async (req, res, id) => {
     admin();
-    const list = accounts(), a = list.find((x) => x.id === id);
+    const a = accounts().find((x) => x.id === id);
     if (!a) return send(res, 404, { error: 'nicht gefunden' });
-    if (a.id === me().id) throw bad('Dein eigenes Konto löschst du unter „Konto“.');
-    saveAccounts(list.filter((x) => x.id !== id));
+    if (a.id === me().id) throw bad('Dein eigenes Konto löschst du auf der Konto-Seite.');
+    await accountsApi(`/api/accounts/${id}`, 'DELETE');
     fs.rmSync(userDir(a.id), { recursive: true, force: true });
-    send(res, 200, adminData());
+    await refreshAccounts();
+    send(res, 200, await adminData());
   },
   'GET /api/data': (req, res) => {
     const origin = `${https(req) ? 'https' : 'http'}://${req.headers.host}`;
     if (loggedIn(req) && /^[\w.:-]+$/.test(req.headers.host || '') && atRoot(() => load('origin.json', null)) !== origin) atRoot(() => save('origin.json', origin));
     const a = me();
     if (a && !a.demo) trackActive(a);
-    if (a && Date.now() - Date.parse(a.lastSeen || 0) > 3600e3) { // „zuletzt aktiv“ für die Konten-Übersicht, höchstens stündlich schreiben
-      const list = accounts(), x = list.find((y) => y.id === a.id);
-      if (x) { x.lastSeen = new Date().toISOString(); saveAccounts(list); }
+    if (a && Date.now() - Date.parse(seenAt()[a.id] || 0) > 3600e3) { // „zuletzt aktiv“ für die Konten-Übersicht, höchstens stündlich schreiben
+      atRoot(() => save('seen.json', { ...load('seen.json', {}), [a.id]: new Date().toISOString() }));
     }
     send(res, 200, payload());
   },
@@ -1302,21 +1251,44 @@ function serveStatic(req, res, pathname) {
   });
 }
 
+// Rückkehr vom Konto-Dienst: Einmal-Code über die geschützte API gegen die Kontodaten tauschen, dann eigene Sitzung setzen
+async function authCallback(req, res, q) {
+  const go = (to, cookie) => { res.writeHead(303, { Location: to, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', ...(cookie ? { 'Set-Cookie': cookie } : {}) }); res.end(); };
+  let account;
+  try { ({ account } = await accountsApi('/api/exchange', 'POST', { code: String(q.get('code') || '').slice(0, 100) })); } catch { return go(`${ACCOUNTS_URL}/anmelden`); }
+  if (!account?.id || account.disabled || !/^[0-9a-f-]{36}$/i.test(account.id)) return go(`${ACCOUNTS_URL}/anmelden`);
+  keepAccount(account); // Abbild sofort aktuell (Version der Sitzung)
+  fs.mkdirSync(userDir(account.id), { recursive: true, mode: 0o700 });
+  if (!account.admin) trackCount('logins');
+  const next = q.get('next') || '/';
+  go(/^\/(?!\/)[^\s\\]{0,300}$/.test(next) ? next : '/', sessionCookie(req, 365 * 86400, account)); // nur Pfade der App, nie fremde Adressen
+}
+if (ACCOUNTS) { // beim Start: alte Konten umziehen, Abbild laden; danach alle 3 Minuten (falls eine Benachrichtigung verloren ging)
+  setTimeout(() => migrateAccounts().catch((e) => console.error('Umzug der Konten:', e.message)).then(() => refreshAccounts()).catch((e) => console.warn('Konten laden:', e.message)), 300);
+  setInterval(() => refreshAccounts().catch((e) => console.warn('Konten laden:', e.message)), 3 * 60e3);
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   try {
+    if (ACCOUNTS && url.pathname === '/auth/callback' && req.method === 'GET') return await authCallback(req, res, url.searchParams);
     if (!url.pathname.startsWith('/api/')) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method Not Allowed');
       return serveStatic(req, res, url.pathname);
     }
     if (url.pathname === '/api/ping') return send(res, 200, 'ok'); // Selbst-Wachhalten, verrät nichts
+    if (ACCOUNTS && url.pathname === '/api/accounts-hook' && req.method === 'POST') { // Konto-Dienst meldet Änderungen (Sperren, Passwort, Löschen)
+      if (!same(String(req.headers.authorization || ''), `Bearer ${ACCOUNTS_SECRET}`)) return send(res, 401, { error: 'falscher Schlüssel' });
+      await refreshAccounts().catch((e) => console.warn('Konten neu laden:', e.message));
+      return send(res, 200, { ok: true });
+    }
     // Zusätzlich zum SameSite-Cookie: ändernde Anfragen nur von der eigenen Seite (Programme ohne Browser schicken keinen Origin)
     if (!['GET', 'HEAD'].includes(req.method) && req.headers.origin) {
       let own = false;
       try { own = new URL(req.headers.origin).host === req.headers.host; } catch { /* ungültig = fremd */ }
       if (!own) return send(res, 403, { error: 'Anfrage von fremder Seite abgelehnt' });
     }
-    if (url.pathname === '/api/info') return send(res, 200, { demo: DEMO || (ACCOUNTS && !!demoAccount()), accounts: ACCOUNTS, setup: ACCOUNTS && !accounts().length }); // für die Anmeldeseite
+    if (url.pathname === '/api/info') return send(res, 200, { demo: DEMO || (ACCOUNTS && !!demoAccount()), accounts: ACCOUNTS, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '' }); // für die Startseite
     if (!PRIVATE && /^\/api\/(ha|shop|screen)(\/|$)/.test(url.pathname)) return send(res, 404, { error: 'unbekannt' });
     if (url.pathname === '/api/screen/agent') { // Fernsteuerungs-Programm auf dem PC, eigener Schlüssel statt Anmeldung
       if (req.method !== 'POST' || !same(req.headers['x-key'] || '', TOKENS.screen)) return send(res, 403, { error: 'falscher Schlüssel' }); // Header statt Adresse: landet nicht im Zugriffsprotokoll
@@ -1330,7 +1302,7 @@ const server = http.createServer(async (req, res) => {
     const bearer = (req.headers.authorization || '').replace(/^Bearer /, '') || url.searchParams.get('key') || '';
     const reader = req.method === 'GET' && ['/api/data', '/api/summary', '/api/wake', '/api/focus'].includes(url.pathname) && readerFor(bearer);
     const user = sessionUser(req) || reader;
-    if (!['/api/login', '/api/register', '/api/demo'].includes(url.pathname) && !user) return send(res, 401, { error: 'login' });
+    if (!['/api/login', '/api/demo'].includes(url.pathname) && !user) return send(res, 401, { error: 'login' });
     const parts = url.pathname.split('/').filter(Boolean); // ['api', 'items', 'notes', '<id>']
     for (const [key, fn] of Object.entries(routes)) {
       const [method, pattern] = key.split(' '), p = pattern.split('/').filter(Boolean);

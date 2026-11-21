@@ -1863,10 +1863,8 @@ function accountSection() {
   if (a.demo) return `<p class="label-sm">Konto</p>${group(sid)}<p class="footnote" style="text-align:left;margin-top:8px">${a.jury ? 'Jugend forscht Version · Full Access. Alle Funktionen sind frei, die Beispieldaten setzt der Betreiber zurück.' : 'Das ist ein Demo-Konto mit Beispieldaten. Was du hier änderst, wird 15 Minuten nach dem letzten Besuch zurückgesetzt.'}</p>`;
   return `<p class="label-sm">Konto</p>
     ${group(sid, fRow('Schulsoftware', `<select id="school-select">${SCHOOL_OPTS.map(([v, l]) => `<option value="${v}"${D.school === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`),
-      '<button class="row" data-account="password"><span class="btn-plain">Passwort ändern</span></button>',
-      '<button class="row" data-account="others"><span class="btn-plain">Auf allen anderen Geräten abmelden</span></button>',
-      a.admin ? `<a class="row" href="/admin"><div class="main"><div class="title">Verwaltung öffnen</div><div class="sub">Einladungen, Flyer und Konten</div></div>${ICON.chev}</a>` : '',
-      '<button class="row" data-account="delete"><span class="btn-plain danger">Konto löschen</span></button>')}`;
+      D.accountsUrl ? `<a class="row" href="${esc(D.accountsUrl)}/konto"><div class="main"><div class="title">Konto verwalten</div><div class="sub">${esc(a.email || 'E-Mail')}, Passwort, Geräte, Konto löschen</div></div>${ICON.chev}</a>` : '',
+      a.admin ? `<a class="row" href="/admin"><div class="main"><div class="title">Verwaltung öffnen</div><div class="sub">Einladungen, Flyer und Konten</div></div>${ICON.chev}</a>` : '')}`;
 }
 function wireAccount() {
   const sel = $('#school-select');
@@ -1878,48 +1876,9 @@ function wireAccount() {
   }
   const sup = $('#sheet [data-copy-support]');
   if (sup) sup.onclick = () => copy(D.account.support, $('#support-hint'));
-  const others = async () => { try { await api('/api/account', { method: 'POST', body: { logoutOthers: true } }); haptic(); toast('Andere Geräte sind abgemeldet'); } catch (x) { toast(x.message); } };
-  $$('#sheet [data-account]').forEach((b) => { b.onclick = { password: openPassword, delete: openDeleteAccount, others }[b.dataset.account]; });
   $$('#sheet [data-lesson]').forEach((b) => { b.onclick = () => lessonForm(D.db.lessons.find((l) => l.id === b.dataset.lesson)); });
   $('#sheet [data-new-lesson]')?.addEventListener('click', () => lessonForm());
 }
-function openPassword() {
-  openSheet('Passwort ändern', `<form class="form" novalidate>
-    ${group(fText('old', 'Bisheriges Passwort', '', 'type="password" autocomplete="current-password" required'),
-      fText('password', 'Neues Passwort (mindestens 8 Zeichen)', '', 'type="password" autocomplete="new-password" required minlength="8"'))}
-    <p class="form-error" role="alert"></p>
-    <button class="btn-primary pressable" type="submit">Ändern</button>
-    <p class="footnote" style="text-align:left">Auf deinen anderen Geräten musst du dich danach neu anmelden.</p>
-    <button class="btn-plain" type="button" data-back>Zurück</button></form>`);
-  const f = $('#sheet form');
-  $('[data-back]', f).onclick = openSettings;
-  f.onsubmit = async (e) => {
-    e.preventDefault();
-    try { await api('/api/account', { method: 'POST', body: Object.fromEntries(new FormData(f)) }); haptic(); toast('Passwort geändert'); openSettings(); }
-    catch (x) { $('.form-error', f).textContent = x.message; }
-  };
-}
-function openDeleteAccount() {
-  openSheet('Konto löschen', `<form class="form" novalidate>
-    <p class="footnote" style="text-align:left;margin-top:0">Dein Konto und alles, was darin gespeichert ist, wird sofort gelöscht: Termine, Erinnerungen, Notizen, Noten, Tafelbilder und dein Schulzugang. Das lässt sich nicht rückgängig machen.</p>
-    ${group(fText('password', 'Passwort zur Bestätigung', '', 'type="password" autocomplete="current-password" required'))}
-    <p class="form-error" role="alert"></p>
-    <button class="btn-primary danger-bg pressable" type="submit">Endgültig löschen</button>
-    <button class="btn-plain" type="button" data-back>Zurück</button></form>`);
-  const f = $('#sheet form');
-  $('[data-back]', f).onclick = openSettings;
-  f.onsubmit = async (e) => {
-    e.preventDefault();
-    try {
-      await api('/api/account', { method: 'DELETE', body: Object.fromEntries(new FormData(f)) });
-      for (const k of await caches.keys().catch(() => [])) (await caches.open(k)).delete('/api/data');
-      closeSheet();
-      D = null;
-      showLogin();
-    } catch (x) { $('.form-error', f).textContent = x.message; }
-  };
-}
-
 /* ---------------------------------------------------------------- Verwaltung: eigene Seite /admin, nur für Admins */
 const ADMIN_PAGE = location.pathname === '/admin';
 let adminState = null, lastFlyer = null;
@@ -1985,6 +1944,7 @@ async function openAdmin(data) {
   const opt = (name, values, label, sel) => `<select name="${name}">${values.map((v) => `<option value="${v}"${v === sel ? ' selected' : ''}>${label(v)}</option>`).join('')}</select>`;
   el.innerHTML = `<div class="admin-wrap">
     <header class="admin-head"><img src="/icon.svg" alt="" width="48" height="48"><div class="main"><p class="eyebrow">Alltag</p><h1>Verwaltung</h1></div><a class="btn-ghost" href="/">Zur App</a></header>
+    <p class="footnote" id="acc-health" style="text-align:left;margin:0">Prüfe Konto-Dienst und Mailversand …</p>
     <div class="admin-stats">${[[data.accounts.length, 'Konten'], [active, 'aktiv in den letzten 7 Tagen'], [single.length, 'offene Einladungen'], [flyers.reduce((n, i) => n + i.usedCount, 0), 'über Flyer angemeldet']]
       .map(([n, l]) => `<div class="card admin-stat"><b>${n}</b><span>${l}</span></div>`).join('')}</div>
     <div class="admin-grid">
@@ -2023,6 +1983,10 @@ async function openAdmin(data) {
       </section>
       ${used.length ? `<section class="card admin-card wide"><h2>Zuletzt eingelöste Einladungen</h2>${group(...used.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shownCode(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} → ${esc(nameOf(i.usedBy))}</div></div></div>`))}</section>` : ''}
     </div></div>`;
+  api('/api/admin/health').then((h) => {
+    const box = $('#acc-health', el);
+    if (box) box.textContent = h.ok ? `Konto-Dienst erreichbar · Mailversand: ${h.mail} · ${h.unconfirmed} Konten warten auf E-Mail-Bestätigung` : `Konto-Dienst nicht erreichbar: ${h.error}`;
+  }, () => {});
   const hint = $('#invite-hint', el), preview = () => { if (lastFlyer) $('#flyer-preview', el).innerHTML = `<img src="${lastFlyer.front}" alt="Vorderseite des Flyers"><img src="${lastFlyer.back}" alt="Rückseite des Flyers">`; };
   preview();
   $('#invite-form', el).onsubmit = async (e) => {
@@ -2073,11 +2037,12 @@ function openAcc(a, password) {
   const self = a.id === D.account?.id;
   openSheet(a.name, `
     ${group(`<div class="row"><div class="main">Support-ID</div><div class="trail code">${esc(a.support)}</div></div>`,
+      a.email ? `<div class="row"><div class="main">E-Mail</div><div class="trail">${esc(a.email)}${a.emailOk ? '' : ' (unbestätigt)'}</div></div>` : '',
       `<div class="row"><div class="main">Schulsoftware</div><div class="trail">${esc(a.demo ? 'Demo-Daten' : schoolName(a.school))}</div></div>`,
       `<div class="row"><div class="main">Angelegt</div><div class="trail">${esc(ago(a.created))}</div></div>`,
       `<div class="row"><div class="main">Zuletzt aktiv</div><div class="trail">${esc(ago(a.lastSeen))}</div></div>`)}
     ${password ? `<p class="label-sm">Neues Passwort</p>${group(`<div class="row"><div class="main"><div class="title code">${esc(password)}</div><div class="sub">Nur jetzt sichtbar. Gib es ${esc(a.name)} persönlich weiter.</div><div class="code-actions"><button class="btn-plain" type="button" data-copy-pw>Kopieren</button></div></div></div>`)}<p class="footnote" id="acc-hint" style="text-align:left"></p>` : ''}
-    ${self ? '<p class="footnote" style="text-align:left">Das ist dein eigenes Konto. Passwort und Löschen findest du im Profil unter „Konto“.</p>'
+    ${self ? '<p class="footnote" style="text-align:left">Das ist dein eigenes Konto. E-Mail, Passwort und Löschen findest du auf der Konto-Seite (Profil → Konto verwalten).</p>'
       : group('<button class="row" data-do="reset"><span class="btn-plain">Passwort zurücksetzen</span></button>',
         a.demo ? '' : `<button class="row" data-do="admin"><span class="btn-plain">${a.admin ? 'Admin-Rechte entziehen' : 'Zum Admin machen'}</span></button>`,
         a.demo ? `<button class="row" data-do="jury"><span class="btn-plain">${a.jury ? 'Jugend-forscht-Kennzeichnung entfernen' : 'Als „Jugend forscht Version · Full Access“ kennzeichnen'}</span></button>` : '',
@@ -2262,39 +2227,29 @@ function wireEduForm() {
 }
 
 async function logout() {
-  await api('/api/logout', { method: 'POST' }).catch(() => {});
+  const r = await api('/api/logout', { method: 'POST' }).catch(() => ({}));
   for (const k of await caches.keys().catch(() => [])) (await caches.open(k)).delete('/api/data');
+  if (r.accountsUrl) { location.href = `${r.accountsUrl}/abmelden`; return; } // auch auf der Konto-Seite abmelden
   closeSheet();
   D = null;
   showLogin();
 }
 
-/* ---------------------------------------------------------------- Anmelden und Registrieren */
-let info = null, registering = false; // info: Demo? Konten? (vom Server, ohne Anmeldung lesbar)
+/* ---------------------------------------------------------------- Anmelden: private App mit Passwort, öffentliche Version über die Konto-Seite */
+let info = null; // Demo? Konten? Adresse der Konto-Seite (vom Server, ohne Anmeldung lesbar)
 const SCHOOL_OPTS = [['edupage', 'EduPage'], ['untis', 'WebUntis'], ['schulmanager', 'Schulmanager'], ['none', 'Keine']];
 function loginMode() {
-  const f = $('#login form'), acc = !!info?.accounts, user = f.username;
-  user.hidden = !acc;
-  user.required = acc;
-  if (acc && user.value === 'alltag') user.value = '';
-  f.password.placeholder = !acc ? 'App-Passwort' : registering ? 'Passwort, ab 8 Zeichen' : 'Passwort';
-  f.password.setAttribute('aria-label', f.password.placeholder);
-  f.password.autocomplete = registering ? 'new-password' : 'current-password';
-  $('.register', f)?.remove();
-  if (registering) {
-    $('.login-fields', f).insertAdjacentHTML('beforeend', `<div class="register login-fields">
-      <input name="code" placeholder="Einladungscode (6 Ziffern)" aria-label="Einladungscode" inputmode="numeric" autocomplete="one-time-code" maxlength="20" spellcheck="false" required>
-      <p>Welche Schulsoftware nutzt deine Schule?</p>
-      <div class="choice-grid">${fChoice('school', SCHOOL_OPTS, 'edupage')}</div>
-      <p>Bei „Keine“ trägst du deinen Stundenplan selbst ein. Den Zugang zur Schulsoftware gibst du danach im Profil ein.</p>
-      <p>Was mit deinen Daten passiert, steht in der <a href="/datenschutz.html" target="_blank" rel="noopener">Datenschutzerklärung</a>.</p></div>`);
+  const f = $('#login form'), acc = !!info?.accounts;
+  $('.login-fields', f).hidden = acc;
+  f.password.required = !acc;
+  $('button[type=submit]', f).hidden = acc;
+  $('.konto-links', f)?.remove();
+  if (acc && info.accountsUrl) { // Anmelden und Registrieren auf accounts.alltag-app.de, danach kommt man hierher zurück
+    const next = encodeURIComponent(`${location.pathname}${location.search}`);
+    $('.login-error', f).insertAdjacentHTML('beforebegin', `<div class="konto-links">
+      <a class="btn-primary pressable" href="${esc(info.accountsUrl)}/weiter?next=${next}">Anmelden</a>
+      <a class="btn-plain" href="${esc(info.accountsUrl)}/registrieren">Neu hier? Mit Einladungscode registrieren</a></div>`);
   }
-  $('button[type=submit]', f).textContent = info?.setup ? 'Admin-Konto anlegen' : registering ? 'Konto anlegen' : 'Anmelden';
-  if (info?.setup && f.code) { f.code.placeholder = 'Start-Code (APP_PASSWORD aus der .env)'; f.code.setAttribute('aria-label', 'Start-Code'); f.code.inputMode = 'text'; }
-  $('.login-card h1', $('#login')).textContent = info?.setup ? 'Erstes Konto anlegen' : 'Alltag';
-  const sw = $('.login-switch', f);
-  sw.hidden = !acc || !!info?.setup;
-  sw.textContent = registering ? 'Schon ein Konto? Anmelden' : 'Neu hier? Mit Einladungscode registrieren';
   $('#login [data-demo]').hidden = !(acc && info?.demo);
   const note = $('.login-note', f);
   note.hidden = !info?.demo || acc;
@@ -2305,11 +2260,10 @@ async function showLogin() {
   $('#boot').hidden = true;
   $('#app').hidden = true;
   $('#login').hidden = false;
-  info = await fetch('/api/info').then((r) => r.json()).catch(() => info); // jedes Mal neu: nach dem ersten Konto ist die Einrichtung vorbei
-  if (info?.setup) registering = true;
+  info = await fetch('/api/info').then((r) => r.json()).catch(() => info);
   loginMode();
   if (info?.accounts && info.demo && location.hash === '#demo') return startDemo();
-  setTimeout(() => $(info?.accounts ? '#login [name=username]' : '#login [name=password]').focus(), 60);
+  if (!info?.accounts) setTimeout(() => $('#login [name=password]').focus(), 60);
 }
 async function startDemo() {
   try {
@@ -2320,23 +2274,20 @@ async function startDemo() {
   } catch (x) { $('#login .login-error').textContent = x.message; }
 }
 $('#login [data-demo]').onclick = startDemo;
-$('#login .login-switch').onclick = () => { registering = !registering; loginMode(); };
 $('#login form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.currentTarget, btn = $('button[type=submit]', f), err = $('.login-error', f);
+  if (info?.accounts) return;
   btn.disabled = true;
   err.textContent = '';
   try {
-    const body = { name: f.username.value, password: f.password.value };
-    if (registering) await api('/api/register', { method: 'POST', body: { ...body, code: f.code.value, school: f.school.value } });
-    else await api('/api/login', { method: 'POST', body });
+    await api('/api/login', { method: 'POST', body: { password: f.password.value } });
     f.password.value = '';
-    registering = false;
     $('#login').hidden = true;
     boot('Lade Daten …');
     await load();
   } catch (x) {
-    err.textContent = x.status === 401 ? (info?.accounts ? x.message : 'Das Passwort ist falsch.') : [400, 403, 429].includes(x.status) ? x.message : 'Server nicht erreichbar.';
+    err.textContent = x.status === 401 ? 'Das Passwort ist falsch.' : [400, 403, 429].includes(x.status) ? x.message : 'Server nicht erreichbar.';
     f.classList.remove('shake');
     void f.offsetWidth;
     f.classList.add('shake');

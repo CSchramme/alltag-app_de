@@ -53,7 +53,7 @@ Wichtig: `data/` liegt außerhalb des Dokumentenstamms und darf nie in `public/`
 
 ## Öffentliche Version einrichten (alltag-app.de)
 
-Dieselbe App, nur mit Konten, Einladungscodes, eigenem Look und ohne Home Assistant und PC-Fernsteuerung. Sie läuft als **zweite Node-App** neben deiner privaten, mit eigenem Datenordner.
+Dieselbe App, nur mit Konten, eigenem Look und ohne Home Assistant und PC-Fernsteuerung. Sie läuft als **zweite Node-App** neben deiner privaten, mit eigenem Datenordner. Registrieren, Anmelden, E-Mail-Bestätigung und „Passwort vergessen“ übernimmt der **Konto-Dienst** (eigenes Repository `alltag-accounts`, eigene Plesk-Seite `accounts.alltag-app.de`). Die App bekommt nach dem Anmelden einen Einmal-Code und tauscht ihn über eine geschützte API gegen die Kontodaten. **Reihenfolge:** erst den Konto-Dienst einrichten (siehe dessen README), dann die App.
 
 **Erst am PC:** `.env.beispiel` nach `.env` kopieren, ausfüllen, `npm start`, dann http://localhost:3000 öffnen. Alle Konten landen in `data-public/`. Für den Umzug auf den Server den Code per Git holen und **`.env` und `data-public/`** in den App-Ordner hochladen (neben `app.js`, nicht in `public/`). Beide kommen nie ins Git. Wichtig: Der `DATA_KEY` muss derselbe bleiben, sonst lassen sich die gespeicherten Schul-Passwörter nicht mehr entschlüsseln.
 
@@ -65,21 +65,23 @@ Dieselbe App, nur mit Konten, Einladungscodes, eigenem Look und ohne Home Assist
    | Variable | Wert |
    |---|---|
    | `ACCOUNTS` | `1` |
-   | `APP_PASSWORD` | Start-Code für das allererste Konto (dein Admin-Konto). Danach hat er keine Wirkung mehr. |
+   | `ACCOUNTS_URL` | Adresse des Konto-Dienstes, z. B. `https://accounts.alltag-app.de` |
+   | `ACCOUNTS_SECRET` | Gemeinsamer Schlüssel, derselbe Wert wie beim Konto-Dienst (mindestens 32 Zeichen). Ohne ihn startet die App nicht. |
    | `DATA_KEY` | Zufälliger Schlüssel, mindestens 32 Zeichen. Verschlüsselt die Schul-Passwörter. **Einmal setzen, nie ändern**, sonst müssen alle ihre Schule neu verbinden. Erzeugen z. B. mit `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"` und im Passwort-Manager sichern. |
    | `LEGAL_NAME`, `LEGAL_ADDRESS`, `LEGAL_EMAIL` | Angaben für Impressum und Datenschutz |
    | `LEGAL_LOG_DAYS` | Nach wie vielen Tagen der Hoster die Server-Protokolle löscht |
 
-5. **App neu starten**, die Domain öffnen, **„Neu hier? Mit Einladungscode registrieren“** und als Code dein `APP_PASSWORD` eingeben. Dieses erste Konto ist Admin.
-6. **Demo für die Jury:** Im Profil unter *Einladungen und Konten* einen Code erstellen, damit ein zweites Konto registrieren (z. B. `demo`), es dann in der Liste suchen und **„Als Demo-Konto einrichten“** wählen. Ab dann gibt es auf der Startseite „Demo ansehen“, und `https://alltag-app.de/#demo` öffnet die Demo direkt (gut für einen QR-Code). Was Besucher dort ändern, setzt sich nach 15 Minuten ohne Nutzung zurück.
+5. **App neu starten.** Beim ersten Start übergibt sie die bisherigen Konten an den Konto-Dienst (die alte Liste bleibt als `accounts-vor-konto-dienst.json` liegen). Beim nächsten Anmelden trägt jedes Konto seine E-Mail-Adresse nach und bestätigt sie. Gibt es noch gar keine Konten, registrierst du dich auf der Konto-Seite mit dessen `START_CODE`; dieses erste Konto ist Admin. Oben in der Verwaltung steht, ob Konto-Dienst und Mailversand laufen.
+6. **Demo für die Jury:** In der Verwaltung (`/admin`) einen Code erstellen, damit ein zweites Konto registrieren (z. B. `demo`), es dann in der Liste suchen und **„Als Demo-Konto einrichten“** wählen. Ab dann gibt es auf der Startseite „Demo ansehen“, und `https://alltag-app.de/#demo` öffnet die Demo direkt (gut für einen QR-Code). Was Besucher dort ändern, setzt sich nach 15 Minuten ohne Nutzung zurück.
 7. **Datensicherung:** In Plesk unter *Backup-Manager* eine regelmäßige Sicherung einrichten. `data/` enthält alle Konten.
 8. **Statistik:** Die Verwaltung (`/admin`) zeigt Besucher pro Tag, Konten in der App, Geräte, Schulsoftware und welche Funktionen genutzt werden. Gezählt wird ohne Cookies und ohne fremde Dienste: Besucher als Hash aus IP, Browser und einem Tages-Salz, das am nächsten Tag samt Hashes gelöscht wird (`stats.json`, 400 Tage nur Zahlen).
 
 ### Sicherheit auf einen Blick
 
 - Jedes Konto hat einen eigenen Datenordner; die Tests prüfen, dass kein Konto die Daten eines anderen sieht.
-- Passwörter nur als scrypt-Hash, Schul-Passwörter und EduPage-Sitzungen verschlüsselt (`DATA_KEY`, liegt nicht bei den Daten).
-- Registrieren nur mit Einladungscode, zu leichte Passwörter werden abgelehnt.
+- Passwörter nur beim Konto-Dienst und nur als scrypt-Hash; die App kennt keine Passwörter. Schul-Passwörter und EduPage-Sitzungen verschlüsselt (`DATA_KEY`, liegt nicht bei den Daten).
+- Anmelden in der App nur mit Einmal-Code (60 Sekunden, einmal gültig), Tausch nur mit dem gemeinsamen Schlüssel; Weiterleitungen nur auf Pfade der App.
+- Registrieren nur mit Einladungscode und bestätigter E-Mail-Adresse, zu leichte Passwörter werden abgelehnt. Mail bei neuem Gerät, geändertem Passwort und geänderter Adresse.
 - Falsche Anmeldeversuche bremsen je Gerät und je Konto (10 in 15 Minuten), nicht alle Nutzer zusammen.
 - Cookie nur für die Anmeldung (HttpOnly, SameSite, Secure), ändernde Anfragen nur von der eigenen Seite, strenge Content-Security-Policy, HTTPS wird erzwungen (HSTS).
 - Nutzer können sich auf allen anderen Geräten abmelden und ihren Widget-Schlüssel erneuern. Admins können Konten sperren und Passwörter zurücksetzen; alle Sitzungen des Kontos enden dann sofort.

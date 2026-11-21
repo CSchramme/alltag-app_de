@@ -342,34 +342,78 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
-  // 6. Öffentliche Version mit Konten: Einladungscodes, getrennte Daten, keine privaten Funktionen
+  // 6. Öffentliche Version mit Konten: Anmelden über den Konto-Dienst (hier nachgebaut), getrennte Daten, Admin über dessen API
+  const KS = 'k'.repeat(40), http = require('http');
+  const fakeAcc = { list: [], deleted: [], invites: [], codes: new Map(), imported: null };
+  const mk = (name, extra = {}) => {
+    const a = { id: crypto.randomUUID(), name, email: `${name}@example.org`, emailOk: true, school: 'edupage', admin: false, demo: false, jury: false, disabled: false, ver: 0, created: new Date().toISOString(), ...extra };
+    fakeAcc.list.push(a);
+    return a;
+  };
+  const accSrv = http.createServer(async (req, res) => {
+    const out = (s, b) => { res.writeHead(s, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(b)); };
+    if (req.headers.authorization !== `Bearer ${KS}`) return out(401, { error: 'Schlüssel fehlt' });
+    let body = '';
+    for await (const c of req) body += c;
+    const b = body ? JSON.parse(body) : {}, m = /^\/api\/accounts\/([^/]+)$/.exec(req.url);
+    if (req.url === '/api/exchange') { const id = fakeAcc.codes.get(b.code); fakeAcc.codes.delete(b.code); const a = fakeAcc.list.find((x) => x.id === id); return a ? out(200, { account: a }) : out(400, { error: 'Code ungültig' }); }
+    if (req.url === '/api/accounts') return out(200, { accounts: fakeAcc.list, deleted: fakeAcc.deleted });
+    if (m && req.method === 'PATCH') {
+      const a = fakeAcc.list.find((x) => x.id === m[1]), { reset, ...rest } = b;
+      if (rest.demo && a.admin) return out(400, { error: 'Ein Admin-Konto kann kein Demo-Konto sein.' });
+      if ('jury' in rest && !a.demo) return out(400, { error: 'Erst als Demo-Konto einrichten.' });
+      Object.assign(a, rest);
+      if (reset || 'disabled' in rest || 'demo' in rest) a.ver++;
+      return out(200, { account: a, password: reset ? 'abcd-efgh' : null });
+    }
+    if (m && req.method === 'DELETE') { fakeAcc.list = fakeAcc.list.filter((x) => x.id !== m[1]); fakeAcc.deleted.push({ id: m[1], at: new Date().toISOString() }); return out(200, { ok: true }); }
+    if (req.url === '/api/invites' && req.method === 'POST') { const code = String(482910 + fakeAcc.invites.length); fakeAcc.invites.push({ code, note: b.note, days: b.days, open: true }); return out(200, { invites: fakeAcc.invites, created: [code] }); }
+    if (req.url === '/api/invites') return out(200, { invites: fakeAcc.invites });
+    if (/^\/api\/invites\//.test(req.url)) { fakeAcc.invites = fakeAcc.invites.filter((i) => !req.url.endsWith(i.code)); return out(200, { invites: fakeAcc.invites }); }
+    if (req.url === '/api/import') { fakeAcc.imported = b; return out(200, { imported: b.accounts.length }); }
+    out(404, { error: 'unbekannt' });
+  }).listen(0);
+  const ACC = `http://localhost:${accSrv.address().port}`;
   const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-konten-'));
+  // Umzug: Konten aus der Zeit vor dem Konto-Dienst liegen noch in der App
+  fs.writeFileSync(path.join(dir2, 'accounts.json'), JSON.stringify([{ id: crypto.randomUUID(), name: 'alt', salt: 'a', hash: 'b', school: 'none', ver: 1, lastSeen: '2026-11-01T10:00:00.000Z' }]));
   const port2 = port + 100;
-  const srv2 = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, ENV_FILE: '', DEMO: '', PRIVATE: '', ACCOUNTS: '1', APP_PASSWORD: 'start-code', DATA_KEY: 'k'.repeat(40), LEGAL_NAME: 'Max <Muster>', LEGAL_EMAIL: '', DATA_DIR: dir2, PORT: String(port2) }, stdio: 'pipe' });
+  const srv2 = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, ENV_FILE: '', DEMO: '', PRIVATE: '', ACCOUNTS: '1', APP_PASSWORD: '', ACCOUNTS_URL: ACC, ACCOUNTS_SECRET: KS,
+    DATA_KEY: 'k'.repeat(40), LEGAL_NAME: 'Max <Muster>', LEGAL_EMAIL: '', DATA_DIR: dir2, PORT: String(port2) }, stdio: 'pipe' });
   try {
     await new Promise((resolve, reject) => { srv2.stdout.on('data', (b) => String(b).includes('läuft') && resolve()); srv2.on('exit', reject); });
-    const call = (p, o = {}, cookie) => fetch(`http://localhost:${port2}${p}`, { ...o, headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...o.headers } });
+    const base = `http://localhost:${port2}`;
+    const call = (p, o = {}, cookie) => fetch(`${base}${p}`, { ...o, headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...o.headers } });
     const post = (p, body, cookie) => call(p, { method: 'POST', body: JSON.stringify(body) }, cookie);
     const ck = (r) => r.headers.get('set-cookie').split(';')[0];
-    assert.deepEqual(await (await call('/api/info')).json(), { demo: false, accounts: true, setup: true });
+    const login = async (a, next = '/') => { // so kommt man vom Konto-Dienst zurück: Einmal-Code in der Adresse
+      const code = crypto.randomBytes(8).toString('hex');
+      fakeAcc.codes.set(code, a.id);
+      const r = await fetch(`${base}/auth/callback?code=${code}&next=${encodeURIComponent(next)}`, { redirect: 'manual' });
+      return { status: r.status, location: r.headers.get('location'), cookie: (r.headers.get('set-cookie') || '').split(';')[0] };
+    };
+    const hook = (key = KS) => fetch(`${base}/api/accounts-hook`, { method: 'POST', headers: { Authorization: `Bearer ${key}` } });
+    for (let i = 0; i < 50 && !fs.existsSync(path.join(dir2, 'accounts-vor-konto-dienst.json')); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.equal(fakeAcc.imported.accounts[0].name, 'alt'); // Umzug: alte Konten gehen an den Konto-Dienst, Liste bleibt als Sicherung
+    assert.ok(!fs.existsSync(path.join(dir2, 'accounts.json')) && JSON.parse(fs.readFileSync(path.join(dir2, 'seen.json'), 'utf8'))[fakeAcc.imported.accounts[0].id]);
+    assert.deepEqual(await (await call('/api/info')).json(), { demo: false, accounts: true, accountsUrl: ACC });
     assert.ok((await (await call('/')).text()).includes('<html lang="de" data-skin="modern">')); // öffentliche Version: eigener Look
     const imp = await (await call('/impressum.html')).text(); // Angaben aus Plesk-Variablen, sicher eingesetzt; fehlende sichtbar markiert
     assert.ok(imp.includes('Max &#60;Muster&#62;') && imp.includes('noch eintragen: LEGAL_EMAIL') && !imp.includes('{{'));
     assert.ok((await (await call('/datenschutz.html')).text()).includes('PEIN GbR'));
-    assert.equal((await post('/api/register', { name: 'chef', password: 'geheim123', code: 'falsch', school: 'edupage' })).status, 403);
-    const r1 = await post('/api/register', { name: 'Chef', password: 'geheim123', code: ' start-code ', school: 'edupage' }); // Leerzeichen egal
-    assert.equal(r1.status, 200);
-    const c1 = ck(r1);
+    assert.equal((await post('/api/login', { name: 'x', password: 'y' })).status, 404); // Anmelden nur über die Konto-Seite
+    // Anmelden: falscher Code → zurück zur Konto-Seite; richtiger Code → Sitzung, nur Pfade der App als Ziel
+    const chef = mk('chef', { admin: true }), ben = mk('ben', { school: 'none' });
+    const bad1 = await fetch(`${base}/auth/callback?code=falsch`, { redirect: 'manual' });
+    assert.deepEqual([bad1.status, bad1.headers.get('location'), bad1.headers.get('set-cookie')], [303, `${ACC}/anmelden`, null]);
+    const l1 = await login(chef), c1 = l1.cookie;
+    assert.equal(l1.location, '/');
     const d1 = await (await call('/api/data', {}, c1)).json();
-    assert.deepEqual([d1.account.name, d1.account.admin, d1.features.ha, d1.features.screen], ['chef', true, false, false]);
-    assert.equal((await post('/api/register', { name: 'zweiter', password: 'geheim123', code: 'start-code', school: 'none' })).status, 403); // Startcode nur fürs erste Konto
-    const code = (await (await post('/api/admin/invites', { note: 'Ben' }, c1)).json()).invites[0].code;
-    assert.match(code, /^\d{6}$/);
-    assert.equal((await post('/api/register', { name: 'ben', password: 'kurz', code, school: 'none' })).status, 400);
-    const r2 = await post('/api/register', { name: 'ben', password: 'passwort-ben', code: `${code.slice(0, 3)} ${code.slice(3)}`, school: 'none' }); // Leerzeichen egal
-    assert.equal(r2.status, 200);
-    const c2 = ck(r2);
-    assert.equal((await post('/api/register', { name: 'ben2', password: 'passwort-ben', code, school: 'none' })).status, 403); // Code verbraucht
+    assert.deepEqual([d1.account.name, d1.account.admin, d1.account.email, d1.features.ha, d1.features.screen, d1.accountsUrl], ['chef', true, 'chef@example.org', false, false, ACC]);
+    assert.equal((await login(ben, 'https://boese.example/x')).location, '/');
+    assert.equal((await login(ben, '//boese.example')).location, '/');
+    const lb = await login(ben, '/admin'), c2 = lb.cookie;
+    assert.equal(lb.location, '/admin');
     // jedes Konto sieht nur seine eigenen Daten
     await post('/api/items/notes', { title: 'Nur für Ben' }, c2);
     assert.ok(!(await (await call('/api/data', {}, c1)).json()).db.notes.some((n) => n.title === 'Nur für Ben'));
@@ -381,18 +425,18 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const wk = await (await call(`/api/week?start=${isoDay(far)}`, {}, c2)).json();
     assert.deepEqual([wk.days.length, wk.days[0].lessons[0].subject, wk.days[0].lessons[0].rooms[0], wk.days[1].lessons.length], [5, 'Mathe', '104', 0]);
     assert.equal((await post('/api/edupage', {}, c2)).status, 400);
-    // WebUntis: nur echte WebUntis-Server, Suche ab 3 Zeichen; EduPage-Funktionen gibt es dort nicht
+    // Schulsoftware wechseln: gespeichert beim Konto-Dienst. WebUntis nur echte Server, Suche ab 3 Zeichen, EduPage-Funktionen gibt es dort nicht
     const su = await (await post('/api/account', { school: 'untis' }, c2)).json();
-    assert.deepEqual([su.school, su.link.connected], ['untis', false]);
+    assert.deepEqual([su.school, su.link.connected, fakeAcc.list.find((a) => a.id === ben.id).school], ['untis', false, 'untis']);
     assert.equal((await post('/api/link', { server: 'localhost:3000', school: 'x', user: 'a', pass: 'b' }, c2)).status, 400);
     assert.equal((await call('/api/untis/schools?q=ab', {}, c2)).status, 400);
     assert.equal((await post('/api/messages/x/like', { liked: true }, c2)).status, 400);
     assert.equal((await post('/api/account', { school: 'none' }, c2)).status, 200);
     // Rechte: Ben ist kein Admin; Home Assistant und PC-Bildschirm gibt es hier nicht
     assert.equal((await call('/api/admin', {}, c2)).status, 403);
-    // eigene Statistik: Besuch, neues Konto, aktive Konten; gespeichert werden nur Hashes, keine IP
+    // eigene Statistik: Besuch, neue Konten, aktive Konten; gespeichert werden nur Hashes, keine IP
     const st = (await (await call('/api/admin', {}, c1)).json()).stats, td = st.days.at(-1);
-    assert.deepEqual([st.days.length, td.signups, td.active, td.visitors >= 1, st.schools.none, st.accounts], [30, 1, 1, true, 1, 2]);
+    assert.deepEqual([st.days.length, td.signups, td.active, td.visitors >= 1, st.schools.none, st.accounts], [30, 2, 1, true, 1, 2]);
     const rawStats = JSON.parse(fs.readFileSync(path.join(dir2, 'stats.json'), 'utf8'));
     assert.ok(rawStats.days[td.date].visitors.every((h) => /^[0-9a-f]{16}$/.test(h)) && !JSON.stringify(rawStats).includes('127.0.0.1'));
     assert.equal((await call('/api/ha/pc', {}, c1)).status, 404);
@@ -400,38 +444,50 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const t2 = await (await call('/api/tokens', {}, c2)).json();
     assert.ok(t2.widget && !t2.cron && !t2.screen);
     assert.equal((await (await call(`/api/data?key=${t2.widget}`)).json()).account.name, 'ben'); // Widget-Schlüssel gehört zu genau einem Konto
-    // Anmelden; Passwort ändern meldet andere Geräte ab
-    assert.equal((await post('/api/login', { name: 'ben', password: 'falsch' })).status, 401);
-    const l2 = await post('/api/login', { name: 'BEN', password: 'passwort-ben' });
-    assert.equal(l2.status, 200);
-    const pw = await post('/api/account', { old: 'passwort-ben', password: 'neues-passwort' }, c2);
-    assert.equal(pw.status, 200);
-    assert.equal((await call('/api/data', {}, ck(l2))).status, 401);
-    const c2b = ck(pw);
+    // Passwort auf der Konto-Seite geändert → Benachrichtigung → alte Sitzungen enden; nur mit dem gemeinsamen Schlüssel
+    fakeAcc.list.find((a) => a.id === ben.id).ver++;
+    assert.equal((await hook('falsch'.repeat(8))).status, 401);
+    assert.equal((await call('/api/data', {}, c2)).status, 200);
+    assert.equal((await hook()).status, 200);
+    assert.equal((await call('/api/data', {}, c2)).status, 401);
+    const c2b = (await login(ben)).cookie;
     assert.equal((await call('/api/data', {}, c2b)).status, 200);
     // Admin sperrt Ben (Sitzung endet sofort), dann Löschen samt Datenordner
-    const benId = (await (await call('/api/admin', {}, c1)).json()).accounts.find((a) => a.name === 'ben').id;
-    await post(`/api/admin/accounts/${benId}`, { disabled: true }, c1);
+    await post(`/api/admin/accounts/${ben.id}`, { disabled: true }, c1);
     assert.equal((await call('/api/data', {}, c2b)).status, 401);
-    assert.equal((await post('/api/login', { name: 'ben', password: 'neues-passwort' })).status, 403);
-    assert.ok(fs.existsSync(path.join(dir2, 'users', benId)));
-    assert.equal((await call(`/api/admin/accounts/${benId}`, { method: 'DELETE' }, c1)).status, 200);
-    assert.ok(!fs.existsSync(path.join(dir2, 'users', benId)));
-    assert.equal((await call(`/api/admin/accounts/${d1.account.id}`, { method: 'DELETE' }, c1)).status, 400); // sich selbst nicht
-    // Demo-Konto: Admin stellt ein Konto über die Support-ID auf Demo; Besucher kommen ohne Passwort hinein und können nichts Dauerhaftes ändern
+    assert.ok(fs.existsSync(path.join(dir2, 'users', ben.id)));
+    assert.equal((await call(`/api/admin/accounts/${ben.id}`, { method: 'DELETE' }, c1)).status, 200);
+    assert.ok(!fs.existsSync(path.join(dir2, 'users', ben.id)));
+    assert.equal((await call(`/api/admin/accounts/${chef.id}`, { method: 'DELETE' }, c1)).status, 400); // sich selbst nicht
+    // Auf der Konto-Seite gelöscht: Daten verschwinden nur bei ausdrücklicher Löschnotiz, nie weil ein Konto in der Liste fehlt
+    const weg = mk('weg'), bleibt = mk('bleibt');
+    await login(weg); await login(bleibt);
+    fakeAcc.list = fakeAcc.list.filter((a) => a.id !== weg.id && a.id !== bleibt.id);
+    fakeAcc.deleted.push({ id: weg.id, at: new Date().toISOString() });
+    await hook();
+    assert.deepEqual([fs.existsSync(path.join(dir2, 'users', weg.id)), fs.existsSync(path.join(dir2, 'users', bleibt.id))], [false, true]);
+    // Einladungscodes laufen über den Konto-Dienst
+    const inv = await (await post('/api/admin/invites', { note: 'Lea', days: 30 }, c1)).json();
+    assert.deepEqual([inv.created.length, inv.invites[0].note, inv.invites[0].days], [1, 'Lea', 30]);
+    assert.equal((await call(`/api/admin/invites/${inv.created[0]}`, { method: 'DELETE' }, c1)).status, 200);
+    assert.equal(fakeAcc.invites.length, 0);
+    // Passwort zurücksetzen durch den Admin: neues Passwort nur in dieser Antwort
+    const lea = mk('lea');
+    await hook();
+    assert.equal((await (await post(`/api/admin/accounts/${lea.id}`, { reset: true }, c1)).json()).password, 'abcd-efgh');
+    // Demo-Konto: Admin stellt ein Konto auf Demo; Besucher kommen ohne Passwort hinein und können nichts Dauerhaftes ändern
     assert.equal((await post('/api/demo', {})).status, 404);
-    const code2 = (await (await post('/api/admin/invites', { note: 'Demo' }, c1)).json()).invites.find((i) => !i.usedBy).code;
-    assert.equal((await post('/api/register', { name: 'demo', password: 'beispiel-zugang', code: code2, school: 'edupage' })).status, 200);
-    const dem = (await (await call('/api/admin', {}, c1)).json()).accounts.find((a) => a.name === 'demo');
-    assert.match(dem.support, /^[0-9A-F]{4}-[0-9A-F]{4}$/);
-    assert.equal((await post(`/api/admin/accounts/${d1.account.id}`, { demo: true }, c1)).status, 400); // Admin-Konto nicht
+    const dem = mk('demo');
+    await hook();
+    const demPub = (await (await call('/api/admin', {}, c1)).json()).accounts.find((a) => a.name === 'demo');
+    assert.match(demPub.support, /^[0-9A-F]{4}-[0-9A-F]{4}$/);
+    assert.equal((await post(`/api/admin/accounts/${chef.id}`, { demo: true }, c1)).status, 400); // Admin-Konto nicht
     assert.equal((await post(`/api/admin/accounts/${dem.id}`, { demo: true }, c1)).status, 200);
     assert.equal((await (await call('/api/info')).json()).demo, true);
     const cd = ck(await post('/api/demo', {}));
     const dd = await (await call('/api/data', {}, cd)).json();
     assert.ok(dd.demo && dd.account.demo && dd.snap.messages.length && dd.db.reminders.length && !dd.features.photos && !dd.features.push);
-    assert.equal((await post('/api/account', { old: 'beispiel-zugang', password: 'gekapert-123' }, cd)).status, 400);
-    assert.equal((await call('/api/account', { method: 'DELETE', body: JSON.stringify({ password: 'beispiel-zugang' }) }, cd)).status, 400);
+    assert.equal((await post('/api/account', { school: 'none' }, cd)).status, 400);
     assert.equal((await post('/api/push/subscribe', { endpoint: 'https://push.example/x', keys: { p256dh: 'a', auth: 'b' } }, cd)).status, 400);
     // Jugend forscht Version: alles frei, Daten bleiben bis zum Zurücksetzen durch den Admin
     await post(`/api/admin/accounts/${dem.id}`, { jury: true }, c1);
@@ -441,58 +497,23 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.ok((await (await call('/api/data', {}, cd)).json()).db.notes.some((n) => n.id === nn.id));
     await post(`/api/admin/accounts/${dem.id}`, { resetDemo: true }, c1);
     assert.ok(!(await (await call('/api/data', {}, cd)).json()).db.notes.some((n) => n.id === nn.id));
-    assert.equal((await post(`/api/admin/accounts/${d1.account.id}`, { jury: true }, c1)).status, 400); // nur Demo-Konten
+    assert.equal((await post(`/api/admin/accounts/${chef.id}`, { jury: true }, c1)).status, 400); // nur Demo-Konten
     assert.equal((await post(`/api/admin/accounts/${dem.id}`, { demo: false }, c1)).status, 200);
     assert.equal((await call('/api/data', {}, cd)).status, 401); // Demo beendet: Besucher-Sitzungen enden
     assert.equal((await post('/api/demo', {})).status, 404);
-    // Sicherheit: fremde Seiten dürfen nichts ändern, zu einfache Passwörter gibt es nicht
+    // Sicherheit: fremde Seiten dürfen nichts ändern
     assert.equal((await call('/api/items/notes', { method: 'POST', body: '{}', headers: { Origin: 'https://boese.example' } }, c1)).status, 403);
-    assert.equal((await call('/api/items/notes', { method: 'POST', body: JSON.stringify({ title: 'x' }), headers: { Origin: `http://localhost:${port2}` } }, c1)).status, 200);
-    const code3 = (await (await post('/api/admin/invites', {}, c1)).json()).invites.find((i) => !i.usedBy).code;
-    assert.equal((await post('/api/register', { name: 'lea', password: '12345678', code: code3, school: 'none' })).status, 400);
-    // Flyer: mehrere Codes auf einmal, 30 Tage gültig
-    const fl = await (await post('/api/admin/invites', { count: 3, days: 30, note: 'Flyer Test' }, c1)).json();
-    assert.equal(fl.created.length, 3);
-    const flDays = (Date.parse(fl.invites.find((i) => i.code === fl.created[0]).expires) - Date.now()) / 864e5;
-    assert.ok(flDays > 29.9 && flDays <= 30);
-    const fl90 = await (await post('/api/admin/invites', { count: 1, days: 90, note: 'Flyer Lang' }, c1)).json();
-    assert.ok((Date.parse(fl90.invites.find((i) => i.code === fl90.created[0]).expires) - Date.now()) / 864e5 > 89.9);
-    const fl999 = await (await post('/api/admin/invites', { count: 1, days: 999 }, c1)).json(); // unbekannte Dauer → 7 Tage
-    assert.ok((Date.parse(fl999.invites.find((i) => i.code === fl999.created[0]).expires) - Date.now()) / 864e5 <= 7);
+    assert.equal((await call('/api/items/notes', { method: 'POST', body: JSON.stringify({ title: 'x' }), headers: { Origin: base } }, c1)).status, 200);
     assert.equal((await call('/flyer.mjs')).headers.get('content-type'), 'text/javascript; charset=utf-8');
-    // Sammelcode für Flyer: ein Code für mehrere Anmeldungen, danach geschlossen
-    const sc = await (await post('/api/admin/invites', { uses: 2, days: 90, note: 'Flyer Sammel' }, c1)).json();
-    assert.equal(sc.created.length, 1);
-    const scode = sc.created[0];
-    for (const n of ['flyer-a', 'flyer-b']) assert.equal((await post('/api/register', { name: n, password: 'gruene-wiese-9', code: scode, school: 'none' })).status, 200);
-    assert.equal((await post('/api/register', { name: 'flyer-c', password: 'gruene-wiese-9', code: scode, school: 'none' })).status, 403);
-    const scInv = (await (await call('/api/admin', {}, c1)).json()).invites.find((i) => i.code === scode);
-    assert.deepEqual([scInv.usedCount, scInv.uses, scInv.open, 'used' in scInv], [2, 2, false, false]); // Liste der Konten bleibt auf dem Server
     assert.ok((await (await call('/admin')).text()).includes('data-skin="modern"')); // Verwaltung als eigene Seite
-    // Codes laufen nach 7 Tagen ab
-    const code4 = (await (await post('/api/admin/invites', { note: 'alt' }, c1)).json()).invites.find((i) => !i.usedBy && i.note === 'alt').code;
-    const invFile = path.join(dir2, 'invites.json');
-    fs.writeFileSync(invFile, JSON.stringify(JSON.parse(fs.readFileSync(invFile, 'utf8')).map((i) => (i.code === code4 ? { ...i, created: new Date(Date.now() - 8 * 864e5).toISOString() } : i))));
-    assert.equal((await post('/api/register', { name: 'zu-spaet', password: 'gruene-wiese-8', code: code4, school: 'none' })).status, 403);
-    assert.ok((await (await call('/api/admin', {}, c1)).json()).invites.find((i) => i.code === code4).open === false);
-    assert.equal((await post('/api/register', { name: 'leander', password: 'xxleanderxx', code: code3, school: 'none' })).status, 400);
     // Widget-Schlüssel erneuern: der alte gilt sofort nicht mehr
     const w1 = (await (await call('/api/tokens', {}, c1)).json()).widget;
     assert.equal((await call(`/api/summary?key=${w1}`)).status, 200);
     await post('/api/tokens/widget', {}, c1);
     assert.equal((await call(`/api/summary?key=${w1}`)).status, 401);
-    // Auf anderen Geräten abmelden: dieses Gerät bleibt angemeldet
-    const other = ck(await post('/api/login', { name: 'chef', password: 'geheim123' }));
-    const keep = ck(await post('/api/account', { logoutOthers: true }, c1));
-    assert.deepEqual([(await call('/api/data', {}, other)).status, (await call('/api/data', {}, keep)).status], [401, 200]);
-    // Raten bremst nur das angegriffene Konto (auch bei wechselnden Geräten), nicht alle anderen
-    for (let i = 0; i < 10; i++) await call('/api/login', { method: 'POST', body: JSON.stringify({ name: 'chef', password: `falsch${i}` }), headers: { 'X-Real-IP': `10.0.0.${i}` } });
-    assert.equal((await post('/api/login', { name: 'chef', password: 'geheim123' })).status, 429);
-    const lena = ck(await post('/api/register', { name: 'lena', password: 'gruene-wiese-7', code: code3, school: 'none' }));
-    assert.equal((await call('/api/data', {}, lena)).status, 200);
-    assert.equal((await post('/api/login', { name: 'lena', password: 'gruene-wiese-7' })).status, 200);
   } finally {
     srv2.kill();
+    accSrv.close();
     fs.rmSync(dir2, { recursive: true, force: true });
   }
   // 7. ZIP für die Flyer: Kopf, Inhaltsverzeichnis, Abschluss mit Anzahl und Prüfsumme
