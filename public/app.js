@@ -330,7 +330,7 @@ function taskRow(x) {
 }
 
 function msgRow(m) {
-  const extra = [m.replies.length && `${m.replies.length} ${m.replies.length === 1 ? 'Antwort' : 'Antworten'}`, m.attachments.length && `${m.attachments.length} Anhang`, m.likes && `♥ ${m.likes}`].filter(Boolean);
+  const extra = [m.kind === 'survey' && 'Umfrage', m.replies.length && `${m.replies.length} ${m.replies.length === 1 ? 'Antwort' : 'Antworten'}`, m.attachments.length && `${m.attachments.length} Anhang`, m.likes && `♥ ${m.likes}`].filter(Boolean);
   const confirm = m.important && !m.confirmed ? chip('Bestätigen', 'var(--orange)', true) : '';
   return `<button class="row msg${read.has(m.id) ? '' : ' unread'}" data-msg="${esc(m.id)}">
     <div class="avatar" style="--c:${colorOf(m.author)}">${esc(initials(m.author))}</div>
@@ -1362,7 +1362,8 @@ function openMessage(id) {
   const m = S().messages.find((x) => x.id === id);
   if (!m) return;
   if (!read.has(id)) { read.add(id); store.set('read', [...read]); renderSchoolBody(); renderHeute(); renderBadges(); }
-  const kind = { news: 'Mitteilung', chat: 'Chat', message: 'Nachricht' }[m.kind] || 'Nachricht';
+  const kind = { news: 'Mitteilung', chat: 'Chat', message: 'Nachricht', survey: 'Umfrage' }[m.kind] || 'Nachricht';
+  const eduHome = /^[a-z0-9-]{2,63}$/.test(D.link?.school || '') ? `https://${D.link.school}.edupage.org/user/` : ''; // Umfragen: abstimmen (noch) nur in EduPage
   openSheet(m.author || 'Nachricht', `
     <div class="meta-line" style="margin:0 4px">${chip(kind, 'var(--blue)')}<span class="due">${esc(F.full.format(new Date(m.time)))}</span></div>
     ${m.important ? (m.confirmed
@@ -1370,6 +1371,8 @@ function openMessage(id) {
       : `<div class="card banner warn"><div><b>Lesebestätigung erbeten</b>Die Lehrkraft möchte wissen, dass du die Nachricht gelesen hast.</div></div>
          <button class="btn-primary pressable" data-confirm="${esc(m.id)}">Gelesen bestätigen</button>`) : ''}
     <div class="card bubble">${linkify(m.text)}</div>
+    ${m.kind === 'survey' ? `<p class="footnote" style="text-align:left;margin:0 4px">Abstimmen geht bisher nur direkt in EduPage (App oder Website).</p>
+      ${eduHome ? `<a class="btn-primary pressable" style="line-height:52px;text-align:center;text-decoration:none" href="${esc(eduHome)}" target="_blank" rel="noopener">In EduPage abstimmen</a>` : ''}` : ''}
     <div class="msg-actions">${eduLike() ? `<button class="pill like pressable${m.liked ? ' on' : ''}" data-like="${esc(m.id)}" aria-pressed="${!!m.liked}">${m.liked ? '♥' : '♡'} Gefällt mir${m.likes ? ` · ${m.likes}` : ''}</button>` : ''}
       <button class="pill pressable${m.starred ? ' on' : ''}" data-star="${esc(m.id)}" aria-pressed="${!!m.starred}">${m.starred ? '★ Markiert' : '☆ Markieren'}</button></div>
     ${m.attachments.length ? `<div class="list card">${m.attachments.map((a) => `<a class="row attach" href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener">${ICON.clip}<span class="main">${esc(a.name)}</span>${ICON.chev}</a>`).join('')}</div>` : ''}

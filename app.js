@@ -636,7 +636,8 @@ async function syncEdupage() {
   const status = load('status.json', {});
   if (status.blockedUntil > Date.now()) return load('snapshot.json', null); // nach Captcha eine Stunde Ruhe
   try {
-    const s = school() === 'edupage' ? await snapshot(await connect(cfg), { school: cfg.school }) : await linkSnapshot(cfg);
+    const s = school() === 'edupage' ? await snapshot(await connect(cfg), { school: cfg.school, prev: load('snapshot.json', null) }) : await linkSnapshot(cfg);
+    if (s.sample) { save('edupage-muster.json', s.sample); delete s.sample; } // Aufbau der Einträge (für den Nachbau von Umfragen), nicht für die App
     save('snapshot.json', s);
     save('status.json', { ok: true, at: s.updated, error: null });
     s.errors.forEach((e) => console.warn('Teilfehler:', e));

@@ -176,28 +176,34 @@ class Edupage {
     return out;
   }
 
-  timeline() {
+  // Ein Timeline-Eintrag in einheitlicher Form (auch für nachgeladene Antworten)
+  item(e) {
     const props = this.data?.userProps && typeof this.data.userProps === 'object' ? this.data.userProps : {};
-    const out = [];
-    for (const e of this.data?.items || []) {
-      if (!e.timelineid) continue;
-      let d = {};
-      try { d = JSON.parse(e.data || '{}'); } catch { /* kaputte Zusatzdaten ignorieren */ }
-      if (!d || typeof d !== 'object' || Array.isArray(d)) d = {};
-      let text = e.text;
-      if (e.typ === 'sprava' && typeof d.messageContent === 'string' && d.messageContent.trim()) text = d.messageContent;
-      if (!text) text = d.nazov || '';
-      out.push({
-        id: String(e.timelineid), type: e.typ, text: String(text || '').trim(), data: d,
-        author: e.vlastnik_meno === '*' ? 'Ganze Schule' : String(e.vlastnik_meno || ''),
-        time: e.timestamp, eventTime: e.cas_udalosti || null,
-        replyTo: e.reakcia_na ? String(e.reakcia_na) : null,
-        removed: String(e.removed) === '1',
-        done: !!props[e.timelineid]?.doneMaxCas,
-        starred: props[e.timelineid]?.starred === '1',
-      });
-    }
-    return out;
+    let d = e.data && typeof e.data === 'object' ? e.data : {};
+    if (typeof e.data === 'string') { try { d = JSON.parse(e.data || '{}'); } catch { /* kaputte Zusatzdaten ignorieren */ } }
+    if (!d || typeof d !== 'object' || Array.isArray(d)) d = {};
+    let text = e.text;
+    if (e.typ === 'sprava' && typeof d.messageContent === 'string' && d.messageContent.trim()) text = d.messageContent;
+    if (!text) text = d.nazov || '';
+    return {
+      id: String(e.timelineid), type: e.typ, text: String(text || '').trim(), data: d,
+      author: e.vlastnik_meno === '*' ? 'Ganze Schule' : String(e.vlastnik_meno || ''),
+      time: e.timestamp || e.cas_pridania || '', eventTime: e.cas_udalosti || null,
+      replyTo: e.reakcia_na ? String(e.reakcia_na) : null,
+      removed: String(e.removed) === '1', helper: !!+e.pomocny_zaznam, // Hilfseinträge zeigt auch EduPage nicht an
+      replyCount: +e.pocet_reakcii || 0, lastReply: e.posledna_reakcia || null,
+      done: !!props[e.timelineid]?.doneMaxCas,
+      starred: props[e.timelineid]?.starred === '1',
+    };
+  }
+  timeline() { return (this.data?.items || []).filter((e) => e.timelineid).map((e) => this.item(e)); }
+
+  // Antworten zu einer Nachricht: stehen oft nicht in der Timeline, sondern werden wie im Webclient einzeln geholt
+  // (getRepliesItem mit groupid = Nachricht, siehe Node-Bibliothek EdupageAPI von loumadev, Message.refresh)
+  async replies(groupid) {
+    const r = await this.timelineAction('getRepliesItem', { groupid, lastsync: '' });
+    if (r.status && r.status !== 'ok') throw new Error('EduPage hat die Antworten nicht geliefert');
+    return { root: r.data?.item?.timelineid ? this.item(r.data.item) : null, replies: (r.data?.reakcie || []).filter((e) => e?.timelineid).map((e) => this.item(e)) };
   }
 
   // Timeline-Aktionen wie im EduPage-Webclient (timelineViewer.js) bzw. der Python-Bibliothek (createItem)
@@ -264,12 +270,17 @@ const TASK_KINDS = {
   homework: ['homework', 'Hausaufgabe'], bexam: ['exam', 'Klassenarbeit'], sexam: ['exam', 'Test'], testing: ['exam', 'Test'],
   oexam: ['exam', 'Mündliche Prüfung'], rexam: ['exam', 'Referat'], pexam: ['exam', 'Projekt'],
 }; // Termine/Feiertage nicht aus der Timeline – die stehen schon im persönlichen Stundenplan
-const SNAPSHOT_VERSION = 6;
+const SNAPSHOT_VERSION = 7;
 // Prüfungen kündigt EduPage als Timeline-Termin an („Udalosť: 1.Deutsch-SchA - 16.11.2026“) – daraus entsteht der Lernplan
 const EXAM_RE = /SchA|Schulaufgabe|Stegreif|\bEx\b|Klassenarbeit|Klausur|Kurzarbeit|\bTest\b|\bPLN\b|Leistungsnachweis/i;
 const examLabel = (t) => (/SchA|Schulaufgabe/i.test(t) ? 'Schulaufgabe' : /\bPLN\b|Leistungsnachweis/i.test(t) ? 'Leistungsnachweis' : /Stegreif|\bEx\b/i.test(t) ? 'Stegreifaufgabe'
   : /Kurzarbeit/i.test(t) ? 'Kurzarbeit' : /Klassenarbeit/i.test(t) ? 'Klassenarbeit' : 'Prüfung'); // erhöhen, wenn sich die Auswertung ändert → Server gleicht nach dem Update sofort neu ab
-const MESSAGE_KINDS = { sprava: 'message', news: 'news', chat: 'chat' };
+const MESSAGE_KINDS = { sprava: 'message', news: 'news', chat: 'chat', anketa: 'survey' };
+const MAX_REPLY_FETCHES = 15; // Antworten pro Abgleich höchstens für so viele Nachrichten nachladen, der Rest beim nächsten Mal
+// Aufbau (nicht Inhalt) unbekannter Daten, um z. B. Umfragen nachzubauen: Texte gekürzt, Tiefe begrenzt
+const shape = (v, depth = 0) => (typeof v === 'string' ? (v.length > 24 ? `${v.slice(0, 24)}…` : v)
+  : Array.isArray(v) ? v.slice(0, 3).map((x) => shape(x, depth + 1))
+    : v && typeof v === 'object' ? (depth > 3 ? '{…}' : Object.fromEntries(Object.entries(v).slice(0, 40).map(([k, x]) => [k, shape(x, depth + 1)]))) : v);
 const KEEP_DAYS = 14;
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -285,7 +296,7 @@ function schoolDay(date, lessons) {
   return { date, lessons, changes };
 }
 
-async function snapshot(ep, { school, now = new Date() } = {}) {
+async function snapshot(ep, { school, now = new Date(), prev = null } = {}) {
   const errors = [];
   const attempt = async (label, fn, fallback) => {
     try { return await fn(); } catch (e) { errors.push(`${label}: ${e.message}`); return fallback; }
@@ -304,7 +315,16 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
 
   const items = (await attempt('Timeline', () => ep.timeline(), [])).sort((a, b) => a.time.localeCompare(b.time));
   const cutoff = isoDay(addDays(now, -KEEP_DAYS));
-  const today = isoDay(now), tasks = new Map(), messages = new Map(), missing = new Map();
+  const today = isoDay(now), tasks = new Map(), messages = new Map(), missing = new Map(), orphans = new Map(); // orphans: Antworten ohne Nachricht in der Timeline
+  const toMsg = (n) => {
+    const att = n.data.attachements && typeof n.data.attachements === 'object' ? n.data.attachements : {};
+    return {
+      id: n.id, kind: MESSAGE_KINDS[n.type] || 'message', author: n.author, text: n.text, time: String(n.time).replace(' ', 'T'), replies: [], starred: n.starred,
+      important: !!+n.data.receipt || !!+n.data.importantReply, confirmed: n.data.myConfirmations?.receipt || null,
+      likes: +(n.data.confirmations?.like || 0), liked: !!n.data.myConfirmations?.like, replyCount: n.replyCount || 0, lastReply: n.lastReply || null,
+      attachments: Object.entries(att).map(([url, name]) => ({ name: String(name), url: url.startsWith('/') ? `https://${school}.edupage.org${url}` : url })),
+    };
+  };
   const subjectIn = (t) => Object.values(subjects).find((s) => s.name && t.includes(s.name))?.name || '';
   for (const n of items) {
     const exam = n.type === 'event' && EXAM_RE.test(n.text) && !TASK_KINDS[n.type];
@@ -334,17 +354,38 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
     } else if (n.removed) {
       continue;
     } else if (MESSAGE_KINDS[n.type]) {
-      const att = n.data.attachements && typeof n.data.attachements === 'object' ? n.data.attachements : {};
-      const m = {
-        id: n.id, kind: MESSAGE_KINDS[n.type], author: n.author, text: n.text, time: n.time.replace(' ', 'T'), replies: [], starred: n.starred,
-        important: !!+n.data.receipt || !!+n.data.importantReply, confirmed: n.data.myConfirmations?.receipt || null,
-        likes: +(n.data.confirmations?.like || 0), liked: !!n.data.myConfirmations?.like,
-        attachments: Object.entries(att).map(([url, name]) => ({ name: String(name), url: url.startsWith('/') ? `https://${school}.edupage.org${url}` : url })),
-      };
-      const parent = n.replyTo && messages.get(n.replyTo);
-      if (parent) { parent.replies.push(m); parent.last = m.time; } else messages.set(m.id, m);
+      const m = toMsg(n), parent = n.replyTo && messages.get(n.replyTo);
+      if (parent) { parent.replies.push(m); parent.last = m.time; } else if (n.replyTo) orphans.set(n.replyTo, [...(orphans.get(n.replyTo) || []), m]); else messages.set(m.id, m);
     }
   }
+
+  // Antworten nachladen: EduPage liefert in der Timeline oft nur den Zähler. Auch Antworten, deren Nachricht nicht in der
+  // Timeline steht, gehören an ihre Nachricht. Unverändert (gleiche letzte Antwort) → Stand vom letzten Abgleich übernehmen.
+  const before = new Map((prev?.messages || []).map((m) => [m.id, m]));
+  const want = [...orphans.keys(), ...[...messages.values()].filter((m) => m.replyCount > m.replies.length).map((m) => m.id)];
+  const stamp = (gid) => String(messages.get(gid)?.lastReply || orphans.get(gid)?.at(-1)?.time || '');
+  let fetched = 0;
+  for (const gid of [...new Set(want)].sort((a, b) => stamp(b).localeCompare(stamp(a)))) {
+    const was = before.get(gid);
+    if (was?.replyKey && was.replyKey === stamp(gid)) { messages.set(gid, { ...(messages.get(gid) || was), replies: was.replies, last: was.last, replyKey: was.replyKey }); orphans.delete(gid); continue; }
+    const got = fetched++ < MAX_REPLY_FETCHES ? await attempt('Antworten', () => ep.replies(gid), null) : null;
+    const root = messages.get(gid) || (got?.root && MESSAGE_KINDS[got.root.type] ? toMsg(got.root) : null);
+    if (!root) { for (const m of orphans.get(gid) || []) messages.set(m.id, m); continue; } // Nachricht unbekannt: Antworten einzeln zeigen
+    const list = got ? got.replies.filter((r) => r.id !== gid && !r.helper && !r.removed && r.type !== 'confirmation' && r.text).map(toMsg) : [...root.replies, ...(orphans.get(gid) || [])];
+    root.replies = [...new Map(list.map((r) => [r.id, r])).values()].sort((a, b) => a.time.localeCompare(b.time));
+    root.last = root.replies.at(-1)?.time || root.last;
+    if (got) root.replyKey = stamp(gid) || String(root.replies.length);
+    messages.set(gid, root);
+    orphans.delete(gid);
+  }
+
+  // Muster für den Nachbau von Umfragen (nur Aufbau, Texte gekürzt): welche Eintragsarten und Datenfelder es gibt
+  const sample = {
+    at: new Date().toISOString(), types: items.reduce((o, n) => ({ ...o, [n.type]: (o[n.type] || 0) + 1 }), {}),
+    surveys: items.filter((n) => n.type === 'anketa').slice(-3).map((n) => ({ text: shape(n.text), data: shape(n.data) })),
+    messageKeys: [...new Set(items.filter((n) => MESSAGE_KINDS[n.type]).flatMap((n) => Object.keys(n.data)))],
+    pollLike: items.filter((n) => /ank|poll|vote|hlas|survey|option|moznost|otazk/i.test(Object.keys(n.data).join(' '))).slice(-3).map((n) => ({ type: n.type, data: shape(n.data) })),
+  };
   return {
     v: SNAPSHOT_VERSION,
     updated: new Date().toISOString(),
@@ -354,7 +395,7 @@ async function snapshot(ep, { school, now = new Date() } = {}) {
     bells: (ep.data?.zvonenia || []).filter((z) => z.starttime && z.endtime)
       .map((z, i) => ({ name: String(z.short || z.name || z.p_skratka || i + 1), start: z.starttime, end: z.endtime })),
     messages: [...messages.values()].sort((a, b) => (b.last || b.time).localeCompare(a.last || a.time)).slice(0, 100),
-    errors,
+    errors, sample,
   };
 }
 

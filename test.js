@@ -48,6 +48,11 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
       { timelineid: '10', typ: 'homeworkstudentstav', text: '', timestamp: '2026-11-14 08:00:00', data: '{"id":"superid:2","predmetid":"1","date":"2026-11-14","nazov":"erledigt","stav":"done"}', vlastnik_meno: 'Fr. X' },
       { timelineid: '8', typ: 'event', text: 'Udalosť: 1.Deutsch-SchA', timestamp: '2026-11-15 09:00:00', cas_udalosti: '2026-11-16 00:00:00', data: '{}', vlastnik_meno: 'Fr. X' },
       { timelineid: '5', typ: 'homework', text: 'weg', timestamp: '2026-11-15 10:00:00', data: '{}', removed: '1' },
+      // nur der Antwortzähler, die Antworten selbst fehlen in der Timeline
+      { timelineid: '20', typ: 'sprava', text: 'Elternabend?', timestamp: '2026-11-15 13:00:00', data: '{}', pocet_reakcii: '2', posledna_reakcia: '2026-11-15 15:00:00', vlastnik_meno: 'Hr. Y' },
+      // Antwort, deren Nachricht nicht in der Timeline steht
+      { timelineid: '31', typ: 'sprava', text: 'Ich komme', timestamp: '2026-11-15 14:00:00', data: '', reakcia_na: '30', vlastnik_meno: 'Max M' },
+      { timelineid: '40', typ: 'anketa', text: 'Ausflugsziel?', timestamp: '2026-11-15 16:00:00', data: '{"moznosti":["Zoo","Museum"]}', vlastnik_meno: 'Fr. X' },
     ],
     userProps: { 1: { doneMaxCas: '2026-11-15 13:00:00' } },
   };
@@ -66,8 +71,24 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     { type: 'period', uniperiod: '8', header: [], flags: [], classids: [], teacherids: [], classroomids: [], groupnames: [] },
     { uniperiod: 'ad', type: 'event', starttime: '00:00', endtime: '24:00', header: [{ text: 'Feiertag: Buß- und Bettag' }], teacherids: [], classroomids: [], groupnames: [''], flags: { dp0: { type: 'event', allday: true } } },
   ];
+  // Antworten wie getRepliesItem: Hauptnachricht, Antworten, Lesebestätigung und Hilfseintrag (die beiden letzten nicht anzeigen)
+  let replyCalls = 0;
+  ep.replies = async (gid) => {
+    replyCalls++;
+    const r = (id, text, at, extra = {}) => ep.item({ timelineid: id, typ: 'sprava', text, cas_pridania: `2026-11-15 ${at}`, data: '{}', reakcia_na: gid, vlastnik_meno: 'A B', ...extra });
+    if (gid === '20') return { root: null, replies: [r('20', 'Elternabend?', '13:00:00'), r('23', 'Nein', '15:00:00'), r('21', 'Ja', '14:00:00'), r('22', '', '14:30:00', { typ: 'confirmation' }), r('24', 'intern', '14:40:00', { pomocny_zaznam: '1' })] };
+    if (gid === '30') return { root: ep.item({ timelineid: '30', typ: 'sprava', text: 'Wer kommt mit?', timestamp: '2026-11-15 12:30:00', data: '{}', vlastnik_meno: 'Fr. Z' }), replies: [r('31', 'Ich komme', '14:00:00')] };
+    throw new Error('unbekannt');
+  };
   const snap = await snapshot(ep, { school: 'schule', now: new Date(2026, 10, 16, 8) });
   assert.deepEqual(snap.errors, []);
+  const thread = (s, id) => s.messages.find((m) => m.id === id);
+  assert.deepEqual(thread(snap, '20').replies.map((r) => r.text), ['Ja', 'Nein']); // nachgeladen, sortiert, ohne Bestätigung und Hilfseintrag
+  assert.deepEqual([thread(snap, '30')?.text, thread(snap, '30')?.replies.map((r) => r.text), thread(snap, '31')], ['Wer kommt mit?', ['Ich komme'], undefined]); // Antwort an ihrer Nachricht
+  assert.deepEqual([thread(snap, '40').kind, thread(snap, '40').text], ['survey', 'Ausflugsziel?']);
+  assert.ok(snap.sample.types.anketa === 1 && snap.sample.surveys[0].data.moznosti[0] === 'Zoo');
+  const calls = replyCalls, again = await snapshot(ep, { school: 'schule', now: new Date(2026, 10, 16, 8), prev: snap });
+  assert.deepEqual([replyCalls, thread(again, '20').replies.length, thread(again, '30').replies.length], [calls, 2, 1]); // unverändert: nichts neu laden
   assert.deepEqual(snap.student, { name: 'Max M', class: '7.A' });
   assert.equal(snap.days.length, 5); // Mo–Fr innerhalb von 7 Tagen
   const d0 = snap.days[0];
@@ -95,7 +116,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   assert.equal(snap.tasks.find((t) => t.id === '8').label, 'Schulaufgabe');
   assert.equal(snap.tasks.find((t) => t.id === 'HW7').tid, '7'); // Timeline-ID für den Haken in EduPage
   assert.deepEqual(snap.missing.map((m) => [m.title, m.subject]), [['AB Zellatmung', 'Mathematik']]);
-  assert.equal(snap.v, 6);
+  assert.equal(snap.v, 7);
 
   // Lehrkraft laut regulärem Gesamtstundenplan (Montag = erste Stelle in „days“, Doppelstunde über durationperiods)
   const { regularDay } = require('./edupage');
@@ -159,11 +180,12 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   assert.equal(R.nextOccurrence({ due: '2026-11-20', repeat: 'weekdays' }, '2026-11-20'), '2026-11-23');
   assert.equal(R.nextOccurrence({ due: '2026-01-31', repeat: 'monthly' }, '2026-01-31'), '2026-03-31');
   assert.equal(R.nextOccurrence({ due: '2026-11-20', repeat: '' }, '2026-11-20'), null);
-  assert.equal(snap.messages.length, 1);
-  assert.equal(snap.messages[0].text, 'Hallo');
-  assert.equal(snap.messages[0].replies[0].text, 'Antwort');
-  assert.equal(snap.messages[0].attachments[0].url, 'https://schule.edupage.org/x/a.pdf');
-  assert.deepEqual([snap.messages[0].important, snap.messages[0].confirmed, snap.messages[0].likes, snap.messages[0].liked], [true, '2026-11-15 12:00:00', 2, false]);
+  const m2 = thread(snap, '2');
+  assert.equal(snap.messages.length, 4);
+  assert.equal(m2.text, 'Hallo');
+  assert.equal(m2.replies[0].text, 'Antwort');
+  assert.equal(m2.attachments[0].url, 'https://schule.edupage.org/x/a.pdf');
+  assert.deepEqual([m2.important, m2.confirmed, m2.likes, m2.liked], [true, '2026-11-15 12:00:00', 2, false]);
 
   // 4. Web-Push: Empfänger-Seite nachgebaut (RFC 8291) entschlüsselt, VAPID-Signatur prüfbar
   const { encrypt, vapidHeader, generateVapidKeys } = require('./push');
