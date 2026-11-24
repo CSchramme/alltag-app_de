@@ -53,6 +53,13 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
       // Antwort, deren Nachricht nicht in der Timeline steht
       { timelineid: '31', typ: 'sprava', text: 'Ich komme', timestamp: '2026-11-15 14:00:00', data: '', reakcia_na: '30', vlastnik_meno: 'Max M' },
       { timelineid: '40', typ: 'anketa', text: 'Ausflugsziel?', timestamp: '2026-11-15 16:00:00', data: '{"moznosti":["Zoo","Museum"]}', vlastnik_meno: 'Fr. X' },
+      // Umfrage in einer Nachricht: doppelte Antwort-ID zählt EduPage hoch, meine Stimme steht in meiner Bestätigung (fremde zählt nicht)
+      { timelineid: '50', typ: 'sprava', text: 'Wandertag?', timestamp: '2026-11-15 17:00:00', data: JSON.stringify({ votingParams: { answers: [{ id: 2, text: 'Zoo' }, { id: 3, text: 'Kino' }, { id: 3, text: 'Bad' }] }, confirmations: { vote2: 4 } }), vlastnik_meno: 'Fr. X' },
+      { timelineid: '51', typ: 'confirmation', text: '', timestamp: '2026-11-15 17:10:00', data: '{"vote2":0,"vote302":"2026-11-15 17:10:00"}', reakcia_na: '50', vlastnik: 'Student42', pomocny_zaznam: '1' },
+      { timelineid: '52', typ: 'confirmation', text: '', timestamp: '2026-11-15 17:20:00', data: '{"vote2":"2026-11-15 17:20:00"}', reakcia_na: '50', vlastnik: 'Student7' },
+      { timelineid: '54', typ: 'sprava', text: 'Fahrt?', timestamp: '2026-11-15 19:00:00', data: '{"votingParams":{"answers":[{"id":2,"text":"Bus"},{"id":3,"text":"Bahn"}]}}', vlastnik_meno: 'Fr. X' },
+      { timelineid: '55', typ: 'confirmation', text: '', timestamp: '2026-11-15 19:10:00', data: '{"receipt":"2026-11-15 19:10:00","vote2":"2026-11-15 19:10:02","vote3":0,"myConfirmations":{"receipt":"2026-11-15 19:10:00","vote2":"2026-11-15 19:10:02","vote3":0}}', reakcia_na: '54', vlastnik: 'Student-42' },
+      { timelineid: '53', typ: 'sprava', text: 'Termin?', timestamp: '2026-11-15 18:00:00', data: '{"votingParams":{"answers":[{"id":1,"text":"Mo"},{"id":2,"text":"Di"}]},"myConfirmations":{"vote1":"2026-11-15 18:05:00"}}', vlastnik_meno: 'Fr. X' },
     ],
     userProps: { 1: { doneMaxCas: '2026-11-15 13:00:00' } },
   };
@@ -87,6 +94,8 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   assert.deepEqual([thread(snap, '30')?.text, thread(snap, '30')?.replies.map((r) => r.text), thread(snap, '31')], ['Wer kommt mit?', ['Ich komme'], undefined]); // Antwort an ihrer Nachricht
   assert.deepEqual([thread(snap, '40').kind, thread(snap, '40').text], ['survey', 'Ausflugsziel?']);
   assert.ok(snap.sample.types.anketa === 1 && snap.sample.surveys[0].data.moznosti[0] === 'Zoo');
+  assert.deepEqual(thread(snap, '50').poll, { answers: [{ id: '2', text: 'Zoo' }, { id: '3', text: 'Kino' }, { id: '302', text: 'Bad' }], mine: ['302'] });
+  assert.deepEqual([thread(snap, '53').poll.mine, thread(snap, '54').poll.mine, thread(snap, '2').poll, snap.messages.some((m) => m.id === '51')], [['1'], ['2'], null, false]);
   const calls = replyCalls, again = await snapshot(ep, { school: 'schule', now: new Date(2026, 10, 16, 8), prev: snap });
   assert.deepEqual([replyCalls, thread(again, '20').replies.length, thread(again, '30').replies.length], [calls, 2, 1]); // unverändert: nichts neu laden
   assert.deepEqual(snap.student, { name: 'Max M', class: '7.A' });
@@ -116,7 +125,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   assert.equal(snap.tasks.find((t) => t.id === '8').label, 'Schulaufgabe');
   assert.equal(snap.tasks.find((t) => t.id === 'HW7').tid, '7'); // Timeline-ID für den Haken in EduPage
   assert.deepEqual(snap.missing.map((m) => [m.title, m.subject]), [['AB Zellatmung', 'Mathematik']]);
-  assert.equal(snap.v, 7);
+  assert.equal(snap.v, 8);
 
   // Lehrkraft laut regulärem Gesamtstundenplan (Montag = erste Stelle in „days“, Doppelstunde über durationperiods)
   const { regularDay } = require('./edupage');
@@ -181,7 +190,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   assert.equal(R.nextOccurrence({ due: '2026-01-31', repeat: 'monthly' }, '2026-01-31'), '2026-03-31');
   assert.equal(R.nextOccurrence({ due: '2026-11-20', repeat: '' }, '2026-11-20'), null);
   const m2 = thread(snap, '2');
-  assert.equal(snap.messages.length, 4);
+  assert.equal(snap.messages.length, 7); // ohne Bestätigungen
   assert.equal(m2.text, 'Hallo');
   assert.equal(m2.replies[0].text, 'Antwort');
   assert.equal(m2.attachments[0].url, 'https://schule.edupage.org/x/a.pdf');
@@ -338,7 +347,13 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     // Gefällt mir und Lesebestätigung (Demo: ohne EduPage), Zähler und Bestätigung kommen zurück
     assert.equal((await auth('/api/messages/m1/like', { method: 'POST', body: JSON.stringify({ liked: true }) })).status, 200);
     assert.equal((await auth('/api/messages/m2/confirm', { method: 'POST', body: '{}' })).status, 200);
+    // Umfrage (Demo): Antwort an- und wieder abwählen, unbekannte Antwort abgelehnt
+    assert.equal((await auth('/api/messages/m4/vote', { method: 'POST', body: JSON.stringify({ answer: '9', on: true }) })).status, 400);
+    assert.equal((await auth('/api/messages/m4/vote', { method: 'POST', body: JSON.stringify({ answer: '2', on: true }) })).status, 200);
+    assert.deepEqual((await (await auth('/api/data')).json()).snap.messages.find((m) => m.id === 'm4').poll.mine, ['2']);
+    await auth('/api/messages/m4/vote', { method: 'POST', body: JSON.stringify({ answer: '2', on: false }) });
     const d3 = await (await auth('/api/data')).json();
+    assert.deepEqual(d3.snap.messages.find((m) => m.id === 'm4').poll.mine, []);
     assert.deepEqual([d3.snap.messages.find((m) => m.id === 'm1').liked, d3.snap.messages.find((m) => m.id === 'm1').likes], [true, 4]);
     assert.ok(d3.snap.messages.find((m) => m.id === 'm2').confirmed);
     const tp = await (await auth(`/api/teacher/${encodeURIComponent(d2.snap.people[0].id)}`)).json();

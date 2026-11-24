@@ -56,6 +56,7 @@ Web-App/PWA „Alltag“ für Schule (EduPage) + Privates (Erinnerungen, Termine
 - Vertretung = `flags.dp0.changes` [{column, old}] mit column teacherids/classroomids/subjectid; `classids`-Änderungen (zusammengelegte Klassen) ignorieren
 - Fällige Hausaufgaben stehen in `infos` mit `type: 'homework'` (`item.text`); Timeline-Hausaufgaben: `text` leer, Titel `data.nazov`, Fach `data.predmetid`, Fälligkeit `cas_udalosti`/`data.date`, Details `data.popis`
 - userid z. B. `Student-3330`, Lehrer-IDs `Ucitel-…`
+- Umfragen = Nachrichten mit `data.votingParams.answers` [{id, text}] (doppelte IDs zählt EduPage hoch: id*100+n). Abstimmen = `createConfirmation` mit `confirmType: 'vote<id>'`, `val` '1'/'0' (aus EduPage `app/pics/jsw/views/timeline/TimelineRepliesView.js` + `data/AppTimeline.js`). Eigene Stimme steht im Timeline-Eintrag `typ: 'confirmation'` (`reakcia_na` = Nachricht, `data.myConfirmations.vote2` = Zeit oder 0). Stimmenzahlen zeigt EduPage Schülern nicht → Alltag auch nicht.
 
 ## Offene Punkte
 1. Eine echte Lehrer-/Raum-Vertretung war in den Rohdaten noch nicht dabei – Erkennung beruht auf dem beobachteten `changes`-Format

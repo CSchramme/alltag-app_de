@@ -263,17 +263,20 @@ button.row:active { background-color: var(--press); transition-duration: 0s; }
 
 /* ---------------------------------------------------------------- Aufgaben (Erinnerungen) */
 .task { --inset: 56px; align-items: flex-start; padding-top: 13px; padding-bottom: 13px; }
-.check {
+.check, .vote-dot {
   flex: none; position: relative; width: 26px; height: 26px; margin: -1px 2px 0 0; border-radius: 50%;
   box-shadow: inset 0 0 0 1.75px var(--label3);
   transition: box-shadow .2s;
 }
-.check::after {
+.check::after, .vote-dot::after {
   content: ""; position: absolute; inset: 4px; border-radius: 50%; background: var(--c, var(--blue));
   transform: scale(0); transition: transform .35s cubic-bezier(.34, 1.56, .64, 1);
 }
 .check[aria-checked="true"] { box-shadow: inset 0 0 0 1.75px var(--c, var(--blue)); }
 .check[aria-checked="true"]::after { transform: scale(1); }
+.vote[aria-pressed="true"] .vote-dot { box-shadow: inset 0 0 0 1.75px var(--blue); }
+.vote[aria-pressed="true"] .vote-dot::after { transform: scale(1); }
+.vote { text-align: left; }
 .task .main { padding-top: 1px; }
 .task .title { font-weight: 400; }
 .task.done .title { color: var(--label2); }

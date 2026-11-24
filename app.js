@@ -731,7 +731,8 @@ function payload() {
       messages: (snap.messages || []).map((m) => {
         const liked = st.liked?.[m.id] ?? m.liked;
         return { ...m, starred: st.starred?.[m.id] ?? m.starred, confirmed: m.confirmed || st.confirmed?.[m.id] || null,
-          liked, likes: Math.max(0, (m.likes || 0) + (liked === !!m.liked ? 0 : liked ? 1 : -1)) };
+          liked, likes: Math.max(0, (m.likes || 0) + (liked === !!m.liked ? 0 : liked ? 1 : -1)),
+          poll: m.poll && st.votes?.[m.id] ? { ...m.poll, mine: m.poll.answers.filter((a) => st.votes[m.id][a.id] ?? m.poll.mine.includes(a.id)).map((a) => a.id) } : m.poll };
       }),
     },
     db: db(),
@@ -1009,6 +1010,15 @@ const routes = {
     const { liked } = await readJson(req);
     if (!isDemo()) await edupageDo((ep) => ep.confirm(id, 'like', liked === true ? '1' : '0'));
     const st = state(); st.liked = { ...st.liked, [id]: liked === true }; save('state.json', st);
+    send(res, 200, { ok: true });
+  },
+  // Umfrage: eine Antwort an- oder abwählen (EduPage: Bestätigung vote<id> mit '1'/'0', wie im Webclient)
+  'POST /api/messages/:id/vote': async (req, res, id) => {
+    const { answer, on } = await readJson(req);
+    const a = (snapNow()?.messages || []).find((m) => m.id === id)?.poll?.answers.find((x) => x.id === String(answer));
+    if (!a) throw bad('Antwort nicht gefunden');
+    if (!isDemo()) await edupageDo((ep) => ep.confirm(id, `vote${a.id}`, on === true ? '1' : '0'));
+    const st = state(); st.votes = { ...st.votes, [id]: { ...st.votes?.[id], [a.id]: on === true } }; save('state.json', st);
     send(res, 200, { ok: true });
   },
   'POST /api/messages/:id/confirm': async (req, res, id) => {

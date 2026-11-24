@@ -189,7 +189,7 @@ class Edupage {
       id: String(e.timelineid), type: e.typ, text: String(text || '').trim(), data: d,
       author: e.vlastnik_meno === '*' ? 'Ganze Schule' : String(e.vlastnik_meno || ''),
       time: e.timestamp || e.cas_pridania || '', eventTime: e.cas_udalosti || null,
-      replyTo: e.reakcia_na ? String(e.reakcia_na) : null,
+      replyTo: e.reakcia_na ? String(e.reakcia_na) : null, owner: String(e.vlastnik || ''),
       removed: String(e.removed) === '1', helper: !!+e.pomocny_zaznam, // Hilfseinträge zeigt auch EduPage nicht an
       replyCount: +e.pocet_reakcii || 0, lastReply: e.posledna_reakcia || null,
       done: !!props[e.timelineid]?.doneMaxCas,
@@ -270,7 +270,7 @@ const TASK_KINDS = {
   homework: ['homework', 'Hausaufgabe'], bexam: ['exam', 'Klassenarbeit'], sexam: ['exam', 'Test'], testing: ['exam', 'Test'],
   oexam: ['exam', 'Mündliche Prüfung'], rexam: ['exam', 'Referat'], pexam: ['exam', 'Projekt'],
 }; // Termine/Feiertage nicht aus der Timeline – die stehen schon im persönlichen Stundenplan
-const SNAPSHOT_VERSION = 7;
+const SNAPSHOT_VERSION = 8;
 // Prüfungen kündigt EduPage als Timeline-Termin an („Udalosť: 1.Deutsch-SchA - 16.11.2026“) – daraus entsteht der Lernplan
 const EXAM_RE = /SchA|Schulaufgabe|Stegreif|\bEx\b|Klassenarbeit|Klausur|Kurzarbeit|\bTest\b|\bPLN\b|Leistungsnachweis/i;
 const examLabel = (t) => (/SchA|Schulaufgabe/i.test(t) ? 'Schulaufgabe' : /\bPLN\b|Leistungsnachweis/i.test(t) ? 'Leistungsnachweis' : /Stegreif|\bEx\b/i.test(t) ? 'Stegreifaufgabe'
@@ -323,7 +323,26 @@ async function snapshot(ep, { school, now = new Date(), prev = null } = {}) {
       important: !!+n.data.receipt || !!+n.data.importantReply, confirmed: n.data.myConfirmations?.receipt || null,
       likes: +(n.data.confirmations?.like || 0), liked: !!n.data.myConfirmations?.like, replyCount: n.replyCount || 0, lastReply: n.lastReply || null,
       attachments: Object.entries(att).map(([url, name]) => ({ name: String(name), url: url.startsWith('/') ? `https://${school}.edupage.org${url}` : url })),
+      poll: pollOf(n),
     };
+  };
+  // Umfrage in einer Nachricht (wie TimelineItemVotings im EduPage-Webclient): Antworten aus votingParams, eigene Stimme = Bestätigung vote<id>
+  const voted = (v) => !!v && v !== '0';
+  const pollOf = (n) => {
+    const list = n.data.votingParams?.answers;
+    if (!Array.isArray(list) || !list.length) return null;
+    const seen = {};
+    const answers = list.map((a) => {
+      const c = seen[a.id] = (seen[a.id] || 0) + 1; // doppelte IDs zählt EduPage hoch: id*100 + n
+      return { id: String(c > 1 ? a.id * 100 + c : a.id), text: String(a.text || '').trim() };
+    });
+    return { answers, mine: answers.filter((a) => voted(n.data.myConfirmations?.[`vote${a.id}`])).map((a) => a.id) };
+  };
+  // Nachricht → meine Bestätigung ({receipt, vote2: Zeit, vote3: 0, myConfirmations: {…}} laut echtem Muster 11/2026)
+  const me = String(ep.data?.userid || ''), myVotes = new Map();
+  const keepVote = (n) => {
+    const d = n.data.myConfirmations || (me && n.owner === me ? n.data : null);
+    if (n.type === 'confirmation' && n.replyTo && d && typeof d === 'object') myVotes.set(n.replyTo, d);
   };
   const subjectIn = (t) => Object.values(subjects).find((s) => s.name && t.includes(s.name))?.name || '';
   for (const n of items) {
@@ -353,6 +372,8 @@ async function snapshot(ep, { school, now = new Date(), prev = null } = {}) {
       }
     } else if (n.removed) {
       continue;
+    } else if (n.type === 'confirmation') {
+      keepVote(n);
     } else if (MESSAGE_KINDS[n.type]) {
       const m = toMsg(n), parent = n.replyTo && messages.get(n.replyTo);
       if (parent) { parent.replies.push(m); parent.last = m.time; } else if (n.replyTo) orphans.set(n.replyTo, [...(orphans.get(n.replyTo) || []), m]); else messages.set(m.id, m);
@@ -369,6 +390,7 @@ async function snapshot(ep, { school, now = new Date(), prev = null } = {}) {
     const was = before.get(gid);
     if (was?.replyKey && was.replyKey === stamp(gid)) { messages.set(gid, { ...(messages.get(gid) || was), replies: was.replies, last: was.last, replyKey: was.replyKey }); orphans.delete(gid); continue; }
     const got = fetched++ < MAX_REPLY_FETCHES ? await attempt('Antworten', () => ep.replies(gid), null) : null;
+    got?.replies.forEach(keepVote);
     const root = messages.get(gid) || (got?.root && MESSAGE_KINDS[got.root.type] ? toMsg(got.root) : null);
     if (!root) { for (const m of orphans.get(gid) || []) messages.set(m.id, m); continue; } // Nachricht unbekannt: Antworten einzeln zeigen
     const list = got ? got.replies.filter((r) => r.id !== gid && !r.helper && !r.removed && r.type !== 'confirmation' && r.text).map(toMsg) : [...root.replies, ...(orphans.get(gid) || [])];
@@ -379,14 +401,16 @@ async function snapshot(ep, { school, now = new Date(), prev = null } = {}) {
     orphans.delete(gid);
   }
 
+  for (const [gid, d] of myVotes) {
+    const p = messages.get(gid)?.poll;
+    if (p) p.mine = p.answers.filter((a) => voted(d[`vote${a.id}`])).map((a) => a.id);
+  }
+
   // Muster für den Nachbau von Umfragen (nur Aufbau, Texte gekürzt): welche Eintragsarten und Datenfelder es gibt
   const sample = {
     at: new Date().toISOString(), types: items.reduce((o, n) => ({ ...o, [n.type]: (o[n.type] || 0) + 1 }), {}),
     surveys: items.filter((n) => n.type === 'anketa').slice(-3).map((n) => ({ text: shape(n.text), data: shape(n.data) })),
     messageKeys: [...new Set(items.filter((n) => MESSAGE_KINDS[n.type]).flatMap((n) => Object.keys(n.data)))],
-    pollLike: items.filter((n) => /ank|poll|vot|hlas|survey|option|moznost|otazk/i.test(Object.keys(n.data).join(' '))).slice(-3).map((n) => ({ type: n.type, data: shape(n.data) })),
-    // Umfragen stecken in Nachrichten (data.votingParams), Stimmen kommen als Bestätigung (vote2, vote3 …)
-    polls: items.filter((n) => n.data.votingParams).slice(-3).map((n) => ({ id: n.id, text: shape(n.text), votingParams: shape(n.data.votingParams), confirmations: shape(n.data.confirmations), myConfirmations: shape(n.data.myConfirmations) })),
   };
   return {
     v: SNAPSHOT_VERSION,

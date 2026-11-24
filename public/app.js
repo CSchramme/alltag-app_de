@@ -331,7 +331,7 @@ function taskRow(x) {
 }
 
 function msgRow(m) {
-  const extra = [m.kind === 'survey' && 'Umfrage', m.replies.length && `${m.replies.length} ${m.replies.length === 1 ? 'Antwort' : 'Antworten'}`, m.attachments.length && `${m.attachments.length} Anhang`, m.likes && `♥ ${m.likes}`].filter(Boolean);
+  const extra = [(m.kind === 'survey' || m.poll) && 'Umfrage', m.replies.length && `${m.replies.length} ${m.replies.length === 1 ? 'Antwort' : 'Antworten'}`, m.attachments.length && `${m.attachments.length} Anhang`, m.likes && `♥ ${m.likes}`].filter(Boolean);
   const confirm = m.important && !m.confirmed ? chip('Bestätigen', 'var(--orange)', true) : '';
   return `<button class="row msg${read.has(m.id) ? '' : ' unread'}" data-msg="${esc(m.id)}">
     <div class="avatar" style="--c:${colorOf(m.author)}">${esc(initials(m.author))}</div>
@@ -1372,7 +1372,10 @@ function openMessage(id) {
       : `<div class="card banner warn"><div><b>Lesebestätigung erbeten</b>Die Lehrkraft möchte wissen, dass du die Nachricht gelesen hast.</div></div>
          <button class="btn-primary pressable" data-confirm="${esc(m.id)}">Gelesen bestätigen</button>`) : ''}
     <div class="card bubble">${linkify(m.text)}</div>
-    ${m.kind === 'survey' ? `<p class="footnote" style="text-align:left;margin:0 4px">Abstimmen geht bisher nur direkt in EduPage (App oder Website).</p>
+    ${m.poll ? `<p class="label-sm">Umfrage</p>
+      <div class="list card">${m.poll.answers.map((a) => `<button class="row vote pressable" data-vote="${esc(m.id)}" data-answer="${esc(a.id)}" aria-pressed="${m.poll.mine.includes(a.id)}"${D.link.connected ? '' : ' disabled'}><span class="vote-dot" aria-hidden="true"></span><span class="main">${esc(a.text)}</span></button>`).join('')}</div>
+      <p class="footnote" style="text-align:left;margin:0 4px">${m.poll.mine.length ? 'Deine Stimme ist bei EduPage eingetragen. Nochmal tippen nimmt sie zurück.' : 'Tippe auf eine Antwort, um abzustimmen.'}</p>`
+    : m.kind === 'survey' ? `<p class="footnote" style="text-align:left;margin:0 4px">Abstimmen geht bisher nur direkt in EduPage (App oder Website).</p>
       ${eduHome ? `<a class="btn-primary pressable" style="line-height:52px;text-align:center;text-decoration:none" href="${esc(eduHome)}" target="_blank" rel="noopener">In EduPage abstimmen</a>` : ''}` : ''}
     <div class="msg-actions">${eduLike() ? `<button class="pill like pressable${m.liked ? ' on' : ''}" data-like="${esc(m.id)}" aria-pressed="${!!m.liked}">${m.liked ? '♥' : '♡'} Gefällt mir${m.likes ? ` · ${m.likes}` : ''}</button>` : ''}
       <button class="pill pressable${m.starred ? ' on' : ''}" data-star="${esc(m.id)}" aria-pressed="${!!m.starred}">${m.starred ? '★ Markiert' : '☆ Markieren'}</button></div>
@@ -1505,6 +1508,16 @@ async function toggleLike(id) {
   renderSchoolBody();
   try { await api(`/api/messages/${encodeURIComponent(id)}/like`, { method: 'POST', body: { liked: m.liked } }); }
   catch (e) { m.liked = !m.liked; m.likes = Math.max(0, m.likes + (m.liked ? 1 : -1)); toast(e.message); if (sheetOpen) openMessage(id); renderSchoolBody(); }
+}
+async function vote(id, answer) {
+  const p = S().messages.find((x) => x.id === id)?.poll;
+  if (!p) return;
+  const before = p.mine, on = !before.includes(answer);
+  p.mine = on ? [...before, answer] : before.filter((x) => x !== answer);
+  haptic();
+  openMessage(id);
+  try { await api(`/api/messages/${encodeURIComponent(id)}/vote`, { method: 'POST', body: { answer, on } }); toast(on ? 'Abgestimmt' : 'Stimme zurückgenommen'); }
+  catch (e) { p.mine = before; toast(e.message); if (sheetOpen) openMessage(id); }
 }
 async function confirmRead(id, btn) {
   const m = S().messages.find((x) => x.id === id);
@@ -2582,7 +2595,7 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-umfrage]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-vote],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-umfrage]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (el.id === 'me' || 'settings' in ds) return openSettings();
@@ -2603,6 +2616,7 @@ document.addEventListener('click', async (e) => {
   if (ds.pc) return runPc(ds.pc, el);
   if (ds.star) return toggleStar(ds.star, el);
   if (ds.like) return toggleLike(ds.like);
+  if (ds.vote) return vote(ds.vote, ds.answer);
   if (ds.confirm) return confirmRead(ds.confirm, el);
   if (ds.teacher) return openTeacher(ds.teacher);
   if (ds.pick) { composeTo.set(ds.pick, (S().people || []).find((p) => p.id === ds.pick)?.name || ''); return drawRecipients(); }

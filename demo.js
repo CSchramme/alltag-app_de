@@ -56,6 +56,8 @@ function snapshot(now = new Date()) {
         replies: [{ id: 'm1r', kind: 'message', author: 'Alex Beispiel', text: 'Alles klar, danke!', time: ago(1), replies: [], attachments: [] }] },
       { id: 'm2', kind: 'news', author: 'Schulleitung', time: ago(26), replies: [], important: true, confirmed: null, likes: 0, attachments: [{ name: 'Elternbrief_Sprechtag.pdf', url: '#' }],
         text: 'Der Elternsprechtag findet am Donnerstag ab 15 Uhr statt. Die Anmeldung ist ab sofort über das Sekretariat möglich.' },
+      { id: 'm4', kind: 'message', author: 'Fr. Schneider', time: ago(5), replies: [], attachments: [], text: 'Wohin soll unser Wandertag im Mai gehen? Bitte bis Freitag abstimmen.',
+        poll: { answers: [{ id: '1', text: 'Kletterwald' }, { id: '2', text: 'Bowling' }, { id: '3', text: 'Museum' }], mine: [] } },
       { id: 'm3', kind: 'message', author: 'Hr. Schulz', time: ago(52), replies: [], attachments: [], text: 'Sport findet diese Woche draußen statt – bitte an wetterfeste Kleidung denken.' },
     ],
     missing: [{ id: 'x1', title: 'Arbeitsblatt Zellatmung', subject: 'Biologie', date: isoDay(addDays(now, -3)), comment: '' }],
