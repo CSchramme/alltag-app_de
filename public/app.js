@@ -244,6 +244,7 @@ function banners() {
   else if (D.link.connected && D.status?.ok === false) out.push(['warn', `${linkName()}-Abgleich fehlgeschlagen`, D.status.error || '']);
   if (D.school === 'none' && !D.demo) { if (!D.db.lessons?.length) out.push(['info', 'Noch kein Stundenplan', 'Tippe hier und trag deine Stunden einmal ein. Sie gelten dann jede Woche.', 'data-settings']); }
   else if (!D.link.connected) out.push(['info', `${linkName()} noch nicht verbunden`, 'Tippe hier, um Stundenplan, Vertretungen und Nachrichten zu holen.', 'data-settings']);
+  if (D.beta?.umfrage) out.push(['info', 'Wie war der Beta-Test?', 'Drei Minuten, anonym: Tippe hier für die Abschlussumfrage.', 'data-umfrage']);
   return out.map(([k, t, s, attr]) => `<${attr ? `button ${attr}` : 'div'} class="card banner ${k}"><div><b>${esc(t)}</b>${esc(s)}</div></${attr ? 'button' : 'div'}>`).join('');
 }
 
@@ -1720,6 +1721,8 @@ async function openSettings() {
       <div class="main"><div class="title">${esc(D.account?.name || s.name || 'Alltag')}</div><div class="sub">${D.account ? `${esc(schoolName(D.school))}${D.account.admin ? ' · Admin' : ''}` : s.class ? `Klasse ${esc(s.class)}` : 'Schule und Privates'}</div></div>
     </div>
     ${accountSection()}
+    ${D.beta ? `<p class="label-sm">Beta-Test</p>${group('<button class="row" data-feedback><div class="main"><div class="title">Fehler oder Idee melden</div><div class="sub">Geht direkt an den Entwickler, mit deiner Tester-ID</div></div></button>',
+      D.beta.umfrage ? '<button class="row" data-umfrage><div class="main"><div class="title">Abschlussumfrage</div><div class="sub">Drei Minuten, anonym</div></div></button>' : '')}` : ''}
     ${D.school === 'none' && !D.demo ? `<p class="label-sm">Stundenplan</p><div id="own-plan">${ownPlan()}</div>` : ''}
     <p class="label-sm">Ferien</p>
     ${group(fRow('Bundesland', `<select id="state-select">${[['BW', 'Baden-Württemberg'], ['BY', 'Bayern'], ['BE', 'Berlin'], ['BB', 'Brandenburg'], ['HB', 'Bremen'], ['HH', 'Hamburg'], ['HE', 'Hessen'], ['MV', 'Mecklenburg-Vorpommern'], ['NI', 'Niedersachsen'], ['NW', 'Nordrhein-Westfalen'], ['RP', 'Rheinland-Pfalz'], ['SL', 'Saarland'], ['SN', 'Sachsen'], ['ST', 'Sachsen-Anhalt'], ['SH', 'Schleswig-Holstein'], ['TH', 'Thüringen']].map(([v, l]) => `<option value="${v}"${D.state === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`))}
@@ -1979,6 +1982,9 @@ async function openAdmin(data) {
       .map(([n, l]) => `<div class="card admin-stat"><b>${n}</b><span>${l}</span></div>`).join('')}</div>
     <div class="admin-grid">
       ${statsSection(data.stats)}
+      <section class="card admin-card wide" id="adm-beta"><h2>Beta-Anmeldungen</h2><p class="sub">Lädt …</p></section>
+      <section class="card admin-card wide" id="adm-fb"><h2>Rückmeldungen</h2><p class="sub">Lädt …</p></section>
+      <section class="card admin-card wide" id="adm-um"><h2>Abschlussumfrage</h2><p class="sub">Lädt …</p></section>
       <section class="card admin-card">
         <h2>Flyer (A6, doppelseitig)</h2>
         <p class="sub">Ein Code für alle Flyer: Er gilt für die gewählte Zahl an Anmeldungen und bis zum Ablaufdatum. Du bekommst eine ZIP-Datei mit Vorder- und Rückseite als Bild (z. B. für den dm-Fotodruck) und eine Druck-PDF für Druckereien.</p>
@@ -2013,6 +2019,7 @@ async function openAdmin(data) {
       </section>
       ${used.length ? `<section class="card admin-card wide"><h2>Zuletzt eingelöste Einladungen</h2>${group(...used.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shownCode(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} → ${esc(nameOf(i.usedBy))}</div></div></div>`))}</section>` : ''}
     </div></div>`;
+  betaAdmin(el, data);
   api('/api/admin/health').then((h) => {
     const box = $('#acc-health', el);
     if (box) box.textContent = h.ok ? `Konto-Dienst erreichbar · Mailversand: ${h.mail} · ${h.unconfirmed} Konten warten auf E-Mail-Bestätigung` : `Konto-Dienst nicht erreichbar: ${h.error}`;
@@ -2101,6 +2108,171 @@ function openAcc(a, password) {
       } catch (x) { toast(x.message); }
     };
   });
+}
+
+/* ---------------------------------------------------------------- Verwaltung: Beta-Anmeldungen, Rückmeldungen, Abschlussumfrage */
+function csvDownload(name, rows) { // Semikolon und BOM: öffnet sich in Excel direkt richtig
+  const text = `﻿${rows.map((r) => r.map((v) => `"${String(Array.isArray(v) ? v.join(', ') : v ?? '').replace(/"/g, '""')}"`).join(';')).join('\r\n')}`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+  a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+const formRows = (id, x) => Formulare.FORMS[id].filter((f) => f.name && x[f.name] != null && x[f.name] !== '' && !(Array.isArray(x[f.name]) && !x[f.name].length))
+  .map((f) => `<div class="row"><div class="main"><div class="sub">${esc(f.label)}</div><div class="title" style="white-space:pre-wrap">${esc(f.type === 'check' ? (x[f.name] ? 'ja' : 'nein') : Array.isArray(x[f.name]) ? x[f.name].join(', ') : x[f.name])}</div></div></div>`);
+const bars = (counts, total) => Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="row"><div class="main"><div class="title">${esc(k)}</div>
+  <div class="meter" aria-hidden="true"><i style="width:${total ? Math.round((v / total) * 100) : 0}%"></i></div></div><div class="trail">${v}${total ? ` · ${Math.round((v / total) * 100)} %` : ''}</div></div>`).join('');
+
+async function betaAdmin(el, data) {
+  const [beta, fb, um] = await Promise.all(['/api/admin/beta', '/api/admin/feedback', '/api/admin/umfrage'].map((u) => api(u).catch(() => null)));
+  const nameOf = (id) => data.accounts.find((a) => a.id === id)?.name;
+  // Beta-Anmeldungen: Status aus den Einladungscodes (eingelöst = registriert)
+  const renderBeta = (list) => {
+    const box = $('#adm-beta', el);
+    if (!box || !list) return;
+    const state = (x) => { const inv = x.code && data.invites.find((i) => i.code === x.code); return inv?.usedBy ? `registriert als ${nameOf(inv.usedBy) || 'Konto'}` : x.status === 'eingeladen' ? `eingeladen ${ago(x.invitedAt)}` : 'neu'; };
+    box.innerHTML = `<h2>Beta-Anmeldungen (${list.length})</h2><p class="sub">Von der Seite <a href="/beta" target="_blank" rel="noopener">alltag-app.de/beta</a>. „Einladen“ schickt den Einladungscode mit der Tester-ID per Mail.</p>
+      ${list.length ? `<div class="list card">${list.map((x) => `<button class="row" data-beta="${esc(x.id)}"><div class="main"><div class="title"><span class="code">${esc(x.id)}</span> ${esc(x.vorname)} ${esc(x.nachname)}</div>
+        <div class="sub">${esc([x.schulsoftware, x.hauptgeraet, `${x.alter} J.`, state(x)].join(' · '))}</div></div>${ICON.chev}</button>`).join('')}</div>
+        <button class="btn-plain" type="button" data-csv>Als CSV laden</button>` : '<p class="footnote" style="text-align:left">Noch keine Anmeldungen.</p>'}`;
+    box.onclick = async (e) => {
+      if (e.target.closest('[data-csv]')) return csvDownload('alltag-beta-anmeldungen.csv', [['ID', 'Angemeldet', 'Status', ...Formulare.FORMS.beta.filter((f) => f.name).map((f) => f.label)],
+        ...list.map((x) => [x.id, x.at, state(x), ...Formulare.FORMS.beta.filter((f) => f.name).map((f) => x[f.name])])]);
+      const row = e.target.closest('[data-beta]'), x = row && list.find((y) => y.id === row.dataset.beta);
+      if (!x) return;
+      const registered = state(x).startsWith('registriert');
+      openSheet(`${x.id} · ${x.vorname}`, `<div class="list card">${formRows('beta', x).join('')}</div>
+        <p class="footnote" style="text-align:left">Angemeldet ${esc(ago(x.at))} · ${esc(state(x))}${x.code ? ` · Code ${esc(shownCode(x.code))}` : ''}</p>
+        ${registered ? '' : `<button class="btn-primary pressable" data-do="invite">${x.code ? 'Neuen Code per Mail schicken' : 'Einladen (Code per Mail)'}</button>`}
+        <button class="btn-plain danger" data-do="del">Anmeldung löschen</button>`);
+      $$('#sheet [data-do]').forEach((b) => { b.onclick = async () => {
+        if (b.dataset.do === 'del' && !b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Wirklich löschen?'; return; }
+        b.disabled = true;
+        try {
+          const r = await api(`/api/admin/beta/${encodeURIComponent(x.id)}${b.dataset.do === 'invite' ? '/invite' : ''}`, { method: b.dataset.do === 'invite' ? 'POST' : 'DELETE' });
+          if (r.invites) data.invites = r.invites;
+          haptic(); closeSheet(); toast(b.dataset.do === 'invite' ? 'Einladung verschickt' : 'Gelöscht'); renderBeta(r.list);
+        } catch (x2) { toast(x2.message); b.disabled = false; }
+      }; });
+    };
+  };
+  // Rückmeldungen: Fehler, Ideen, Fragen mit Status
+  const renderFb = (list) => {
+    const box = $('#adm-fb', el);
+    if (!box || !list) return;
+    const open = list.filter((x) => x.status !== 'erledigt').length;
+    box.innerHTML = `<h2>Rückmeldungen (${open} offen)</h2><p class="sub">Aus der App (Profil → Beta-Test). Tester-ID, Gerät und App-Version kommen automatisch mit.</p>
+      ${list.length ? `<div class="list card">${list.map((x) => `<button class="row" data-fb="${esc(x.id)}"><div class="main"><div class="title">${chip(x.art, x.art === 'Fehler' ? 'var(--red)' : 'var(--blue)')} ${esc(x.titel)}</div>
+        <div class="sub">${esc([x.account?.name, x.betaId, ago(x.at), x.status].filter(Boolean).join(' · '))}</div></div>${ICON.chev}</button>`).join('')}</div>
+        <button class="btn-plain" type="button" data-csv>Als CSV laden</button>` : '<p class="footnote" style="text-align:left">Noch keine Rückmeldungen.</p>'}`;
+    box.onclick = (e) => {
+      if (e.target.closest('[data-csv]')) return csvDownload('alltag-rueckmeldungen.csv', [['Zeit', 'Art', 'Kurz', 'Beschreibung', 'Wann', 'Schritte', 'Status', 'Notiz', 'Konto', 'Tester-ID', 'Support-ID', 'Schulsoftware', 'Ansicht', 'Version', 'Gerät'],
+        ...list.map((x) => [x.at, x.art, x.titel, x.beschreibung, x.wann, x.schritte, x.status, x.note, x.account?.name, x.betaId, x.account?.support, x.school, x.view, x.version, x.device])]);
+      const row = e.target.closest('[data-fb]'), x = row && list.find((y) => y.id === row.dataset.fb);
+      if (!x) return;
+      openSheet(x.art, `<div class="list card">${formRows('feedback', x).join('')}
+        <div class="row"><div class="main"><div class="sub">Von</div><div class="title">${esc([x.account?.name, x.betaId, x.account?.support].filter(Boolean).join(' · ') || 'unbekannt')}</div></div></div>
+        <div class="row"><div class="main"><div class="sub">Gesendet</div><div class="title">${esc(F.full.format(new Date(x.at)))} · Ansicht ${esc(x.view || '–')} · Version ${esc(x.version || '–')}</div></div></div>
+        <div class="row"><div class="main"><div class="sub">Gerät</div><div class="title" style="font-size:13px">${esc(x.device || '–')}</div></div></div></div>
+        ${x.shot ? `<a href="/api/admin/feedback/${esc(x.id)}/shot" target="_blank" rel="noopener"><img class="photo-full" src="/api/admin/feedback/${esc(x.id)}/shot" alt="Bildschirmfoto"></a>` : ''}
+        <form class="form" id="fb-edit">${fChoice('status', [['neu', 'Neu'], ['in Arbeit', 'In Arbeit'], ['erledigt', 'Erledigt']], x.status)}
+          ${group(fArea('note', 'Notiz (nur für dich)', x.note || '', 3))}<button class="btn-primary pressable" type="submit">Sichern</button></form>`);
+      $('#fb-edit').onsubmit = async (ev) => {
+        ev.preventDefault();
+        try { const r = await api(`/api/admin/feedback/${encodeURIComponent(x.id)}`, { method: 'POST', body: Object.fromEntries(new FormData(ev.target)) }); haptic(); closeSheet(); renderFb(r.list); }
+        catch (x2) { toast(x2.message); }
+      };
+    };
+  };
+  // Abschlussumfrage: öffnen/schließen, Auswertung je Frage, CSV für die schriftliche Arbeit
+  const renderUm = (u) => {
+    const box = $('#adm-um', el);
+    if (!box || !u) return;
+    const ans = u.answers, n = ans.length;
+    const summary = Formulare.FORMS.umfrage.filter((f) => f.name).map((f) => {
+      const vals = ans.map((a) => a[f.name]).filter((v) => v != null && v !== '');
+      if (f.type === 'textarea') return vals.length ? `<h3>${esc(f.label)}</h3><div class="list card">${vals.slice(-30).reverse().map((t) => `<div class="row"><div class="main" style="white-space:pre-wrap">${esc(t)}</div></div>`).join('')}</div>` : '';
+      if (f.type === 'scale') {
+        const avg = vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : 0, counts = Object.fromEntries(Array.from({ length: f.max - f.min + 1 }, (_, k) => [String(f.min + k), vals.filter((v) => v === f.min + k).length]));
+        const nps = f.max === 10 && vals.length ? Math.round(((vals.filter((v) => v >= 9).length - vals.filter((v) => v <= 6).length) / vals.length) * 100) : null;
+        return `<h3>${esc(f.label)}</h3><p class="sub">Durchschnitt ${vals.length ? F.num.format(Math.round(avg * 10) / 10) : '–'} von ${f.max}${nps != null ? ` · Weiterempfehlung (NPS) ${nps}` : ''}</p>${group(bars(Object.fromEntries(Object.entries(counts).filter(([, v]) => v)), vals.length))}`;
+      }
+      const counts = {};
+      for (const v of vals) for (const x of [].concat(v)) counts[x] = (counts[x] || 0) + 1;
+      return `<h3>${esc(f.label)}</h3>${Object.keys(counts).length ? group(bars(counts, n)) : '<p class="footnote" style="text-align:left">Noch keine Antworten.</p>'}`;
+    }).join('');
+    box.innerHTML = `<h2>Abschlussumfrage (${n} ${n === 1 ? 'Antwort' : 'Antworten'})</h2>
+      <p class="sub">Anonym: gespeichert ohne Konto, nur mit Tag. Ist sie offen, sehen Tester in der App einen Hinweis und im Profil den Fragebogen.</p>
+      ${group(`<label class="row"><div class="main"><div class="title">Umfrage geöffnet</div></div><input type="checkbox" class="switch" data-um-open${u.open ? ' checked' : ''}></label>`)}
+      ${n ? `${summary}<button class="btn-plain" type="button" data-csv>Als CSV laden</button>` : ''}`;
+    $('[data-um-open]', box).onchange = async (e) => { try { renderUm(await api('/api/admin/umfrage', { method: 'POST', body: { open: e.target.checked } })); haptic(); } catch (x) { toast(x.message); } };
+    box.onclick = (e) => {
+      if (!e.target.closest('[data-csv]')) return;
+      const fields = Formulare.FORMS.umfrage.filter((f) => f.name);
+      csvDownload('alltag-abschlussumfrage.csv', [['Tag', ...fields.map((f) => f.label)], ...ans.map((a) => [a.day, ...fields.map((f) => a[f.name])])]);
+    };
+  };
+  renderBeta(beta?.list); renderFb(fb?.list); renderUm(um);
+}
+
+/* ---------------------------------------------------------------- Beta-Test: Rückmeldung und Abschlussumfrage (statt Google Forms) */
+// Bild als Formular-Datei mit Base64-Inhalt – die Firewall des Hosters sperrt image/jpeg als Anfrage-Typ
+async function postJpeg(url, blob) {
+  const b64 = await new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result.split(',')[1]); r.onerror = fail; r.readAsDataURL(blob); });
+  const body = new FormData();
+  body.append('bild', new Blob([b64]), 'bild.jpg');
+  const res = await fetch(url, { method: 'POST', credentials: 'same-origin', body });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || res.statusText);
+  return j;
+}
+const appVersion = () => ($('script[src^="/app.js"]')?.getAttribute('src') || '').split('v=')[1] || '';
+function openFeedback() {
+  let shot = null;
+  openSheet('Fehler oder Idee', `<form class="form frm" id="fb-form" novalidate>
+    ${Formulare.render('feedback', esc, 'fb')}
+    <div class="frm-field"><span class="frm-label">Bildschirmfoto (optional)</span>
+      <div class="frm-shot"><span id="fb-shot-preview"></span><button type="button" class="btn-plain" data-fb-shot>Bild auswählen</button></div></div>
+    <p class="form-error" role="alert"></p>
+    <button class="btn-primary pressable" type="submit">Senden</button>
+    <p class="footnote" style="text-align:left">Mitgeschickt werden deine Support-ID, deine Tester-ID, das Gerät, der Browser und die App-Version. So lässt sich der Fehler leichter finden.</p></form>`);
+  const f = $('#fb-form');
+  Formulare.wire(f);
+  $('[data-fb-shot]', f).onclick = () => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*';
+    inp.onchange = async () => {
+      if (!inp.files[0]) return;
+      try { shot = await shrink(inp.files[0], 1800); $('#fb-shot-preview').innerHTML = `<img src="${URL.createObjectURL(shot)}" alt="Bildschirmfoto">`; } catch { toast('Dieses Bildformat wird nicht unterstützt'); }
+    };
+    inp.click(); // muss direkt im Tippen passieren (iOS)
+  };
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = $('button[type=submit]', f), err = $('.form-error', f);
+    btn.disabled = true; btn.textContent = 'Wird gesendet …'; err.textContent = '';
+    try {
+      const up = shot ? await postJpeg('/api/feedback/shot', shot) : null;
+      await api('/api/feedback', { method: 'POST', body: { ...Formulare.read('feedback', f), shot: up?.shot || null, view: tab, version: appVersion() } });
+      haptic(); closeSheet(); toast('Danke! Deine Rückmeldung ist angekommen.');
+    } catch (x) { err.textContent = x.message; btn.disabled = false; btn.textContent = 'Senden'; }
+  };
+}
+function openUmfrage() {
+  openSheet('Abschlussumfrage', `<form class="form frm" id="um-form" novalidate>
+    <p class="footnote" style="text-align:left;margin:0">Anonym: Deine Antworten werden ohne Namen und ohne Konto gespeichert. Am Konto steht nur, dass du schon mitgemacht hast.</p>
+    ${Formulare.render('umfrage', esc, 'um')}
+    <p class="form-error" role="alert"></p><button class="btn-primary pressable" type="submit">Absenden</button></form>`);
+  const f = $('#um-form');
+  Formulare.wire(f);
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = $('button[type=submit]', f), err = $('.form-error', f);
+    btn.disabled = true; err.textContent = '';
+    try { setData(await api('/api/umfrage', { method: 'POST', body: Formulare.read('umfrage', f) })); haptic(); closeSheet(); toast('Danke fürs Mitmachen!'); }
+    catch (x) { err.textContent = x.message; btn.disabled = false; }
+  };
 }
 
 // Ohne Schulsoftware: Stunden selbst eintragen, jede Woche gleich
@@ -2281,6 +2453,7 @@ function loginMode() {
       <a class="btn-plain" href="${esc(info.accountsUrl)}/registrieren">Neu hier? Mit Einladungscode registrieren</a></div>`);
   }
   $('#login [data-demo]').hidden = !(acc && info?.demo);
+  $('#login [data-beta-link]').hidden = !acc;
   const note = $('.login-note', f);
   note.hidden = !info?.demo || acc;
   if (info?.demo && !acc) { note.textContent = 'Das ist die Demo mit Beispieldaten. Das Passwort ist „demo“.'; f.password.value ||= 'demo'; }
@@ -2409,10 +2582,12 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-umfrage]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (el.id === 'me' || 'settings' in ds) return openSettings();
+  if ('feedback' in ds) return openFeedback();
+  if ('umfrage' in ds) return openUmfrage();
   if (el.id === 'add') return ADD[tab]();
   if (el.id === 'search') return openSearch();
   if (ds.week !== undefined) return shiftWeek(Number(ds.week));

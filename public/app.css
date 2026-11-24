@@ -877,6 +877,8 @@ button.banner { display: flex; text-align: left; }
 .admin-card > .sub { color: var(--label2); font-size: 14px; line-height: 1.5; }
 .flyer-previews { display: flex; gap: 12px; }
 .flyer-previews img { width: calc(50% - 6px); max-width: 200px; border-radius: 8px; box-shadow: 0 0 0 1px var(--card-edge), var(--shadow-float); }
+.admin-card h3 { margin: 10px 0 4px; font-size: 15px; letter-spacing: -.01em; }
+.admin-card .list.card + .btn-plain, .admin-card .form-group + .btn-plain { justify-self: start; }
 .stats-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .stats-charts figure { margin: 0; min-width: 0; }
 .stats-charts figcaption, .stats-lists h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--label2); }

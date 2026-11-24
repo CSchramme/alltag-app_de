@@ -495,6 +495,35 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.deepEqual([inv.created.length, inv.invites[0].note, inv.invites[0].days], [1, 'Lea', 30]);
     assert.equal((await call(`/api/admin/invites/${inv.created[0]}`, { method: 'DELETE' }, c1)).status, 200);
     assert.equal(fakeAcc.invites.length, 0);
+    // Beta-Test statt Google Forms: Anmeldung ohne Konto, Einladung per Mail, Rückmeldung mit Tester-Infos, anonyme Abschlussumfrage
+    const betaBody = { vorname: 'Mia', nachname: 'Muster', email: 'Mia@Example.org', alter: '14', land: 'Deutschland', schulsoftware: 'EduPage', geraete: ['Handy'],
+      systeme: ['iOS'], browser: ['Safari'], erfahrung: '4', hauptgeraet: 'Handy', proWoche: 'täglich', fehlerMelden: 'Ja', feedbackGeben: 'Ja', datenschutz: true, freiwillig: true, praesentation: true, eltern: true };
+    const tess = mk('tess');
+    await hook();
+    assert.ok((await (await call('/beta')).text()).includes('data-skin="modern"'));
+    assert.equal((await post('/api/beta', { ...betaBody, eltern: false })).status, 400); // ohne alle Zustimmungen nicht
+    assert.equal((await post('/api/beta', { ...betaBody, land: 'Mars' })).status, 400); // nur erlaubte Antworten
+    const b1 = await (await post('/api/beta', betaBody)).json();
+    assert.deepEqual([b1.id, (await (await post('/api/beta', { ...betaBody, email: 'mia@example.org' })).json()).again], ['BETA-0001', true]);
+    assert.equal((await (await post('/api/beta', { ...betaBody, email: 'bot@example.org', website: 'x' })).json()).id, 'BETA-0000'); // Falle für Bots
+    assert.equal((await call('/api/admin/beta', {}, (await login(tess)).cookie)).status, 403);
+    const inv1 = await (await post(`/api/admin/beta/${b1.id}/invite`, {}, c1)).json();
+    assert.deepEqual([inv1.list[0].status, !!inv1.list[0].code, fakeAcc.invites.at(-1).note.startsWith('BETA-0001 Mia')], ['eingeladen', true, true]);
+    const fb = await post('/api/feedback', { art: 'Fehler', titel: 'Kalender leer', beschreibung: 'Montag fehlt', wann: 'heute', schritte: 'öffnen', version: 'abc', view: 'kalender' }, c1);
+    assert.equal(fb.status, 200);
+    assert.equal((await post('/api/feedback', { art: 'Lob', titel: 'x', beschreibung: 'y' }, c1)).status, 400);
+    const fbl = (await (await call('/api/admin/feedback', {}, c1)).json()).list;
+    assert.deepEqual([fbl[0].titel, fbl[0].account.name, fbl[0].status, fbl[0].view], ['Kalender leer', 'chef', 'neu', 'kalender']);
+    assert.equal((await (await post(`/api/admin/feedback/${fbl[0].id}`, { status: 'erledigt' }, c1)).json()).list[0].status, 'erledigt');
+    const ct = (await login(tess)).cookie, umBody = { dauer: '1–2 Wochen', haeufigkeit: 'täglich', geraete: ['iPhone'], frueher: '1 Mal', funktionen: ['Stundenplan'], einrichtung: 5, zuverlaessig: 4, empfehlung: 9 };
+    assert.equal((await post('/api/umfrage', umBody, ct)).status, 400); // noch nicht geöffnet
+    await post('/api/admin/umfrage', { open: true }, c1);
+    assert.equal((await (await call('/api/data', {}, ct)).json()).beta.umfrage, true);
+    assert.equal((await post('/api/umfrage', { ...umBody, empfehlung: 11 }, ct)).status, 400);
+    assert.equal((await (await post('/api/umfrage', umBody, ct)).json()).beta.umfrage, false);
+    assert.equal((await post('/api/umfrage', umBody, ct)).status, 400); // nur einmal
+    const um = await (await call('/api/admin/umfrage', {}, c1)).json();
+    assert.ok(um.open && um.answers.length === 1 && !JSON.stringify(um.answers).includes(tess.id) && !um.answers[0].at); // anonym: kein Konto, keine Uhrzeit
     // Passwort zurücksetzen durch den Admin: neues Passwort nur in dieser Antwort
     const lea = mk('lea');
     await hook();

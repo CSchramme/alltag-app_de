@@ -1,0 +1,34 @@
+/* Formulare des Beta-Tests (App und Seite /beta) – nutzt die Farben der jeweiligen Seite */
+.frm { display: grid; gap: 16px; text-align: left; }
+.frm-sec { margin: 10px 0 -4px; font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--blue, #2e6bf0); }
+.frm-field { display: grid; gap: 6px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.frm-field[hidden], .frm-check[hidden] { display: none; }
+.frm-field > label, .frm-field > legend, .frm-label { padding: 0; font-size: 15px; font-weight: 600; line-height: 1.35; color: var(--label, #0f172a); }
+.frm-field i { color: var(--blue, #2e6bf0); font-style: normal; }
+.frm-field small { margin-top: -2px; font-size: 13px; color: var(--label2, #5b6478); }
+.frm-field input:not([type=radio]):not([type=checkbox]), .frm-field select, .frm-field textarea {
+  width: 100%; padding: 12px 14px; font: inherit; font-size: 16px; color: var(--label, #0f172a); background: var(--input-bg, var(--card, #fff));
+  border: 1px solid color-mix(in srgb, var(--label, #0f172a) 18%, transparent); border-radius: 12px; outline: none; -webkit-appearance: none; appearance: none; }
+.frm-field textarea { min-height: 96px; resize: vertical; line-height: 1.45; }
+.frm-field select { background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 18px) 52%, calc(100% - 13px) 52%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 34px; }
+.frm-field :is(input, select, textarea):focus-visible { border-color: var(--blue, #2e6bf0); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue, #2e6bf0) 25%, transparent); }
+.frm-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.frm-chips label { position: relative; }
+.frm-chips input { position: absolute; opacity: 0; pointer-events: none; }
+.frm-chips span { display: inline-block; min-width: 44px; padding: 9px 14px; text-align: center; font-size: 15px; font-weight: 600; line-height: 1.2;
+  color: var(--label, #0f172a); border: 1px solid color-mix(in srgb, var(--label, #0f172a) 22%, transparent); border-radius: 999px; cursor: pointer; transition: background-color .15s, border-color .15s, color .15s; }
+.frm-chips input:checked + span { color: #fff; background: var(--blue, #2e6bf0); border-color: var(--blue, #2e6bf0); }
+.frm-chips input:focus-visible + span { box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue, #2e6bf0) 35%, transparent); }
+.frm-scale .frm-chips { gap: 6px; }
+.frm-scale .frm-chips span { min-width: 40px; padding: 9px 0; }
+.frm-ends { display: flex; justify-content: space-between; font-size: 12px; color: var(--label2, #5b6478); }
+.frm-check { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; line-height: 1.45; color: var(--label, #0f172a); cursor: pointer; }
+.frm-check input { flex: none; width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--blue, #2e6bf0); }
+.frm-send { width: 100%; padding: 15px; font: inherit; font-size: 17px; font-weight: 650; color: #fff; background: var(--blue, #2e6bf0); border: 0; border-radius: 14px; cursor: pointer; }
+.frm-send:disabled { opacity: .6; cursor: default; }
+.frm-send:focus-visible { outline: 3px solid color-mix(in srgb, var(--blue, #2e6bf0) 45%, transparent); outline-offset: 2px; }
+.frm-hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; } /* Falle für Bots */
+.frm-error { margin: 0; color: var(--red, #d9304f); font-weight: 600; }
+.frm-shot { display: flex; align-items: center; gap: 12px; }
+.frm-shot img { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; box-shadow: 0 0 0 1px var(--edge, var(--sep, #dde3f0)); }

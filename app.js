@@ -14,6 +14,7 @@ const { Untis, UntisError, searchSchools, SERVER_RE } = require('./untis');
 const { Schulmanager } = require('./schulmanager');
 const demo = require('./demo');
 const { occursOn, birthdayOn, ageOn } = require('./public/recur');
+const Formulare = require('./public/formulare');
 
 // Einstellungen auch aus der Datei .env im App-Ordner (NAME=Wert je Zeile, # = Kommentar). Echte Umgebungsvariablen
 // (z. B. aus Plesk) haben Vorrang. Die Datei enthält Geheimnisse und kommt nie ins Git (.gitignore); Vorlage: .env.beispiel
@@ -185,6 +186,13 @@ async function adminData(extra = {}) { // Konten aus dem Abbild, Einladungscodes
     legal: { name: process.env.LEGAL_NAME || '', address: process.env.LEGAL_ADDRESS || '', email: process.env.LEGAL_EMAIL || '' }, // fürs Impressum auf dem Flyer
     invites: extra.invites || (await accountsApi('/api/invites')).invites, ...extra };
 }
+// Beta-Test: Anmeldungen, Rückmeldungen und Einstellungen der Instanz (Abschlussumfrage offen?)
+const betaList = () => atRoot(() => load('beta.json', []));
+const feedbackList = () => atRoot(() => load('feedback.json', []));
+const siteSettings = () => atRoot(() => load('site.json', {}));
+const tellAdmins = (p) => { // kurze Mitteilung an alle Admins (neue Anmeldung, neue Rückmeldung)
+  if (ACCOUNTS) for (const a of accounts().filter((x) => x.admin && !x.disabled)) asUser(a, () => push(p)).catch(() => {});
+};
 const pubAccount = (a, seen = seenAt()) => ({ id: a.id, support: supportId(a), name: a.name, email: a.email || '', emailOk: !!a.emailOk, school: a.school, admin: !!a.admin,
   disabled: !!a.disabled, demo: !!a.demo, jury: !!a.jury, created: a.created, lastSeen: seen[a.id] || null });
 /* ------------------------------------------------------------------ Eigene Statistik (nur mit Konten): ohne Cookies, ohne fremde Dienste */
@@ -710,6 +718,7 @@ function payload() {
   return {
     app: APP, demo: isDemo(), status: load('status.json', {}),
     features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
+    beta: ACCOUNTS && !limited() ? { feedback: true, umfrage: !!siteSettings().umfrage && !st.umfrage } : null,
     account: me() && pubAccount(me()), school: school(),
     ...settings(), holidays: load('holidays.json', null)?.list || [],
     weather: isDemo() ? demo.weather() : load('weather.json', null)?.hours || [],
@@ -847,6 +856,106 @@ const routes = {
     fs.rmSync(userDir(a.id), { recursive: true, force: true });
     await refreshAccounts();
     send(res, 200, await adminData());
+  },
+
+  // Beta-Test (statt Google Forms): Anmeldung auf /beta, Rückmeldungen und Abschlussumfrage in der App
+  'POST /api/beta': async (req, res) => { // öffentlich, ohne Anmeldung
+    if (!ACCOUNTS) return send(res, 404, { error: 'unbekannt' });
+    const key = `beta:${clientIp(req)}`;
+    if (throttled(key)) return send(res, 429, TOO_MANY);
+    const b = await readJson(req);
+    if (b.website) return send(res, 200, { ok: true, id: 'BETA-0000' }); // Feld nur für Bots sichtbar
+    const { values, error } = Formulare.check('beta', b);
+    if (error) throw bad(error);
+    tries.set(key, [...(tries.get(key) || []), Date.now()]); // höchstens 10 Anmeldungen je Gerät in 15 Minuten
+    const list = betaList();
+    if (list.length >= 3000) throw bad('Die Anmeldung ist gerade voll. Bitte versuch es später noch einmal.');
+    const email = values.email.toLowerCase(), old = list.find((x) => x.email.toLowerCase() === email);
+    if (old) return send(res, 200, { ok: true, id: old.id, again: true });
+    const n = Math.max(0, ...list.map((x) => Number(x.id.slice(5)) || 0)) + 1;
+    const item = { id: `BETA-${String(n).padStart(4, '0')}`, at: new Date().toISOString(), ...values, email, status: 'neu', code: null, invitedAt: null };
+    atRoot(() => save('beta.json', [...list, item]));
+    tellAdmins({ title: 'Neue Beta-Anmeldung', body: `${item.vorname} ${item.nachname} (${item.id})`, url: '/admin', tag: 'beta' });
+    send(res, 200, { ok: true, id: item.id });
+  },
+  'GET /api/admin/beta': (req, res) => { admin(); send(res, 200, { list: betaList().slice().reverse() }); },
+  'POST /api/admin/beta/:id/invite': async (req, res, id) => { // Einladungscode erstellen und per Mail schicken (Konto-Dienst)
+    admin();
+    const list = betaList(), x = list.find((y) => y.id === id);
+    if (!x) return send(res, 404, { error: 'nicht gefunden' });
+    const r = await accountsApi('/api/invites', 'POST', { note: `${x.id} ${x.vorname} ${x.nachname}`.slice(0, 80), days: 30, email: x.email, name: x.vorname, betaId: x.id });
+    Object.assign(x, { status: 'eingeladen', code: r.created?.[0] || null, invitedAt: new Date().toISOString(), mailed: !!r.mailed });
+    atRoot(() => save('beta.json', list));
+    send(res, 200, { list: list.slice().reverse(), invites: r.invites });
+  },
+  'DELETE /api/admin/beta/:id': (req, res, id) => {
+    admin();
+    atRoot(() => save('beta.json', betaList().filter((x) => x.id !== id)));
+    send(res, 200, { list: betaList().slice().reverse() });
+  },
+  // Rückmeldung: Bildschirmfoto zuerst (wie Tafelbilder als Formular-Datei mit Base64), dann der Text
+  'POST /api/feedback/shot': async (req, res) => {
+    if (limited()) throw bad('In der Demo geht das nicht.');
+    const buf = await readImage(req, 8e6);
+    if (!buf.length) throw bad('Bitte ein Bild (JPEG) senden');
+    const shot = crypto.randomUUID();
+    atRoot(() => { fs.mkdirSync(file('feedback'), { recursive: true, mode: 0o700 }); fs.writeFileSync(path.join(file('feedback'), `${me()?.id || 'app'}--${shot}.jpg`), buf, { mode: 0o600 }); });
+    send(res, 200, { shot });
+  },
+  'POST /api/feedback': async (req, res) => {
+    if (limited()) throw bad('In der Demo geht das nicht.');
+    const b = await readJson(req), a = me(), { values, error } = Formulare.check('feedback', b);
+    if (error) throw bad(error);
+    const mine = feedbackList().filter((x) => x.account?.id === (a?.id || null) && Date.now() - Date.parse(x.at) < 864e5);
+    if (mine.length >= 20) throw bad('Du hast heute schon 20 Rückmeldungen geschickt. Danke! Morgen geht es weiter.');
+    const shot = /^[0-9a-f-]{36}$/.test(String(b.shot || '')) && atRoot(() => fs.existsSync(path.join(file('feedback'), `${a?.id || 'app'}--${b.shot}.jpg`))) ? `${a?.id || 'app'}--${b.shot}.jpg` : null;
+    const invite = ACCOUNTS && a ? (await accountsApi('/api/invites').catch(() => ({ invites: [] }))).invites.find((i) => i.usedBy === a.id) : null;
+    const item = {
+      id: crypto.randomUUID(), at: new Date().toISOString(), ...values, status: 'neu', note: '', shot,
+      account: a ? { id: a.id, name: a.name, support: supportId(a) } : null, betaId: (/BETA-\d{4}/.exec(invite?.note || '') || [null])[0],
+      school: school(), version: F.text(40)(b.version), view: F.text(40)(b.view), device: F.text(300)(req.headers['user-agent']),
+    };
+    atRoot(() => save('feedback.json', [...feedbackList(), item].slice(-2000)));
+    tellAdmins({ title: `${item.art}: ${item.titel}`, body: `${a?.name || 'App'}${item.betaId ? ` · ${item.betaId}` : ''}`, url: '/admin', tag: `fb-${item.id}` });
+    send(res, 200, { ok: true });
+  },
+  'GET /api/admin/feedback': (req, res) => { admin(); send(res, 200, { list: feedbackList().slice().reverse() }); },
+  'POST /api/admin/feedback/:id': async (req, res, id) => {
+    admin();
+    const b = await readJson(req), list = feedbackList(), x = list.find((y) => y.id === id);
+    if (!x) return send(res, 404, { error: 'nicht gefunden' });
+    if (['neu', 'in Arbeit', 'erledigt'].includes(b.status)) x.status = b.status;
+    if (b.note !== undefined) x.note = F.text(1000)(b.note);
+    atRoot(() => save('feedback.json', list));
+    send(res, 200, { list: list.slice().reverse() });
+  },
+  'GET /api/admin/feedback/:id/shot': (req, res, id) => {
+    admin();
+    const x = feedbackList().find((y) => y.id === id);
+    if (!x?.shot) return send(res, 404, { error: 'nicht gefunden' });
+    atRoot(() => fs.readFile(path.join(file('feedback'), x.shot), (err, buf) => {
+      if (err) return send(res, 404, { error: 'nicht gefunden' });
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+      res.end(buf);
+    }));
+  },
+  // Abschlussumfrage: wirklich anonym. Gespeichert wird die Antwort ohne Konto (nur der Tag), am Konto nur „beantwortet“.
+  'POST /api/umfrage': async (req, res) => {
+    if (limited() || !siteSettings().umfrage) throw bad('Die Umfrage ist gerade nicht geöffnet.');
+    const st = state();
+    if (st.umfrage) throw bad('Du hast schon mitgemacht. Danke!');
+    const { values, error } = Formulare.check('umfrage', await readJson(req));
+    if (error) throw bad(error);
+    atRoot(() => save('umfrage.json', [...load('umfrage.json', []), { id: crypto.randomUUID(), day: isoDay(new Date()), ...values }].slice(-5000)));
+    st.umfrage = true; save('state.json', st);
+    send(res, 200, payload());
+  },
+  'GET /api/admin/umfrage': (req, res) => { admin(); send(res, 200, { open: !!siteSettings().umfrage, answers: atRoot(() => load('umfrage.json', [])) }); },
+  'POST /api/admin/umfrage': async (req, res) => {
+    admin();
+    const b = await readJson(req);
+    atRoot(() => save('site.json', { ...siteSettings(), umfrage: b.open === true }));
+    send(res, 200, { open: !!siteSettings().umfrage, answers: atRoot(() => load('umfrage.json', [])) });
   },
   'GET /api/data': (req, res) => {
     const origin = `${https(req) ? 'https' : 'http'}://${req.headers.host}`;
@@ -1231,7 +1340,7 @@ const legal = (html) => html.replace(/\{\{(LEGAL_[A-Z_]+)\}\}/g, (m, k) => {
 // Die HTML-Seiten liegen in pages/, nicht in public/: Plesk liefert alles in public/ direkt über nginx aus, an der App vorbei.
 // Dann fehlten Look, Impressum-Angaben und Sicherheits-Header. Nur die App liefert sie deshalb aus.
 const PAGES = path.join(__dirname, 'pages');
-const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/admin': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html' };
+const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/admin': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html', '/beta': 'beta.html' };
 function serveStatic(req, res, pathname) {
   let rel;
   try { rel = decodeURIComponent(pathname); } catch { return send(res, 400, 'Bad Request'); }
@@ -1246,7 +1355,7 @@ function serveStatic(req, res, pathname) {
       if (!PRIVATE) html = html.replace('<html lang="de">', '<html lang="de" data-skin="modern">'); // öffentliche Version: eigener Look
       // Versionsnummer an Skripte/Stile: nginx liefert public/ ohne Cache-Control, Browser hielten sonst stundenlang alte Dateien,
       // die nicht zum neuen HTML passen (nach einem Update blieb die App beim Laden hängen)
-      html = html.replace(/(["'])\/(app\.css|app\.js|recur\.js|theme\.js)\1/g, (m, q, f) => {
+      html = html.replace(/(["'])\/(app\.css|app\.js|recur\.js|theme\.js|formulare\.js|formulare\.css|beta\.js|legal\.css)\1/g, (m, q, f) => {
         let v = '0';
         try { v = Math.floor(fs.statSync(path.join(PUBLIC, f)).mtimeMs).toString(36); } catch { /* Datei fehlt: ohne Version */ }
         return `${q}/${f}?v=${v}${q}`;
@@ -1311,7 +1420,7 @@ const server = http.createServer(async (req, res) => {
     const bearer = (req.headers.authorization || '').replace(/^Bearer /, '') || url.searchParams.get('key') || '';
     const reader = req.method === 'GET' && ['/api/data', '/api/summary', '/api/wake', '/api/focus'].includes(url.pathname) && readerFor(bearer);
     const user = sessionUser(req) || reader;
-    if (!['/api/login', '/api/demo'].includes(url.pathname) && !user) return send(res, 401, { error: 'login' });
+    if (!['/api/login', '/api/demo', '/api/beta'].includes(url.pathname) && !user) return send(res, 401, { error: 'login' });
     const parts = url.pathname.split('/').filter(Boolean); // ['api', 'items', 'notes', '<id>']
     for (const [key, fn] of Object.entries(routes)) {
       const [method, pattern] = key.split(' '), p = pattern.split('/').filter(Boolean);
