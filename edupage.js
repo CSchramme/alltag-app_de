@@ -384,7 +384,9 @@ async function snapshot(ep, { school, now = new Date(), prev = null } = {}) {
     at: new Date().toISOString(), types: items.reduce((o, n) => ({ ...o, [n.type]: (o[n.type] || 0) + 1 }), {}),
     surveys: items.filter((n) => n.type === 'anketa').slice(-3).map((n) => ({ text: shape(n.text), data: shape(n.data) })),
     messageKeys: [...new Set(items.filter((n) => MESSAGE_KINDS[n.type]).flatMap((n) => Object.keys(n.data)))],
-    pollLike: items.filter((n) => /ank|poll|vote|hlas|survey|option|moznost|otazk/i.test(Object.keys(n.data).join(' '))).slice(-3).map((n) => ({ type: n.type, data: shape(n.data) })),
+    pollLike: items.filter((n) => /ank|poll|vot|hlas|survey|option|moznost|otazk/i.test(Object.keys(n.data).join(' '))).slice(-3).map((n) => ({ type: n.type, data: shape(n.data) })),
+    // Umfragen stecken in Nachrichten (data.votingParams), Stimmen kommen als Bestätigung (vote2, vote3 …)
+    polls: items.filter((n) => n.data.votingParams).slice(-3).map((n) => ({ id: n.id, text: shape(n.text), votingParams: shape(n.data.votingParams), confirmations: shape(n.data.confirmations), myConfirmations: shape(n.data.myConfirmations) })),
   };
   return {
     v: SNAPSHOT_VERSION,
