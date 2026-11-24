@@ -2030,6 +2030,16 @@ async function openAdmin(data) {
         <div id="flyer-preview" class="flyer-previews"></div>
       </section>
       <section class="card admin-card">
+        <h2>Impressum</h2>
+        <p class="sub">Steht im Impressum, in der Datenschutzerklärung und auf neuen Flyern. Gilt sofort nach dem Sichern.</p>
+        <form class="form" id="legal-form">${group(fText('name', 'Name', data.legal?.name, 'maxlength="120" required autocomplete="off"'),
+          fArea('address', 'Anschrift, z. B. c/o Impressum-Dienst, Straße, PLZ Ort', data.legal?.address, 3),
+          fText('email', 'E-Mail', data.legal?.email, 'type="email" inputmode="email" autocapitalize="off" spellcheck="false" maxlength="120" required'),
+          fText('phone', 'Telefon (freiwillig)', data.legal?.phone, 'type="tel" maxlength="40"'))}
+          <button class="btn-primary pressable" type="submit">Sichern</button></form>
+        <p class="footnote" style="text-align:left"><a href="/impressum.html" target="_blank" rel="noopener">Impressum ansehen</a> · <a href="/datenschutz.html" target="_blank" rel="noopener">Datenschutz ansehen</a></p>
+      </section>
+      <section class="card admin-card">
         <h2>Einladung für eine Person</h2>
         <p class="sub">6 Ziffern, nur einmal nutzbar, 7 Tage gültig.</p>
         <form class="form" id="invite-form">${group(fText('note', 'Für wen? (siehst nur du)', '', 'maxlength="80"'))}
@@ -2065,6 +2075,10 @@ async function openAdmin(data) {
     e.preventDefault();
     try { const d = await api('/api/admin/invites', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); haptic(); openAdmin(d); } catch (x) { hint.textContent = x.message; }
   };
+  $('#legal-form', el).onsubmit = async (e) => {
+    e.preventDefault();
+    try { openAdmin(await api('/api/admin/legal', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) })); haptic(); toast('Impressum gesichert'); } catch (x) { toast(x.message); }
+  };
   $$('[data-copy-code]', el).forEach((b) => { b.onclick = () => copy(b.dataset.copyCode, hint); });
   $$('[data-del-code]', el).forEach((b) => {
     b.onclick = async () => {
@@ -2079,7 +2093,7 @@ async function openAdmin(data) {
     btn.textContent = 'Erstelle Flyer …';
     try {
       const { flyerA6 } = await import('/flyer.mjs');
-      lastFlyer = await flyerA6({ code: inv.code, until: new Date(inv.expires).toLocaleDateString('de-DE'), email: opts().email.trim(), site: opts().site.trim(), name: data.legal?.name, address: data.legal?.address });
+      lastFlyer = await flyerA6({ code: inv.code, until: new Date(inv.expires).toLocaleDateString('de-DE'), email: opts().email.trim(), site: opts().site.trim(), name: data.legal?.name, address: data.legal?.address?.replace(/\s*\n\s*/g, ', ') });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(lastFlyer.zip);
       a.download = `alltag-flyer-${inv.code}.zip`;

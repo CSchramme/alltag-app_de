@@ -188,7 +188,7 @@ const demoAccount = () => accounts().find((a) => a.demo && !a.disabled);
 async function adminData(extra = {}) { // Konten aus dem Abbild, Einladungscodes direkt vom Konto-Dienst
   const seen = seenAt();
   return { accounts: accounts().map((a) => pubAccount(a, seen)), site: process.env.PUBLIC_URL || '',
-    legal: { name: process.env.LEGAL_NAME || '', address: process.env.LEGAL_ADDRESS || '', email: process.env.LEGAL_EMAIL || '' }, // fürs Impressum auf dem Flyer
+    legal: legalInfo(), // Impressum-Angaben: Formular in der Verwaltung und Flyer
     invites: extra.invites || (await accountsApi('/api/invites')).invites, ...extra };
 }
 // Beta-Test: Anmeldungen, Rückmeldungen und Einstellungen der Instanz (Abschlussumfrage offen?)
@@ -994,6 +994,14 @@ const routes = {
     st.umfrage = true; save('state.json', st);
     send(res, 200, payload());
   },
+  'POST /api/admin/legal': async (req, res) => { // Impressum-Angaben (z. B. Anschrift eines Impressum-Dienstes), gelten sofort
+    admin();
+    const b = await readJson(req);
+    const l = { name: F.text(120, true)(b.name), address: F.text(300, true)(b.address).replace(/\r/g, '').replace(/\n{2,}/g, '\n'), email: F.text(120, true)(b.email), phone: F.text(40)(b.phone) };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(l.email)) throw bad('Bitte eine gültige E-Mail-Adresse eintragen.');
+    atRoot(() => save('site.json', { ...siteSettings(), legal: l }));
+    send(res, 200, await adminData());
+  },
   'GET /api/admin/umfrage': (req, res) => { admin(); send(res, 200, { open: !!siteSettings().umfrage, answers: atRoot(() => load('umfrage.json', [])) }); },
   'POST /api/admin/umfrage': async (req, res) => {
     admin();
@@ -1389,12 +1397,17 @@ const routes = {
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.json': 'application/json', '.ico': 'image/x-icon' };
 const CSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
-// Impressum und Datenschutz: persönliche Angaben kommen aus Umgebungsvariablen (Plesk), nicht aus dem Code auf GitHub
+// Impressum und Datenschutz: persönliche Angaben nie im Code auf GitHub. Anbieter-Angaben aus der Verwaltung (site.json),
+// solange dort nichts gesichert ist aus Umgebungsvariablen (Plesk); Hoster und Protokoll-Tage nur aus der Umgebung
+const LEGAL_FIELDS = { LEGAL_NAME: 'name', LEGAL_ADDRESS: 'address', LEGAL_EMAIL: 'email', LEGAL_PHONE: 'phone' };
 const LEGAL_DEFAULTS = { LEGAL_HOSTER: 'PEIN GbR' };
+const legalValue = (k) => { const s = siteSettings().legal; return (s && LEGAL_FIELDS[k] ? s[LEGAL_FIELDS[k]] : process.env[k] || LEGAL_DEFAULTS[k]) || ''; };
+const legalInfo = () => Object.fromEntries(Object.entries(LEGAL_FIELDS).map(([k, f]) => [f, legalValue(k)]));
 const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const legal = (html) => html.replace(/\{\{(LEGAL_[A-Z_]+)\}\}/g, (m, k) => {
-  const v = process.env[k] || LEGAL_DEFAULTS[k];
-  return v ? escHtml(v) : `<mark>noch eintragen: ${k}</mark>`;
+  const v = legalValue(k);
+  if (k === 'LEGAL_PHONE') return v ? `<br>Telefon: ${escHtml(v)}` : ''; // freiwillig
+  return v ? escHtml(v).replace(/\n/g, '<br>') : `<mark>noch eintragen: ${k}</mark>`;
 });
 
 // Die HTML-Seiten liegen in pages/, nicht in public/: Plesk liefert alles in public/ direkt über nginx aus, an der App vorbei.

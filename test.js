@@ -453,6 +453,15 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await login(ben, '//boese.example')).location, '/');
     const lb = await login(ben, '/admin'), c2 = lb.cookie;
     assert.equal(lb.location, '/admin');
+    // Impressum aus der Verwaltung: nur Admin, danach gelten nur diese Angaben (nicht mehr die aus Plesk)
+    const lg = { name: 'Max Muster', address: 'c/o Impressum-Dienst\r\nHauptstr. 1\n\n12345 Ort', email: 'kontakt@example.org', phone: '' };
+    assert.equal((await post('/api/admin/legal', lg, c2)).status, 403);
+    assert.equal((await post('/api/admin/legal', { ...lg, email: 'kaputt' }, c1)).status, 400);
+    assert.equal((await (await post('/api/admin/legal', lg, c1)).json()).legal.address, 'c/o Impressum-Dienst\nHauptstr. 1\n12345 Ort');
+    const imp2 = await (await call('/impressum.html')).text();
+    assert.ok(imp2.includes('Max Muster<br>c/o Impressum-Dienst<br>Hauptstr. 1<br>12345 Ort') && imp2.includes('kontakt@example.org') && !imp2.includes('Telefon') && !imp2.includes('&#60;Muster'));
+    await post('/api/admin/legal', { ...lg, phone: '0123 456' }, c1);
+    assert.ok((await (await call('/impressum.html')).text()).includes('<br>Telefon: 0123 456'));
     // jedes Konto sieht nur seine eigenen Daten
     await post('/api/items/notes', { title: 'Nur für Ben' }, c2);
     assert.ok(!(await (await call('/api/data', {}, c1)).json()).db.notes.some((n) => n.title === 'Nur für Ben'));
