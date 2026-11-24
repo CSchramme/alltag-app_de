@@ -464,6 +464,12 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const wk = await (await call(`/api/week?start=${isoDay(far)}`, {}, c2)).json();
     assert.deepEqual([wk.days.length, wk.days[0].lessons[0].subject, wk.days[0].lessons[0].rooms[0], wk.days[1].lessons.length], [5, 'Mathe', '104', 0]);
     assert.equal((await post('/api/edupage', {}, c2)).status, 400);
+    // Pro: Tafelbilder nur, wenn der Admin freischaltet (Admins haben alles)
+    assert.ok(d1.features.photos && !(await (await call('/api/data', {}, c2)).json()).features.photos);
+    assert.match((await (await post('/api/photos', {}, c2)).json()).error, /Pro/);
+    assert.ok((await (await post(`/api/admin/accounts/${ben.id}`, { pro: true }, c1)).json()).accounts.find((a) => a.id === ben.id).pro);
+    assert.ok((await (await call('/api/data', {}, c2)).json()).features.photos);
+    await post(`/api/admin/accounts/${ben.id}`, { pro: false }, c1);
     // Schulsoftware wechseln: gespeichert beim Konto-Dienst. WebUntis nur echte Server, Suche ab 3 Zeichen, EduPage-Funktionen gibt es dort nicht
     const su = await (await post('/api/account', { school: 'untis' }, c2)).json();
     assert.deepEqual([su.school, su.link.connected, fakeAcc.list.find((a) => a.id === ben.id).school], ['untis', false, 'untis']);

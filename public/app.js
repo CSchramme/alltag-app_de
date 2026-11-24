@@ -1044,10 +1044,11 @@ const NOTES_ALL = [['notizen', 'Notizen'], ['tafel', 'Tafelbilder'], ['einkauf',
 let NOTES = NOTES_ALL; // ohne Home Assistant (öffentliche Version) ohne Einkauf
 let notesSeg = 'notizen', notesSegCtl = null;
 function renderNotizen() {
-  NOTES = NOTES_ALL.filter(([k]) => k !== 'einkauf' || D.features?.ha !== false);
+  NOTES = NOTES_ALL.filter(([k]) => (k !== 'einkauf' || D.features?.ha !== false) && (k !== 'tafel' || D.features?.photos !== false || D.db.photos.length)); // Tafelbilder nur mit Pro, alte bleiben sichtbar
   if (!NOTES.some(([k]) => k === notesSeg)) notesSeg = 'notizen';
   $('#view-notizen').innerHTML = `${largeTitle('Notizen', '')}${segHTML(NOTES, notesSeg, 'Bereich')}<div id="notes-body"></div>`;
   notesSegCtl = Seg($('#view-notizen .seg'), (i) => { notesSeg = NOTES[i][0]; notesSegCtl.glide(i); renderNotesBody(); });
+  if (NOTES.length < 2) $('#view-notizen .seg').style.display = 'none'; // nur Notizen: kein Umschalter
   renderNotesBody();
   if (tab === 'notizen') requestAnimationFrame(() => notesSegCtl.track(NOTES.findIndex(([k]) => k === notesSeg)));
 }
@@ -1344,9 +1345,9 @@ function openLesson(date, i) {
     ${l.homework?.length ? `<p class="label-sm">Hausaufgabe fällig</p>${l.homework.map((h) => `<div class="card bubble">${linkify(h)}</div>`).join('')}` : ''}
     ${l.online ? `<a class="btn-primary pressable" style="line-height:52px" href="${esc(safeUrl(l.online))}" target="_blank" rel="noopener">Online-Stunde öffnen</a>` : ''}
     ${hw.length ? `<p class="label-sm">Fällig in dieser Stunde</p><div class="list card">${hw.map(taskRow).join('')}</div>` : ''}
-    <p class="label-sm">Tafelbilder</p>
+    ${pics.length || D.features?.photos !== false ? '<p class="label-sm">Tafelbilder</p>' : ''}
     ${pics.length ? `<div class="photo-strip">${pics.map((p) => `<button class="photo-thumb" data-photo="${esc(p.id)}"><img src="${photoUrl(p)}" alt="${esc(p.caption || 'Tafelbild')}" loading="lazy"></button>`).join('')}</div>` : ''}
-    <button class="btn-plain pressable" data-new-photo="${esc(l.subject)}" data-date="${date}">+ Tafelbild aufnehmen</button>`);
+    ${D.features?.photos === false ? '' : `<button class="btn-plain pressable" data-new-photo="${esc(l.subject)}" data-date="${date}">+ Tafelbild aufnehmen</button>`}`);
 }
 
 function openEduTask(id) {
@@ -2029,7 +2030,7 @@ async function openAdmin(data) {
       <section class="card admin-card wide">
         <h2>Konten (${data.accounts.length})</h2>
         ${group(`<label class="field"><input id="acc-q" type="search" placeholder="Name oder Support-ID" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`)}
-        <div class="list card" id="acc-list">${data.accounts.map((a) => `<button class="row" data-acc="${esc(a.id)}" data-q="${esc(`${a.name} ${a.support} ${a.support.replace('-', '')}`.toLowerCase())}"><div class="main"><div class="title">${esc(a.name)}${a.admin ? ' · Admin' : ''}${a.jury ? ' · Jugend forscht' : a.demo ? ' · Demo' : ''}${a.disabled ? ' · gesperrt' : ''}</div>
+        <div class="list card" id="acc-list">${data.accounts.map((a) => `<button class="row" data-acc="${esc(a.id)}" data-q="${esc(`${a.name} ${a.support} ${a.support.replace('-', '')}`.toLowerCase())}"><div class="main"><div class="title">${esc(a.name)}${a.admin ? ' · Admin' : a.pro ? ' · Pro' : ''}${a.jury ? ' · Jugend forscht' : a.demo ? ' · Demo' : ''}${a.disabled ? ' · gesperrt' : ''}</div>
           <div class="sub"><span class="code">${esc(a.support)}</span> · ${esc(schoolName(a.school))} · ${a.lastSeen ? `aktiv ${esc(ago(a.lastSeen))}` : `angelegt ${esc(ago(a.created))}`}</div></div>${ICON.chev}</button>`).join('')}</div>
       </section>
       ${used.length ? `<section class="card admin-card wide"><h2>Zuletzt eingelöste Einladungen</h2>${group(...used.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shownCode(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} → ${esc(nameOf(i.usedBy))}</div></div></div>`))}</section>` : ''}
@@ -2097,6 +2098,7 @@ function openAcc(a, password) {
     ${self ? '<p class="footnote" style="text-align:left">Das ist dein eigenes Konto. E-Mail, Passwort und Löschen findest du auf der Konto-Seite (Profil → Konto verwalten).</p>'
       : group('<button class="row" data-do="reset"><span class="btn-plain">Passwort zurücksetzen</span></button>',
         a.demo ? '' : `<button class="row" data-do="admin"><span class="btn-plain">${a.admin ? 'Admin-Rechte entziehen' : 'Zum Admin machen'}</span></button>`,
+        a.demo || a.admin ? '' : `<button class="row" data-do="pro"><span class="btn-plain">${a.pro ? 'Pro wieder sperren' : 'Pro freischalten'}</span></button>`,
         a.demo ? `<button class="row" data-do="jury"><span class="btn-plain">${a.jury ? 'Jugend-forscht-Kennzeichnung entfernen' : 'Als „Jugend forscht Version · Full Access“ kennzeichnen'}</span></button>` : '',
         a.demo ? '<button class="row" data-do="resetDemo"><span class="btn-plain">Demo-Daten zurücksetzen</span></button>' : '',
         a.admin ? '' : `<button class="row" data-do="demo"><span class="btn-plain">${a.demo ? 'Demo-Konto beenden' : 'Als Demo-Konto einrichten'}</span></button>`,
@@ -2114,7 +2116,7 @@ function openAcc(a, password) {
       if (ask && !b.dataset.sure) { b.dataset.sure = '1'; $('span', b).textContent = ask; return; }
       try {
         if (act === 'delete') { const d = await api(url, { method: 'DELETE' }); closeSheet(); return openAdmin(d); }
-        const body = act === 'reset' ? { reset: true } : act === 'admin' ? { admin: !a.admin } : act === 'demo' ? { demo: !a.demo } : act === 'jury' ? { jury: !a.jury } : act === 'resetDemo' ? { resetDemo: true } : { disabled: !a.disabled };
+        const body = act === 'reset' ? { reset: true } : act === 'admin' ? { admin: !a.admin } : act === 'demo' ? { demo: !a.demo } : act === 'jury' ? { jury: !a.jury } : act === 'pro' ? { pro: !a.pro } : act === 'resetDemo' ? { resetDemo: true } : { disabled: !a.disabled };
         const d = await api(url, { method: 'POST', body });
         haptic();
         if (act === 'resetDemo') toast('Demo-Daten zurückgesetzt');

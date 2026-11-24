@@ -176,6 +176,7 @@ const asUser = (a, fn) => ctx.run({ dir: userDir(a.id), account: a }, fn);
 const me = () => ctx.getStore()?.account || null;
 const isDemo = () => DEMO || !!me()?.demo; // Beispieldaten statt Schulsoftware
 const limited = () => OPEN_DEMO || (!!me()?.demo && !me()?.jury); // öffentliche Demo: keine Fotos, keine Mitteilungen, setzt sich zurück. Jugend-forscht-Konto: alles frei, Zurücksetzen per Admin
+const isPro = () => !ACCOUNTS || !!me()?.pro || !!me()?.admin || !!me()?.demo; // Pro-Funktionen: private App, Admins und Demo-Konten haben alles, sonst schaltet der Admin frei
 const supportId = (a) => a.id.replace(/-/g, '').slice(0, 8).toUpperCase().replace(/^(.{4})/, '$1-'); // zum Nennen bei Fragen
 const school = () => me()?.school || 'edupage';
 function admin() { if (!me()?.admin) throw Object.assign(new Error('Nur für Admins'), { status: 403 }); }
@@ -194,7 +195,7 @@ const tellAdmins = (p) => { // kurze Mitteilung an alle Admins (neue Anmeldung, 
   if (ACCOUNTS) for (const a of accounts().filter((x) => x.admin && !x.disabled)) asUser(a, () => push(p)).catch(() => {});
 };
 const pubAccount = (a, seen = seenAt()) => ({ id: a.id, support: supportId(a), name: a.name, email: a.email || '', emailOk: !!a.emailOk, school: a.school, admin: !!a.admin,
-  disabled: !!a.disabled, demo: !!a.demo, jury: !!a.jury, created: a.created, lastSeen: seen[a.id] || null });
+  disabled: !!a.disabled, demo: !!a.demo, jury: !!a.jury, pro: !!a.pro, created: a.created, lastSeen: seen[a.id] || null });
 /* ------------------------------------------------------------------ Eigene Statistik (nur mit Konten): ohne Cookies, ohne fremde Dienste */
 // Besucher = Hash aus IP, Browserkennung und einem Tages-Salz. Das Salz und die Hashes gibt es nur am selben Tag,
 // danach bleiben nur Zahlen. Aktive Konten zählen über das Laden der App-Daten (die App selbst kommt oft aus dem Cache).
@@ -717,7 +718,7 @@ function payload() {
   const st = state(), snap = snapNow(), cfg = load('config.json', {})[school()];
   return {
     app: APP, demo: isDemo(), status: load('status.json', {}),
-    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
+    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited() && isPro(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
     beta: ACCOUNTS && !limited() ? { feedback: true, umfrage: !!siteSettings().umfrage && !st.umfrage } : null,
     account: me() && pubAccount(me()), school: school(),
     ...settings(), holidays: load('holidays.json', null)?.list || [],
@@ -838,7 +839,7 @@ const routes = {
       asUser(a, demoReset);
       return send(res, 200, await adminData());
     }
-    const patch = Object.fromEntries(['reset', 'disabled', 'admin', 'demo', 'jury'].filter((k) => typeof b[k] === 'boolean').map((k) => [k, b[k]]));
+    const patch = Object.fromEntries(['reset', 'disabled', 'admin', 'demo', 'jury', 'pro'].filter((k) => typeof b[k] === 'boolean').map((k) => [k, b[k]]));
     const r = await accountsApi(`/api/accounts/${id}`, 'PATCH', patch);
     if (typeof b.demo === 'boolean' && b.demo !== !!a.demo) { // Demo an: Beispieldaten statt eigener Daten. Demo aus: Konto ist danach leer.
       fs.rmSync(userDir(a.id), { recursive: true, force: true });
@@ -1213,6 +1214,7 @@ const routes = {
   // Tafelbilder: Bild als Formular-Datei (Base64, siehe readImage), Angaben in der Adresse
   'POST /api/photos': async (req, res) => {
     if (limited()) throw bad('In der Demo kannst du keine Fotos hochladen.');
+    if (!isPro()) throw bad('Tafelbilder gibt es mit Alltag Pro.');
     if (ACCOUNTS && db().photos.length >= 300) throw bad('Du hast schon 300 Tafelbilder. Lösch ein paar alte, dann ist wieder Platz.');
     const u = new URL(req.url, 'http://x').searchParams, buf = await readImage(req, 11e6);
     if (!buf.length) throw bad('Bitte ein Foto (JPEG) senden');
