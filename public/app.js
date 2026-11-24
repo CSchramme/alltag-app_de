@@ -188,7 +188,7 @@ function setData(d) {
   weekStart ??= defaultWeek();
   if (!calWeek().includes(planDay)) planDay = calWeek().includes(today()) ? today() : weekStart;
   renderAll();
-  if (first) { measureTabs(); lensSet(tabGeo[tabIndex(tab)][0]); route(); }
+  if (first) { measureTabs(); lensSet(tabGeo[tabIndex(tab)][0]); route(); setTimeout(() => repairPush().catch(() => {}), 3000); }
   if (first && ADMIN_PAGE) { if (D.account?.admin) openAdmin(); else location.replace('/'); }
 }
 
@@ -1618,20 +1618,43 @@ const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform 
 const pushReady = () => isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 const b64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), (c) => c.charCodeAt(0));
 
-async function setPush(on) {
+// Schlüssel und Service Worker vorher holen: iOS erlaubt subscribe() nur direkt in der Nutzergeste. Ein Netzwerk-Abruf
+// dazwischen kann die Geste „verbrauchen“, dann meldet Safari „User denied push permission“, obwohl alles erlaubt ist.
+let pushPrep = null;
+const preparePush = () => (pushPrep ??= Promise.all([api('/api/push/key'), navigator.serviceWorker.ready]).catch((e) => { pushPrep = null; throw e; }));
+const PUSH_HELP = isIOS
+  ? 'iOS hat die Mitteilungen gerade nicht zugelassen. Öffne Einstellungen → Mitteilungen → Alltag und erlaube sie. Fehlt Alltag dort, lösch das Symbol vom Home-Bildschirm und füg Alltag über Safari neu hinzu.'
+  : 'Der Browser hat die Mitteilungen nicht zugelassen. Erlaube sie in den Website-Einstellungen und versuch es noch einmal.';
+async function subscribePush(key, reg) {
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u(key) });
+  await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
+  store.set('push-on', true);
+}
+async function setPush(on, ready) {
   if (on) {
-    const perm = await Notification.requestPermission(); // muss direkt in der Nutzergeste passieren (iOS)
-    if (perm !== 'granted') throw new Error(perm === 'denied' ? 'Mitteilungen sind blockiert – erlaube sie in den Systemeinstellungen.' : 'Ohne Erlaubnis keine Mitteilungen.');
-    const [{ key }, reg] = await Promise.all([api('/api/push/key'), navigator.serviceWorker.ready]);
-    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u(key) });
-    await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
+    if (Notification.permission !== 'granted') {
+      const perm = await Notification.requestPermission(); // muss direkt in der Nutzergeste passieren (iOS)
+      if (perm !== 'granted') throw new Error(perm === 'denied' ? 'Mitteilungen sind blockiert – erlaube sie in den Systemeinstellungen.' : 'Ohne Erlaubnis keine Mitteilungen.');
+    }
+    const [{ key }, reg] = ready || await preparePush();
+    try { await subscribePush(key, reg); } catch (e) { throw e.name === 'NotAllowedError' ? new Error(PUSH_HELP) : e; }
   } else {
+    store.set('push-on', false);
     const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
     if (sub) {
       await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => {});
       await sub.unsubscribe();
     }
   }
+}
+// iOS verwirft Abos manchmal (z. B. nach einem Update). War Push an und ist erlaubt, still neu anmelden.
+async function repairPush() {
+  if (!pushReady() || D?.features?.push === false || !store.get('push-on', false) || Notification.permission !== 'granted') return false;
+  const reg = await navigator.serviceWorker.ready;
+  if (await reg.pushManager.getSubscription()) return false;
+  const [{ key }] = await preparePush();
+  await subscribePush(key, reg).catch(() => {});
+  return !!(await reg.pushManager.getSubscription());
 }
 
 function copy(text, hint) {
@@ -1837,16 +1860,20 @@ async function openSettings() {
       : !isSecureContext ? 'Mitteilungen brauchen HTTPS – in Plesk ein SSL-Zertifikat (Let’s Encrypt) aktivieren.' : 'Dieser Browser unterstützt keine Mitteilungen.');
     return;
   }
+  await repairPush().catch(() => false);
   const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+  if (sub && Notification.permission === 'granted') store.set('push-on', true); // Abo aus der Zeit vor dieser Merkung
   toggle.checked = !!sub && Notification.permission === 'granted';
   toggle.disabled = Notification.permission === 'denied';
   test.hidden = !toggle.checked;
   if (toggle.disabled) say('Mitteilungen sind für diese App blockiert. Erlaube sie in den Systemeinstellungen.');
+  let ready = null;
+  preparePush().then((r) => { ready = r; }, () => {}); // vor dem Antippen, damit subscribe() in der Geste bleibt
   toggle.onchange = () => {
     const on = toggle.checked;
     toggle.disabled = true;
     say('');
-    setPush(on).then(() => { test.hidden = !on; if (on) say('Aktiv. Du bekommst ab jetzt Bescheid.'); haptic(); })
+    setPush(on, ready).then(() => { test.hidden = !on; if (on) say('Aktiv. Du bekommst ab jetzt Bescheid.'); haptic(); })
       .catch((e) => { toggle.checked = !on; say(e.message); })
       .finally(() => { toggle.disabled = false; });
   };
