@@ -16,6 +16,8 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   if (url.pathname.startsWith('/api/') && url.pathname !== '/api/data') return;
+  // Nur App-Seiten als „/“ merken – Beta-Anmeldung und Rechtstexte sind eigene Seiten
+  if (e.request.mode === 'navigate' && !/^\/(index\.html|admin|poll\/[a-z]+)?$/.test(url.pathname)) return;
   // Netz zuerst: der Server steht zu Hause, neue Versionen sollen sofort ankommen
   const key = e.request.mode === 'navigate' ? '/' : url.pathname;
   e.respondWith(fetch(e.request, { cache: 'no-cache' }).then((res) => { // immer beim Server nachfragen (ETag), nie eine alte Kopie aus dem Browser-Cache

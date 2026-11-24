@@ -189,6 +189,7 @@ function setData(d) {
   if (!calWeek().includes(planDay)) planDay = calWeek().includes(today()) ? today() : weekStart;
   renderAll();
   if (first) { measureTabs(); lensSet(tabGeo[tabIndex(tab)][0]); route(); setTimeout(() => repairPush().catch(() => {}), 3000); }
+  if (first && POLL_PAGE) openPollPage();
   if (first && ADMIN_PAGE) { if (D.account?.admin) openAdmin(); else location.replace('/'); }
 }
 
@@ -1927,6 +1928,7 @@ function wireAccount() {
 }
 /* ---------------------------------------------------------------- Verwaltung: eigene Seite /admin, nur für Admins */
 const ADMIN_PAGE = location.pathname === '/admin';
+const POLL_PAGE = location.pathname.match(/^\/poll\/(fehler|verbesserung|rueckmeldung)$/)?.[1]; // Kurz-Links des Beta-Tests
 let adminState = null, lastFlyer = null;
 const shownCode = (c) => String(c).replace(/^(\d{3})(\d{3})$/, '$1 $2'); // 482 913 liest sich leichter vor
 // Balken je Tag (eine Reihe, eine Farbe). Tooltip beim Zeigen, Zahlen zusätzlich als Tabelle.
@@ -2241,7 +2243,13 @@ async function postJpeg(url, blob) {
   return j;
 }
 const appVersion = () => ($('script[src^="/app.js"]')?.getAttribute('src') || '').split('v=')[1] || '';
-function openFeedback() {
+function openPollPage() {
+  history.replaceState(null, '', '/'); // nur einmal öffnen, Neuladen zeigt die normale App
+  if (!D.beta) return toast('Rückmeldungen gibt es nur im Beta-Test von Alltag.');
+  if (POLL_PAGE !== 'rueckmeldung') return openFeedback(POLL_PAGE === 'verbesserung' ? 'Idee' : 'Fehler');
+  if (D.beta.umfrage) openUmfrage(); else toast('Die Abschlussumfrage ist gerade nicht offen oder schon ausgefüllt.');
+}
+function openFeedback(art) {
   let shot = null;
   openSheet('Fehler oder Idee', `<form class="form frm" id="fb-form" novalidate>
     ${Formulare.render('feedback', esc, 'fb')}
@@ -2251,6 +2259,8 @@ function openFeedback() {
     <button class="btn-primary pressable" type="submit">Senden</button>
     <p class="footnote" style="text-align:left">Mitgeschickt werden deine Support-ID, deine Tester-ID, das Gerät, der Browser und die App-Version. So lässt sich der Fehler leichter finden.</p></form>`);
   const f = $('#fb-form');
+  const pre = art && $(`input[name="art"][value="${art}"]`, f);
+  if (pre) pre.checked = true;
   Formulare.wire(f);
   $('[data-fb-shot]', f).onclick = () => {
     const inp = document.createElement('input');

@@ -516,6 +516,10 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const tess = mk('tess');
     await hook();
     assert.ok((await (await call('/beta')).text()).includes('data-skin="modern"'));
+    // Kurz-Links: Anmeldung = Beta-Seite, Fehler/Verbesserung/Rückmeldung = App (öffnet dort das Formular)
+    assert.ok((await (await call('/poll/anmeldung')).text()).includes('beta-form'));
+    for (const p of ['fehler', 'verbesserung', 'rueckmeldung']) assert.ok((await (await call(`/poll/${p}`)).text()).includes('/app.js'));
+    assert.equal((await call('/poll/unbekannt')).status, 404);
     assert.equal((await post('/api/beta', { ...betaBody, eltern: false })).status, 400); // ohne alle Zustimmungen nicht
     assert.equal((await post('/api/beta', { ...betaBody, land: 'Mars' })).status, 400); // nur erlaubte Antworten
     const b1 = await (await post('/api/beta', betaBody)).json();

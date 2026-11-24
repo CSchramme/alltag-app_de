@@ -1350,7 +1350,9 @@ const legal = (html) => html.replace(/\{\{(LEGAL_[A-Z_]+)\}\}/g, (m, k) => {
 // Die HTML-Seiten liegen in pages/, nicht in public/: Plesk liefert alles in public/ direkt über nginx aus, an der App vorbei.
 // Dann fehlten Look, Impressum-Angaben und Sicherheits-Header. Nur die App liefert sie deshalb aus.
 const PAGES = path.join(__dirname, 'pages');
-const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/admin': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html', '/beta': 'beta.html' };
+const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/admin': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html', '/beta': 'beta.html',
+  // Kurz-Links für den Beta-Test (Flyer, Gruppen-Chat): Anmeldung ohne Konto, der Rest öffnet das Formular in der App
+  '/poll/anmeldung': 'beta.html', '/poll/fehler': 'index.html', '/poll/verbesserung': 'index.html', '/poll/rueckmeldung': 'index.html' };
 function serveStatic(req, res, pathname) {
   let rel;
   try { rel = decodeURIComponent(pathname); } catch { return send(res, 400, 'Bad Request'); }
