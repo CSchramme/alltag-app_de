@@ -72,12 +72,16 @@ const token = () => crypto.randomBytes(24).toString('base64url');
 const SECRET = once('secret.json', () => crypto.randomBytes(32).toString('hex'));
 const TOKENS = once('tokens.json', () => ({ widget: token(), cron: token() }));
 if (!TOKENS.screen) { TOKENS.screen = token(); save('tokens.json', TOKENS); } // Schlüssel für das Fernsteuerungs-Programm auf dem PC
-const userTokens = () => (ACCOUNTS && me() ? once('tokens.json', () => ({ widget: token() })) : TOKENS); // mit Konten: Lese-Schlüssel je Konto
-// Lese-Schlüssel (Widget, Kurzbefehle) → Konto; ohne Konten genügt der eine Schlüssel
-function readerFor(key) {
+function userTokens() { // mit Konten: Lese-Schlüssel je Konto; Kalender-Abo hat einen eigenen (die Adresse liegt beim Kalender-Anbieter)
+  const t = ACCOUNTS && me() ? once('tokens.json', () => ({ widget: token() })) : TOKENS;
+  if (!t.calendar) { t.calendar = token(); save('tokens.json', t); }
+  return t;
+}
+// Lese-Schlüssel (Widget/Kurzbefehle bzw. Kalender) → Konto; ohne Konten genügt der eine Schlüssel
+function readerFor(key, kind = 'widget') {
   if (!key) return null;
-  if (!ACCOUNTS) return same(key, TOKENS.widget) || null;
-  return accounts().find((a) => !a.disabled && same(key, asUser(a, () => load('tokens.json', {})).widget || '')) || null;
+  if (!ACCOUNTS) return (!!TOKENS[kind] && same(key, TOKENS[kind])) || null;
+  return accounts().find((a) => !a.disabled && same(key, asUser(a, () => load('tokens.json', {}))[kind] || '')) || null;
 }
 const VAPID = once('vapid.json', generateVapidKeys);
 if (DEMO && !load('db.json', null)) save('db.json', demo.db());
@@ -607,6 +611,44 @@ function ownSnapshot(from = new Date()) {
 }
 const snapNow = () => (me()?.demo ? demo.snapshot() : school() === 'none' ? ownSnapshot() : load('snapshot.json', null));
 
+// Kalender-Abo (Pro): Stundenplan, Prüfungen, eigene Termine und Geburtstage als iCalendar (RFC 5545)
+// shortcut: Zeiten ohne Zeitzone (floating + X-WR-TIMEZONE Europe/Berlin), passt für Nutzer in Deutschland; für andere Zeitzonen VTIMEZONE ergänzen.
+// shortcut: Stunden nur für die Tage im Abgleich (EduPage/WebUntis/Schulmanager: heute + 6), vergangene fallen raus; bei Bedarf Tage sammeln.
+const RRULE = { daily: 'FREQ=DAILY', weekdays: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', weekly: 'FREQ=WEEKLY', biweekly: 'FREQ=WEEKLY;INTERVAL=2', monthly: 'FREQ=MONTHLY' };
+function icsFeed(now = new Date()) {
+  const esc = (v) => String(v || '').replace(/[\\;,]/g, (c) => `\\${c}`).replace(/\r?\n/g, '\\n');
+  const d8 = (date) => date.replace(/-/g, ''), uid = (v) => crypto.createHash('sha256').update(v).digest('hex').slice(0, 24);
+  const stamp = now.toISOString().replace(/[-:]|\.\d+/g, '');
+  const allDay = (date) => [`DTSTART;VALUE=DATE:${d8(date)}`, `DTEND;VALUE=DATE:${d8(isoDay(addDays(new Date(`${date}T12:00`), 1)))}`];
+  const timed = (date, start, end) => [`DTSTART:${d8(date)}T${start.replace(':', '')}00`, end ? `DTEND:${d8(date)}T${end.replace(':', '')}00` : 'DURATION:PT1H'];
+  const out = [];
+  const ev = (id, start, end, summary, extra = []) => out.push('BEGIN:VEVENT', `UID:${uid(id)}@alltag`, `DTSTAMP:${stamp}`, start, end, `SUMMARY:${esc(summary)}`, ...extra.filter(Boolean), 'END:VEVENT');
+  const own = isDemo() || school() === 'none'; // eigener Stundenplan bzw. Demo: gleich vier Wochen
+  const days = new Map((own ? [0, 7, 14, 21].flatMap((n) => (isDemo() ? demo.snapshot(addDays(now, n)) : ownSnapshot(addDays(now, n))).days) : snapNow()?.days || []).map((d) => [d.date, d]));
+  for (const day of days.values()) for (const l of day.lessons || []) {
+    ev(`stunde|${day.date}|${l.start}|${l.subject}`, ...(l.start && l.end ? timed(day.date, l.start, l.end) : allDay(day.date)), `${l.cancelled ? 'Entfällt: ' : ''}${l.subject}`,
+      [l.rooms?.length && `LOCATION:${esc(l.rooms.join(', '))}`, `DESCRIPTION:${esc([l.teachers?.join(', '), ...(l.changes || []), l.topic].filter(Boolean).join('\n'))}`]);
+  }
+  for (const t of snapNow()?.tasks || []) if (t.kind === 'exam' && t.due) ev(`pruefung|${t.id}`, ...allDay(t.due), [t.label, t.subject].filter(Boolean).join(' '), [t.title && `DESCRIPTION:${esc(t.title)}`]);
+  const d = db();
+  for (const e of d.events) {
+    const until = e.until ? `;UNTIL=${d8(e.until)}${e.start ? 'T235959' : ''}` : '';
+    ev(`termin|${e.id}`, ...(e.start ? timed(e.date, e.start, e.end) : allDay(e.date)), e.title,
+      [e.location && `LOCATION:${esc(e.location)}`, e.notes && `DESCRIPTION:${esc(e.notes)}`, RRULE[e.repeat] && `RRULE:${RRULE[e.repeat]}${until}`]);
+  }
+  for (const b of d.birthdays) { // 29.2. = letzter Februartag, wie birthdayOn in recur.js
+    const y = Number(b.date.slice(0, 4)), md = b.date.slice(5);
+    ev(`geburtstag|${b.id}`, ...allDay(`${y > 1900 ? y : 2000}-${md}`), `Geburtstag: ${b.name}`, [`RRULE:FREQ=YEARLY${md === '02-29' ? ';BYMONTH=2;BYMONTHDAY=-1' : ''}`]);
+  }
+  const fold = (line) => { // höchstens 75 Byte je Zeile, Fortsetzung beginnt mit Leerzeichen
+    const parts = []; let cur = '';
+    for (const ch of line) { if (Buffer.byteLength(cur + ch) > (parts.length ? 74 : 75)) { parts.push(cur); cur = ''; } cur += ch; }
+    return [...parts, cur].join('\r\n ');
+  };
+  return `${['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Alltag//Kalender-Abo//DE', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Alltag', 'X-WR-TIMEZONE:Europe/Berlin',
+    'REFRESH-INTERVAL;VALUE=DURATION:PT1H', 'X-PUBLISHED-TTL:PT1H', ...out, 'END:VCALENDAR'].map(fold).join('\r\n')}\r\n`;
+}
+
 // WebUntis und Schulmanager: gleiche Form wie der EduPage-Snapshot, damit Mitteilungen, Lernplan und Ansichten gleich bleiben
 const LINKS = { untis: Untis, schulmanager: Schulmanager };
 const linkClient = (cfg) => new LINKS[school()]({ ...cfg, pass: unseal(cfg.pass) }, loadSession());
@@ -718,7 +760,7 @@ function payload() {
   const st = state(), snap = snapNow(), cfg = load('config.json', {})[school()];
   return {
     app: APP, demo: isDemo(), status: load('status.json', {}),
-    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited() && isPro(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
+    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited() && isPro(), calendar: !limited() && isPro(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
     beta: ACCOUNTS && !limited() ? { feedback: true, umfrage: !!siteSettings().umfrage && !st.umfrage } : null,
     account: me() && pubAccount(me()), school: school(),
     ...settings(), holidays: load('holidays.json', null)?.list || [],
@@ -1328,14 +1370,20 @@ const routes = {
     const sent = await push({ title: 'Mitteilungen sind aktiv', body: 'So erfährst du ab jetzt von Vertretungen, Nachrichten und Erinnerungen.', url: '/', tag: 'test' });
     send(res, 200, { ok: sent > 0, sent });
   },
-  // Lese-Schlüssel fürs Widget gibt es je Konto; Cron nur für Admin bzw. die private App, PC-Schlüssel nur privat
-  'POST /api/tokens/widget': (req, res) => {
+  // Lese-Schlüssel fürs Widget und fürs Kalender-Abo gibt es je Konto; Cron nur für Admin bzw. die private App, PC-Schlüssel nur privat
+  'POST /api/tokens/:kind': (req, res, kind) => {
+    if (!['widget', 'calendar'].includes(kind)) return send(res, 404, { error: 'unbekannt' });
     if (me()?.demo) throw bad('Im Demo-Konto lässt sich das nicht ändern.');
-    if (ACCOUNTS) save('tokens.json', { ...load('tokens.json', {}), widget: token() });
-    else { TOKENS.widget = token(); save('tokens.json', TOKENS); }
+    const t = userTokens(); t[kind] = token(); save('tokens.json', t);
     send(res, 200, { ok: true });
   },
-  'GET /api/tokens': (req, res) => send(res, 200, { widget: userTokens().widget, ...(!ACCOUNTS || me()?.admin ? { cron: TOKENS.cron } : {}), ...(PRIVATE ? { screen: TOKENS.screen } : {}) }),
+  'GET /api/tokens': (req, res) => send(res, 200, { widget: userTokens().widget, ...(!limited() && isPro() ? { calendar: userTokens().calendar } : {}),
+    ...(!ACCOUNTS || me()?.admin ? { cron: TOKENS.cron } : {}), ...(PRIVATE ? { screen: TOKENS.screen } : {}) }),
+  'GET /api/calendar.ics': (req, res) => { // Kalender-Abo, gelesen mit dem Kalender-Schlüssel (?key=)
+    if (limited() || !isPro()) return send(res, 404, { error: 'unbekannt' });
+    res.writeHead(200, { 'Content-Type': 'text/calendar; charset=utf-8', 'Cache-Control': 'private, no-cache', 'Content-Disposition': 'inline; filename="alltag.ics"' });
+    res.end(icsFeed());
+  },
 };
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.json': 'application/json', '.ico': 'image/x-icon' };
@@ -1432,7 +1480,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, ACCOUNTS ? { ok: true } : { ok: true, status: load('status.json', {}) });
     }
     const bearer = (req.headers.authorization || '').replace(/^Bearer /, '') || url.searchParams.get('key') || '';
-    const reader = req.method === 'GET' && ['/api/data', '/api/summary', '/api/wake', '/api/focus'].includes(url.pathname) && readerFor(bearer);
+    const reader = req.method === 'GET' && (url.pathname === '/api/calendar.ics' ? readerFor(bearer, 'calendar') : ['/api/data', '/api/summary', '/api/wake', '/api/focus'].includes(url.pathname) && readerFor(bearer));
     const user = sessionUser(req) || reader;
     if (!['/api/login', '/api/demo', '/api/beta'].includes(url.pathname) && !user) return send(res, 401, { error: 'login' });
     const parts = url.pathname.split('/').filter(Boolean); // ['api', 'items', 'notes', '<id>']

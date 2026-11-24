@@ -1783,6 +1783,14 @@ async function openSettings() {
       <button class="row" id="push-test" hidden><span class="btn-plain">Test-Mitteilung senden</span></button>
     </div>
     <p class="footnote" id="push-hint" style="margin-top:8px;text-align:left"></p>
+    ${D.features?.calendar ? `<p class="label-sm">Kalender-Abo</p>
+    <div class="list card">
+      <div class="row"><div class="main"><div class="sub">Stundenplan, Prüfungen, Termine und Geburtstage in deinem Kalender. Aktualisiert sich von selbst. iPhone und Mac: „Abonnieren“ tippen. Google Kalender: Adresse kopieren und am PC unter „Weitere Kalender → Per URL“ einfügen.</div></div></div>
+      <a class="row" id="cal-sub"><span class="btn-plain">Im Kalender abonnieren</span></a>
+      <button class="row" id="cal-copy" disabled><span class="btn-plain">Adresse kopieren</span></button>
+      ${D.account?.demo ? '' : '<button class="row" id="cal-rotate"><span class="btn-plain danger">Neue Adresse erstellen</span></button>'}
+    </div>
+    <p class="footnote" id="cal-hint" style="margin-top:8px;text-align:left">Wer die Adresse kennt, sieht deinen Kalender. Nicht weitergeben.</p>` : ''}
     <p class="label-sm">Widget (iPhone)</p>
     <div class="list card">
       <div class="row"><div class="main"><div class="sub">1. Gratis-App „Scriptable“ laden · 2. Skript kopieren · 3. In Scriptable „+“, einfügen, „Alltag“ nennen · 4. Widget „Scriptable“ hinzufügen und beim Bearbeiten „Alltag“ wählen</div></div></div>
@@ -1827,6 +1835,11 @@ async function openSettings() {
     if (!rot.dataset.sure) { rot.dataset.sure = '1'; $('span', rot).textContent = 'Wirklich? Widget und Kurzbefehle musst du danach neu einrichten.'; return; }
     try { await api('/api/tokens/widget', { method: 'POST' }); haptic(); toast('Neuer Schlüssel. Bitte Widget-Skript und Kurzbefehle neu kopieren.'); openSettings(); } catch (x) { toast(x.message); }
   };
+  const calRot = $('#cal-rotate');
+  if (calRot) calRot.onclick = async () => { // alte Adresse hört auf zu funktionieren
+    if (!calRot.dataset.sure) { calRot.dataset.sure = '1'; $('span', calRot).textContent = 'Wirklich? Die alte Adresse funktioniert dann nicht mehr.'; return; }
+    try { await api('/api/tokens/calendar', { method: 'POST' }); haptic(); toast('Neue Adresse. Bitte im Kalender neu abonnieren.'); openSettings(); } catch (x) { toast(x.message); }
+  };
   $('#wake-lead').onchange = async (e) => {
     try { setData(await api('/api/settings', { method: 'POST', body: { wakeLead: Number(e.target.value) } })); haptic(); } catch (x) { toast(x.message); }
   };
@@ -1857,6 +1870,12 @@ async function openSettings() {
     $('#sc-today').onclick = () => copy(`${location.origin}/api/summary?day=heute&key=${widget}`, $('#sc-hint'));
     $('#sc-tomorrow').onclick = () => copy(`${location.origin}/api/summary?day=morgen&key=${widget}`, $('#sc-hint'));
     $('#cron-copy').onclick = () => copy(cronUrl, $('#cron-hint'));
+    if (tokens.calendar && $('#cal-copy')) {
+      const calUrl = `${location.origin}/api/calendar.ics?key=${tokens.calendar}`;
+      $('#cal-sub').href = calUrl.replace(/^https?:/, 'webcal:');
+      $('#cal-copy').disabled = false;
+      $('#cal-copy').onclick = () => copy(calUrl, $('#cal-hint'));
+    }
     if (!tokens.screen || !$('#screen-dl')) return;
     const agent = (await fetch('/screen-agent.ps1').then((r) => r.text())).replace('__SERVER__', location.origin).replace('__KEY__', tokens.screen);
     $('#screen-dl').disabled = false;

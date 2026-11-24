@@ -469,7 +469,28 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.match((await (await post('/api/photos', {}, c2)).json()).error, /Pro/);
     assert.ok((await (await post(`/api/admin/accounts/${ben.id}`, { pro: true }, c1)).json()).accounts.find((a) => a.id === ben.id).pro);
     assert.ok((await (await call('/api/data', {}, c2)).json()).features.photos);
+    // Kalender-Abo (Pro): eigener Schlüssel, ohne Anmeldung lesbar, Widget-Schlüssel reicht nicht
+    const tk = await (await call('/api/tokens', {}, c2)).json(), long = 'Ausflug zum Schloss Neuschwanstein mit Übernachtung, Busfahrt; Rückkehr spät';
+    assert.ok(tk.calendar && tk.calendar !== tk.widget);
+    await post('/api/items/events', { title: long, date: '2026-12-01', start: '15:00', end: '16:00', repeat: 'weekly', until: '2027-03-01', location: 'Aula' }, c2);
+    await post('/api/items/birthdays', { name: 'Lea', date: '2012-02-29' }, c2);
+    const icsRes = await call(`/api/calendar.ics?key=${tk.calendar}`);
+    const ics = await icsRes.text(), lines = ics.split('\r\n');
+    assert.match(icsRes.headers.get('content-type'), /^text\/calendar/);
+    assert.ok(ics.startsWith('BEGIN:VCALENDAR\r\n') && ics.endsWith('END:VCALENDAR\r\n') && !/[^\r]\n/.test(ics));
+    assert.ok(lines.every((l) => Buffer.byteLength(l) <= 75)); // gefaltet nach RFC 5545
+    const flat = ics.replace(/\r\n /g, '');
+    assert.ok(flat.includes(`SUMMARY:${long.replace(/[,;]/g, (c) => `\\${c}`)}`) && flat.includes('LOCATION:Aula'));
+    assert.ok(flat.includes('DTSTART:20261201T150000') && flat.includes('RRULE:FREQ=WEEKLY;UNTIL=20270301T235959'));
+    assert.ok(flat.includes('DTSTART;VALUE=DATE:20120229') && flat.includes('RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=-1') && flat.includes('SUMMARY:Geburtstag: Lea'));
+    assert.ok(flat.includes('SUMMARY:Mathe') && flat.includes('LOCATION:104') && flat.includes('DESCRIPTION:Hr. Graf')); // eigener Stundenplan
+    assert.equal((await call(`/api/calendar.ics?key=${tk.widget}`)).status, 401);
+    await post('/api/tokens/calendar', {}, c2);
+    assert.equal((await call(`/api/calendar.ics?key=${tk.calendar}`)).status, 401); // alte Adresse gesperrt
+    const tk2 = await (await call('/api/tokens', {}, c2)).json();
     await post(`/api/admin/accounts/${ben.id}`, { pro: false }, c1);
+    assert.equal((await call(`/api/calendar.ics?key=${tk2.calendar}`)).status, 404); // ohne Pro kein Abo
+    assert.ok(!(await (await call('/api/tokens', {}, c2)).json()).calendar);
     // Schulsoftware wechseln: gespeichert beim Konto-Dienst. WebUntis nur echte Server, Suche ab 3 Zeichen, EduPage-Funktionen gibt es dort nicht
     const su = await (await post('/api/account', { school: 'untis' }, c2)).json();
     assert.deepEqual([su.school, su.link.connected, fakeAcc.list.find((a) => a.id === ben.id).school], ['untis', false, 'untis']);
