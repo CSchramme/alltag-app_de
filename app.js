@@ -14,6 +14,7 @@ const { Untis, UntisError, searchSchools, SERVER_RE } = require('./untis');
 const { Schulmanager } = require('./schulmanager');
 const demo = require('./demo');
 const { occursOn, birthdayOn, ageOn } = require('./public/recur');
+const Ical = require('./ical');
 const Formulare = require('./public/formulare');
 
 // Einstellungen auch aus der Datei .env im App-Ordner (NAME=Wert je Zeile, # = Kommentar). Echte Umgebungsvariablen
@@ -611,6 +612,39 @@ function ownSnapshot(from = new Date()) {
 }
 const snapNow = () => (me()?.demo ? demo.snapshot() : school() === 'none' ? ownSnapshot() : load('snapshot.json', null));
 
+// Private Kalender (Pro): Google/iCloud/Outlook per iCalendar-Link lesen. Link verschlüsselt, Termine (−2 Wochen bis +4 Monate)
+// im Zwischenspeicher, alle 30 Min. im Hintergrund neu. Nicht in Demo-Konten (die teilen sich alle Besucher).
+const calsOn = () => !isDemo() && isPro();
+const CAL_COLORS = ['orange', 'green', 'purple', 'teal', 'pink'];
+const calList = () => load('calendars.json', []);
+const calCache = () => load('calendars-cache.json', {});
+async function refreshCal(c) {
+  let entry;
+  try {
+    const now = new Date(), events = Ical.expand(Ical.parseIcs(await Ical.fetchIcs(unseal(c.url))), isoDay(addDays(now, -14)), isoDay(addDays(now, 120)));
+    entry = { at: now.toISOString(), events, error: null };
+  } catch (e) { entry = { ...calCache()[c.id], at: new Date().toISOString(), error: e.message || 'Fehler beim Abrufen' }; }
+  save('calendars-cache.json', { ...calCache(), [c.id]: entry });
+  return entry;
+}
+const calBusy = new Set();
+function refreshCals() { // beim Öffnen der App, höchstens alle 30 Min. je Kalender, ohne darauf zu warten
+  if (!calsOn() || calBusy.has(home())) return;
+  const cache = calCache(), due = calList().filter((c) => !cache[c.id] || Date.now() - Date.parse(cache[c.id].at) > 30 * 60e3);
+  if (!due.length) return;
+  const key = home();
+  calBusy.add(key);
+  (async () => { for (const c of due) await refreshCal(c); })().catch(() => {}).finally(() => calBusy.delete(key));
+}
+function calPayload() {
+  if (!calsOn()) return { calendars: [], ical: [] };
+  const cache = calCache(), list = calList();
+  return {
+    calendars: list.map((c) => ({ id: c.id, name: c.name, color: c.color, at: cache[c.id]?.at || null, error: cache[c.id]?.error || null, count: cache[c.id]?.events?.length || 0 })),
+    ical: list.flatMap((c) => (cache[c.id]?.events || []).map((e, i) => ({ ...e, id: `${c.id}-${i}`, cal: c.id }))),
+  };
+}
+
 // Kalender-Abo (Pro): Stundenplan, Prüfungen, eigene Termine und Geburtstage als iCalendar (RFC 5545)
 // shortcut: Zeiten ohne Zeitzone (floating + X-WR-TIMEZONE Europe/Berlin), passt für Nutzer in Deutschland; für andere Zeitzonen VTIMEZONE ergänzen.
 // shortcut: Stunden nur für die Tage im Abgleich (EduPage/WebUntis/Schulmanager: heute + 6), vergangene fallen raus; bei Bedarf Tage sammeln.
@@ -760,7 +794,7 @@ function payload() {
   const st = state(), snap = snapNow(), cfg = load('config.json', {})[school()];
   return {
     app: APP, demo: isDemo(), status: load('status.json', {}),
-    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited() && isPro(), calendar: !limited() && isPro(), wallpaper: !limited() && isPro(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
+    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited() && isPro(), calendar: !limited() && isPro(), wallpaper: !limited() && isPro(), calendars: calsOn(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
     beta: ACCOUNTS && !limited() ? { feedback: true, umfrage: !!siteSettings().umfrage && !st.umfrage } : null,
     account: me() && pubAccount(me()), school: school(),
     ...settings(), holidays: load('holidays.json', null)?.list || [],
@@ -778,7 +812,7 @@ function payload() {
           poll: m.poll && st.votes?.[m.id] ? { ...m.poll, mine: m.poll.answers.filter((a) => st.votes[m.id][a.id] ?? m.poll.mine.includes(a.id)).map((a) => a.id) } : m.poll };
       }),
     },
-    db: db(),
+    db: db(), ...calPayload(),
   };
 }
 
@@ -1023,6 +1057,7 @@ const routes = {
     const origin = `${https(req) ? 'https' : 'http'}://${req.headers.host}`;
     if (loggedIn(req) && /^[\w.:-]+$/.test(req.headers.host || '') && atRoot(() => load('origin.json', null)) !== origin) atRoot(() => save('origin.json', origin));
     const a = me();
+    refreshCals();
     if (a && !a.demo) trackActive(a);
     if (a && Date.now() - Date.parse(seenAt()[a.id] || 0) > 3600e3) { // „zuletzt aktiv“ für die Konten-Übersicht, höchstens stündlich schreiben
       atRoot(() => save('seen.json', { ...load('seen.json', {}), [a.id]: new Date().toISOString() }));
@@ -1397,6 +1432,22 @@ const routes = {
   },
   'GET /api/tokens': (req, res) => send(res, 200, { widget: userTokens().widget, ...(!limited() && isPro() ? { calendar: userTokens().calendar } : {}),
     ...(!ACCOUNTS || me()?.admin ? { cron: TOKENS.cron } : {}), ...(PRIVATE ? { screen: TOKENS.screen } : {}) }),
+  'POST /api/calendars': async (req, res) => { // gleich einmal abrufen: ein falscher Link fällt sofort auf
+    if (!calsOn()) throw bad('Private Kalender gibt es mit Alltag Pro.');
+    const b = await readJson(req), list = calList();
+    if (list.length >= 5) throw bad('Du kannst höchstens 5 Kalender verbinden.');
+    const c = { id: crypto.randomBytes(4).toString('hex'), name: F.text(40, true)(b.name), url: seal(F.text(2000, true)(b.url)), color: CAL_COLORS[list.length % CAL_COLORS.length], added: new Date().toISOString() };
+    const r = await refreshCal(c);
+    if (r.error) { const cc = calCache(); delete cc[c.id]; save('calendars-cache.json', cc); throw bad(r.error); }
+    save('calendars.json', [...calList(), c]);
+    send(res, 200, payload());
+  },
+  'DELETE /api/calendars/:id': (req, res, id) => {
+    if (!calsOn()) throw bad('Private Kalender gibt es mit Alltag Pro.');
+    save('calendars.json', calList().filter((c) => c.id !== id));
+    const cc = calCache(); delete cc[id]; save('calendars-cache.json', cc);
+    send(res, 200, payload());
+  },
   'GET /api/calendar.ics': (req, res) => { // Kalender-Abo, gelesen mit dem Kalender-Schlüssel (?key=)
     if (limited() || !isPro()) return send(res, 404, { error: 'unbekannt' });
     res.writeHead(200, { 'Content-Type': 'text/calendar; charset=utf-8', 'Cache-Control': 'private, no-cache', 'Content-Disposition': 'inline; filename="alltag.ics"' });

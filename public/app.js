@@ -216,6 +216,8 @@ function agenda(date) {
     : { type: 'lesson', start: l.start, end: l.end, l, i }));
   D.db.events.filter((e) => Recur.occursOn(e, date)).forEach((e) => items.push({ type: 'event', start: e.start, end: e.end, e: { ...e, date } }));
   (D.db.birthdays || []).filter((b) => Recur.birthdayOn(b, date)).forEach((b) => items.push({ type: 'bday', start: '', b }));
+  (D.ical || []).filter((x) => x.date === date).forEach((x) => items.push({ type: x.start ? 'event' : 'allday', start: x.start, end: x.end, e: x, x,
+    t: { id: '', kind: 'event', label: 'Ganztägig', title: x.title, subject: '' } })); // aus privatem Kalender, nur lesen
   return items.sort((a, b) => (a.start || '').localeCompare(b.start || ''));
 }
 const endMin = (a) => (a.end ? toMin(a.end) : toMin(a.start) + 60);
@@ -276,6 +278,21 @@ function eventRow(e) {
     <div class="main"><div class="title">${esc(e.title)}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ''}</div>
     <div class="num">${chip(e.category === 'schule' ? 'Schule' : 'Privat', CAT[e.category] || CAT.privat)}</div></button>`;
 }
+const calOf = (id) => (D.calendars || []).find((c) => c.id === id);
+function icalRow(x) { // Termin aus einem verbundenen Kalender: Farbe und Name des Kalenders, nur ansehen
+  const c = calOf(x.cal), col = `var(--${c?.color || 'orange'})`;
+  return `<button class="row lesson event${x.start ? '' : ' allday'}" style="--c:${col}" data-ical="${esc(x.id)}">
+    <div class="time"><b>${esc(x.start || 'ganzt.')}</b><span>${esc(x.end)}</span></div><div class="bar"></div>
+    <div class="main"><div class="title">${esc(x.title)}</div>${x.location ? `<div class="sub">${esc(x.location)}</div>` : ''}</div>
+    <div class="num">${chip(c?.name || 'Kalender', col)}</div></button>`;
+}
+function openIcal(id) {
+  const x = (D.ical || []).find((y) => y.id === id), c = x && calOf(x.cal);
+  if (!x) return;
+  const kv = [['Tag', F.long.format(parseDay(x.date))], ['Zeit', x.start ? `${x.start}${x.end ? ` – ${x.end}` : ''} Uhr` : 'ganztägig'], ['Ort', x.location], ['Kalender', c?.name]].filter(([, v]) => v);
+  openSheet(x.title, `<div class="card"><dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl></div>
+    <p class="footnote" style="text-align:left">Aus deinem verbundenen Kalender. Ändern kannst du den Termin nur dort.</p>`);
+}
 function alldayRow(t) {
   const c = t.kind === 'exam' ? 'var(--red)' : 'var(--indigo)';
   return `<button class="row lesson allday" style="--c:${c}"${t.id ? ` data-edu-task="${esc(t.id)}"` : ''}>
@@ -295,7 +312,7 @@ function agendaList(date, items = agenda(date)) {
       const gap = toMin(a.start) - toMin(prev.end);
       if (gap >= 15) html += `<div class="break">${gap >= 40 ? 'Mittagspause' : 'Pause'} · ${gap} Min.</div>`;
     }
-    html += a.type === 'lesson' ? lessonRow(a.l, date, a.i) : a.type === 'event' ? eventRow(a.e) : a.type === 'bday' ? bdayRow(a.b, date) : alldayRow(a.t);
+    html += a.x ? icalRow(a.x) : a.type === 'lesson' ? lessonRow(a.l, date, a.i) : a.type === 'event' ? eventRow(a.e) : a.type === 'bday' ? bdayRow(a.b, date) : alldayRow(a.t);
     prev = a;
   }
   return html;
@@ -349,7 +366,8 @@ function heroHTML() {
   const next = timed.find((a) => toMin(a.start) > m);
   const info = (a) => (a.type === 'lesson'
     ? { title: a.l.subject, sub: where(a.l), c: colorOf(a.l.subject), attrs: `data-day="${t}" data-i="${a.i}"`, alert: a.l.changes.join(' · '), what: `${a.l.period}. Stunde` }
-    : { title: a.e.title, sub: a.e.location, c: CAT[a.e.category] || CAT.privat, attrs: `data-event="${esc(a.e.id)}"`, alert: '', what: 'Termin' });
+    : a.x ? { title: a.x.title, sub: a.x.location, c: `var(--${calOf(a.x.cal)?.color || 'orange'})`, attrs: `data-ical="${esc(a.x.id)}"`, alert: '', what: 'Termin' }
+      : { title: a.e.title, sub: a.e.location, c: CAT[a.e.category] || CAT.privat, attrs: `data-event="${esc(a.e.id)}"`, alert: '', what: 'Termin' });
   const card = ({ kicker, title, sub, c, attrs = '', alert = '', progress, left, right }) => `
     <button class="hero glass pressable${alert ? ' alert' : ''}" style="--c:${c}" ${attrs}>
       <div class="kicker">${esc(kicker)}</div><div class="subject">${esc(title)}</div>${sub ? `<div class="where">${esc(sub)}</div>` : ''}
@@ -1854,6 +1872,14 @@ async function openSettings() {
       <button class="row" id="push-test" hidden><span class="btn-plain">Test-Mitteilung senden</span></button>
     </div>
     <p class="footnote" id="push-hint" style="margin-top:8px;text-align:left"></p>
+    ${D.features?.calendars ? `<p class="label-sm">Private Kalender</p>
+    ${(D.calendars || []).length ? `<div class="list card">${D.calendars.map((c) => `<div class="row"><div class="main"><div class="title">${chip(c.name, `var(--${c.color})`, true)}</div>
+      <div class="sub">${c.error ? `Fehler: ${esc(c.error)}` : c.at ? `${c.count} Termine · aktualisiert ${esc(ago(c.at))}` : 'wird geladen …'}</div>
+      <div class="code-actions"><button class="btn-plain danger" type="button" data-cal-del="${esc(c.id)}">Entfernen</button></div></div></div>`).join('')}</div>` : ''}
+    <form class="form" id="cal-add">${group(fText('name', 'Name, z. B. Familie', '', 'maxlength="40" required'),
+      fText('url', 'Kalender-Link (https:// oder webcal://)', '', 'type="url" inputmode="url" autocapitalize="off" spellcheck="false" maxlength="2000" required'))}
+      <button class="btn-plain" type="submit">Kalender verbinden</button></form>
+    <p class="footnote" style="margin-top:8px;text-align:left">Termine aus Google, iCloud oder Outlook erscheinen in deinem Alltag-Kalender, nur zum Ansehen. Den Link findest du bei Google unter Einstellungen → dein Kalender → „Privatadresse im iCal-Format“, bei iCloud unter Kalender teilen → „Öffentlicher Kalender“, bei Outlook unter Freigegebene Kalender → „Kalender veröffentlichen“ (ICS). Wer den Link kennt, sieht den Kalender: nicht weitergeben.</p>` : ''}
     ${D.features?.wallpaper ? `<p class="label-sm">Sperrbildschirm</p>
     <div class="list card"><button class="row" id="wall-make"><span class="btn-plain">Stundenplan als Hintergrundbild</span></button></div>
     <p class="footnote" style="margin-top:8px;text-align:left">Ein Bild deiner Schulwoche in der Größe deines Handys. Oben bleibt Platz für die Uhr.</p>` : ''}
@@ -1909,6 +1935,19 @@ async function openSettings() {
     if (!rot.dataset.sure) { rot.dataset.sure = '1'; $('span', rot).textContent = 'Wirklich? Widget und Kurzbefehle musst du danach neu einrichten.'; return; }
     try { await api('/api/tokens/widget', { method: 'POST' }); haptic(); toast('Neuer Schlüssel. Bitte Widget-Skript und Kurzbefehle neu kopieren.'); openSettings(); } catch (x) { toast(x.message); }
   };
+  const calAdd = $('#cal-add');
+  if (calAdd) calAdd.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = $('button[type=submit]', calAdd);
+    btn.disabled = true; btn.textContent = 'Wird geprüft …';
+    try { setData(await api('/api/calendars', { method: 'POST', body: Object.fromEntries(new FormData(calAdd)) })); haptic(); toast('Kalender verbunden'); openSettings(); } catch (x) { toast(x.message); btn.disabled = false; btn.textContent = 'Kalender verbinden'; }
+  };
+  $$('#sheet [data-cal-del]').forEach((b) => {
+    b.onclick = async () => {
+      if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Sicher?'; return; }
+      try { setData(await api(`/api/calendars/${encodeURIComponent(b.dataset.calDel)}`, { method: 'DELETE' })); openSettings(); } catch (x) { toast(x.message); }
+    };
+  });
   const wallBtn = $('#wall-make');
   if (wallBtn) wallBtn.onclick = () => openWallpaper();
   const calRot = $('#cal-rotate');
@@ -2756,7 +2795,7 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-vote],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-umfrage]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-vote],[data-ical],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-umfrage]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (el.id === 'me' || 'settings' in ds) return openSettings();
@@ -2778,6 +2817,7 @@ document.addEventListener('click', async (e) => {
   if (ds.star) return toggleStar(ds.star, el);
   if (ds.like) return toggleLike(ds.like);
   if (ds.vote) return vote(ds.vote, ds.answer);
+  if (ds.ical) return openIcal(ds.ical);
   if (ds.confirm) return confirmRead(ds.confirm, el);
   if (ds.teacher) return openTeacher(ds.teacher);
   if (ds.pick) { composeTo.set(ds.pick, (S().people || []).find((p) => p.id === ds.pick)?.name || ''); return drawRecipients(); }

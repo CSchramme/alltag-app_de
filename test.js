@@ -22,6 +22,36 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   assert.equal(decodeResponse(`eqz:${Buffer.from('{"token":"abc"}').toString('base64')}`), '{"token":"abc"}');
   assert.equal(decodeResponse('{"plain":1}'), '{"plain":1}');
 
+  // 1b. Private Kalender (ical.js): Zeitzonen, ganztägig, Wiederholungen mit Ausnahmen, Netz-Sperre
+  const Ical = require('./ical');
+  const cal = (body) => `BEGIN:VCALENDAR\r\nVERSION:2.0\r\n${body.trim().split('\n').map((l) => l.trimEnd()).join('\r\n')}\r\nEND:VCALENDAR\r\n`;
+  const ev = (lines) => `BEGIN:VEVENT\n${lines}\nEND:VEVENT`;
+  const ics = cal([
+    ev('UID:a\nDTSTART;TZID=Europe/Berlin:20261125T180000\nDTEND;TZID=Europe/Berlin:20261125T193000\nSUMMARY:Chor\\, Probe\nLOCATION:Aula'),
+    ev('UID:b\nDTSTART:20261125T170000Z\nDURATION:PT1H\nSUMMARY:Winter UTC'),
+    ev('UID:c\nDTSTART:20260701T170000Z\nSUMMARY:Sommer UTC'),
+    ev('UID:d\nDTSTART;TZID=America/New_York:20261125T120000\nDTEND;TZID=America/New_York:20261125T130000\nSUMMARY:New York'),
+    ev('UID:e\nDTSTART;VALUE=DATE:20261224\nDTEND;VALUE=DATE:20261227\nSUMMARY:Oma bes\n uch'),
+    ev('UID:f\nDTSTART;TZID=Europe/Berlin:20261123T160000\nDTEND;TZID=Europe/Berlin:20261123T170000\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE;COUNT=4\nEXDATE;TZID=Europe/Berlin:20261125T160000\nSUMMARY:Training\nBEGIN:VALARM\nTRIGGER:-PT15M\nSUMMARY:Alarm\nEND:VALARM'),
+    ev('UID:f\nRECURRENCE-ID;TZID=Europe/Berlin:20261130T160000\nDTSTART;TZID=Europe/Berlin:20261130T190000\nDTEND;TZID=Europe/Berlin:20261130T200000\nSUMMARY:Training spät'),
+    ev('UID:g\nDTSTART;TZID=Europe/Berlin:20261127T100000\nSTATUS:CANCELLED\nSUMMARY:Abgesagt'),
+    ev('UID:h\nDTSTART;TZID=Europe/Berlin:20261127T150000\nRRULE:FREQ=MONTHLY;BYDAY=-1FR;UNTIL=20270131T230000Z\nSUMMARY:Letzter Freitag'),
+    ev('UID:i\nDTSTART;TZID=Europe/Berlin:20150101T070000\nRRULE:FREQ=DAILY\nSUMMARY:Täglich seit 2015'),
+  ].join('\n'));
+  const all = Ical.expand(Ical.parseIcs(ics), '2026-06-01', '2027-02-28'), on = (t) => all.filter((x) => x.title === t);
+  assert.deepEqual(on('Chor, Probe').map((x) => [x.date, x.start, x.end, x.location]), [['2026-11-25', '18:00', '19:30', 'Aula']]);
+  assert.deepEqual([on('Winter UTC')[0].start, on('Winter UTC')[0].end, on('Sommer UTC')[0].start, on('New York')[0].start], ['18:00', '19:00', '19:00', '18:00']);
+  assert.deepEqual(on('Oma besuch').map((x) => [x.date, x.start]), [['2026-12-24', ''], ['2026-12-25', ''], ['2026-12-26', '']]);
+  assert.deepEqual(on('Training').map((x) => x.date), ['2026-11-23', '2026-12-02']); // 25.11. ausgenommen, 30.11. verschoben
+  assert.deepEqual(on('Training spät').map((x) => [x.date, x.start]), [['2026-11-30', '19:00']]);
+  assert.ok(!on('Abgesagt').length && !all.some((x) => x.title === 'Alarm'));
+  assert.deepEqual(on('Letzter Freitag').map((x) => x.date), ['2026-11-27', '2026-12-25', '2027-01-29']);
+  assert.ok(on('Täglich seit 2015').some((x) => x.date === '2026-06-01') && on('Täglich seit 2015').some((x) => x.date === '2027-02-28'));
+  assert.ok(['10.1.2.3', '127.0.0.1', '192.168.0.10', '172.20.0.1', '169.254.1.1', '100.64.1.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1'].every((ip) => !Ical.publicIp(ip)));
+  assert.ok(['8.8.8.8', '172.32.0.1', '2a00:1450:4001::1'].every((ip) => Ical.publicIp(ip)));
+  await assert.rejects(Ical.fetchIcs('https://localhost/x.ics'), /nicht erlaubt/);
+  await assert.rejects(Ical.fetchIcs('http://example.org/x.ics'), /https/);
+
   // 2. Startseiten-Daten
   const home = parseHome('<script>ASC.gsechash="g123";userhome({"userid":"Student42","a":"x);y"});\n\tASC.ready(1);\n</script>');
   assert.equal(home.data.userid, 'Student42');
@@ -485,7 +515,11 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.match((await (await post('/api/photos', {}, c2)).json()).error, /Pro/);
     assert.ok((await (await post(`/api/admin/accounts/${ben.id}`, { pro: true }, c1)).json()).accounts.find((a) => a.id === ben.id).pro);
     const pf = (await (await call('/api/data', {}, c2)).json()).features;
-    assert.ok(pf.photos && pf.wallpaper && pf.calendar);
+    assert.ok(pf.photos && pf.wallpaper && pf.calendar && pf.calendars);
+    // private Kalender: Link wird gleich geprüft, interne Adressen sind gesperrt
+    const bc = await post('/api/calendars', { name: 'Familie', url: 'https://localhost/familie.ics' }, c2);
+    assert.deepEqual([bc.status, (await bc.json()).error], [400, 'Diese Adresse ist nicht erlaubt.']);
+    assert.deepEqual((await (await call('/api/data', {}, c2)).json()).calendars, []);
     // Kalender-Abo (Pro): eigener Schlüssel, ohne Anmeldung lesbar, Widget-Schlüssel reicht nicht
     const tk = await (await call('/api/tokens', {}, c2)).json(), long = 'Ausflug zum Schloss Neuschwanstein mit Übernachtung, Busfahrt; Rückkehr spät';
     assert.ok(tk.calendar && tk.calendar !== tk.widget);
@@ -508,6 +542,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     await post(`/api/admin/accounts/${ben.id}`, { pro: false }, c1);
     assert.equal((await call(`/api/calendar.ics?key=${tk2.calendar}`)).status, 404); // ohne Pro kein Abo
     assert.ok(!(await (await call('/api/tokens', {}, c2)).json()).calendar);
+    assert.match((await (await post('/api/calendars', { name: 'x', url: 'https://example.org/a.ics' }, c2)).json()).error, /Pro/);
     // Schulsoftware wechseln: gespeichert beim Konto-Dienst. WebUntis nur echte Server, Suche ab 3 Zeichen, EduPage-Funktionen gibt es dort nicht
     const su = await (await post('/api/account', { school: 'untis' }, c2)).json();
     assert.deepEqual([su.school, su.link.connected, fakeAcc.list.find((a) => a.id === ben.id).school], ['untis', false, 'untis']);
