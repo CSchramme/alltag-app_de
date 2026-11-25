@@ -255,6 +255,10 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const base = `http://localhost:${port}`;
     const call = (p, o = {}) => fetch(base + p, { ...o, headers: { 'Content-Type': 'application/json', ...o.headers } });
     assert.equal((await call('/api/data')).status, 401);
+    // Demo und private App: nicht in Suchmaschinen
+    assert.equal(await (await call('/robots.txt')).text(), 'User-agent: *\nDisallow: /\n');
+    assert.equal((await call('/sitemap.xml')).status, 404);
+    assert.ok((await (await call('/')).text()).includes('<meta name="robots" content="noindex, nofollow">'));
     assert.equal((await call('/api/login', { method: 'POST', body: JSON.stringify({ password: 'falsch' }) })).status, 401);
     const login = await call('/api/login', { method: 'POST', body: JSON.stringify({ password: 'demo' }) });
     assert.equal(login.status, 200);
@@ -469,6 +473,12 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.ok(!fs.existsSync(path.join(dir2, 'accounts.json')) && JSON.parse(fs.readFileSync(path.join(dir2, 'seen.json'), 'utf8'))[fakeAcc.imported.accounts[0].id]);
     assert.deepEqual(await (await call('/api/info')).json(), { demo: false, accounts: true, accountsUrl: ACC });
     assert.ok((await (await call('/')).text()).includes('<html lang="de" data-skin="modern">')); // öffentliche Version: eigener Look
+    // öffentliche Version: auffindbar für Suchmaschinen und KI, Verwaltung und API nicht
+    const robots = await (await call('/robots.txt')).text(), sm = await (await call('/sitemap.xml')).text(), llms = await (await call('/llms.txt')).text();
+    assert.ok(robots.includes('Disallow: /admin') && robots.includes(`Sitemap: ${base}/sitemap.xml`) && sm.includes(`<loc>${base}/funktionen</loc>`) && llms.startsWith('# Alltag'));
+    const fx = await (await call('/funktionen')).text();
+    assert.ok(fx.includes('<meta name="robots" content="index, follow">') && fx.includes(`<link rel="canonical" href="${base}/funktionen">`) && fx.includes('"@type":"FAQPage"') && !fx.includes('{{'));
+    assert.ok((await (await call('/admin')).text()).includes('noindex'));
     const imp = await (await call('/impressum.html')).text(); // Angaben aus Plesk-Variablen, sicher eingesetzt; fehlende sichtbar markiert
     assert.ok(imp.includes('Max &#60;Muster&#62;') && imp.includes('noch eintragen: LEGAL_EMAIL') && !imp.includes('{{'));
     assert.ok((await (await call('/datenschutz.html')).text()).includes('PEIN GbR'));

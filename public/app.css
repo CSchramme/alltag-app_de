@@ -835,6 +835,8 @@ button.banner { display: flex; text-align: left; }
 .hero-points { display: flex; flex-wrap: wrap; gap: 8px; margin: 26px 0 0; padding: 0; list-style: none; }
 .hero-points li { padding: 8px 12px; border-radius: 10px; font-size: 14px; font-weight: 500; color: var(--label);
   background: var(--card); box-shadow: 0 0 0 1px var(--card-edge), var(--shadow-card); }
+.hero-more { margin: 18px 0 0; font-size: 15px; font-weight: 600; }
+.hero-more a { color: var(--blue); text-decoration: none; }
 .hero-points li::before { content: "✓"; margin-right: 7px; font-weight: 700; color: var(--green); }
 :root[data-skin="modern"] .login-card { border-radius: 20px; text-align: left; padding: 28px 24px 22px; }
 :root[data-skin="modern"] .login-card .app-icon { margin: 0 0 14px; width: 56px; height: 56px; border-radius: 14px; }

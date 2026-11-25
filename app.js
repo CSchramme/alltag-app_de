@@ -1477,10 +1477,44 @@ const legal = (html) => html.replace(/\{\{(LEGAL_[A-Z_]+)\}\}/g, (m, k) => {
   return v ? escHtml(v).replace(/\n/g, '<br>') : `<mark>noch eintragen: ${k}</mark>`;
 });
 
+// Gefunden werden (Google, Bing, KI-Assistenten): nur die öffentliche Version, nicht die private App oder die Demo-Instanz.
+// robots.txt, sitemap.xml und llms.txt liegen bewusst nicht in public/, damit sie je Instanz passen.
+const indexable = () => ACCOUNTS && !DEMO;
+const siteUrl = (req) => (process.env.PUBLIC_URL || `${https(req) ? 'https' : 'http'}://${req.headers.host}`).replace(/\/+$/, '');
+const SITE_PAGES = ['/', '/funktionen', '/beta', '/impressum.html', '/datenschutz.html'];
+function seoFile(req, res, pathname) {
+  const site = siteUrl(req), txt = (type, body) => { res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8`, 'Cache-Control': 'public, max-age=3600' }); res.end(body); };
+  if (pathname === '/robots.txt') {
+    return txt('text/plain', indexable() ? `User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /admin\nDisallow: /poll/\nAllow: /poll/anmeldung\n\nSitemap: ${site}/sitemap.xml\n` : 'User-agent: *\nDisallow: /\n');
+  }
+  if (!indexable()) return send(res, 404, 'Not Found');
+  if (pathname === '/sitemap.xml') {
+    return txt('application/xml', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${SITE_PAGES.map((p) => `  <url><loc>${site}${p}</loc></url>`).join('\n')}\n</urlset>\n`);
+  }
+  return txt('text/markdown', `# Alltag
+
+> Kostenlose Schul-App (Web-App) für Schülerinnen und Schüler: Stundenplan, Vertretungen, Hausaufgaben, Prüfungen, Termine und Noten in einer App. Funktioniert mit EduPage, WebUntis und Schulmanager Online oder mit selbst eingetragenem Stundenplan. Unabhängiges Schülerprojekt für Jugend forscht 2027, zurzeit in der Beta (Zugang mit Einladungscode).
+
+## Seiten
+- [Funktionen und häufige Fragen](${site}/funktionen): Was Alltag kann, welche Schulsoftware unterstützt wird, Antworten auf häufige Fragen
+- [Beta-Tester werden](${site}/beta): Anmeldung für den Beta-Test, danach kommt ein Einladungscode per Mail
+- [Datenschutz](${site}/datenschutz.html) und [Impressum](${site}/impressum.html)
+
+## Kurz erklärt
+- Stundenplan mit Vertretungen, Raumwechseln und Entfall; Mitteilung aufs Handy, wenn sich etwas ändert
+- Hausaufgaben zum Abhaken, Lernplan 7, 3 und 1 Tag vor Prüfungen, Lernzeit-Timer
+- Eigene Termine, Erinnerungen, Geburtstage und selbst eingetragene Noten mit Schnitt und Wunschnoten-Rechner
+- Nachrichten der Schule (bei EduPage auch antworten und abstimmen)
+- Web-App für iPhone, Android und PC (über „Zum Home-Bildschirm“), Widget und Siri-Kurzbefehle fürs iPhone
+- Kostenlos und ohne Werbung; Schulpasswörter werden verschlüsselt gespeichert
+- Alltag gehört nicht zu EduPage, Untis oder Schulmanager Online
+`);
+}
+
 // Die HTML-Seiten liegen in pages/, nicht in public/: Plesk liefert alles in public/ direkt über nginx aus, an der App vorbei.
 // Dann fehlten Look, Impressum-Angaben und Sicherheits-Header. Nur die App liefert sie deshalb aus.
 const PAGES = path.join(__dirname, 'pages');
-const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/admin': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html', '/beta': 'beta.html',
+const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/admin': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html', '/beta': 'beta.html', '/funktionen': 'funktionen.html',
   // Kurz-Links für den Beta-Test (Flyer, Gruppen-Chat): Anmeldung ohne Konto, der Rest öffnet das Formular in der App
   '/poll/anmeldung': 'beta.html', '/poll/fehler': 'index.html', '/poll/verbesserung': 'index.html', '/poll/rueckmeldung': 'index.html' };
 function serveStatic(req, res, pathname) {
@@ -1502,7 +1536,7 @@ function serveStatic(req, res, pathname) {
         try { v = Math.floor(fs.statSync(path.join(PUBLIC, f)).mtimeMs).toString(36); } catch { /* Datei fehlt: ohne Version */ }
         return `${q}/${f}?v=${v}${q}`;
       });
-      buf = Buffer.from(legal(html));
+      buf = Buffer.from(legal(html).replace(/\{\{SITE_URL\}\}/g, siteUrl(req)).replace(/\{\{ROBOTS\}\}/g, indexable() && pathname !== '/admin' ? 'index, follow' : 'noindex, nofollow'));
     }
     res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
       ...(https(req) ? { 'Strict-Transport-Security': 'max-age=31536000' } : {}), // Browser nutzt danach immer HTTPS
@@ -1534,6 +1568,7 @@ const server = http.createServer(async (req, res) => {
     if (ACCOUNTS && url.pathname === '/auth/callback' && req.method === 'GET') return await authCallback(req, res, url.searchParams);
     if (!url.pathname.startsWith('/api/')) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method Not Allowed');
+      if (['/robots.txt', '/sitemap.xml', '/llms.txt'].includes(url.pathname)) return seoFile(req, res, url.pathname);
       return serveStatic(req, res, url.pathname);
     }
     if (url.pathname === '/api/ping') return send(res, 200, 'ok'); // Selbst-Wachhalten, verrät nichts
