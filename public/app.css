@@ -620,6 +620,49 @@ button.banner { display: flex; text-align: left; }
 
 /* ---------------------------------------------------------------- Woche wechseln */
 .week-nav { display: flex; align-items: center; gap: 10px; margin: -4px 0 14px; }
+/* Kalender: Woche/Monat und Drucken */
+.cal-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -6px 0 14px; flex-wrap: wrap; }
+.cal-tools { flex-wrap: nowrap; }
+.cal-tools .billing { margin: 0; flex: 0 1 220px; }
+.print-btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.print-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.month .wd { padding: 2px 0 4px; font-size: 12px; font-weight: 600; text-align: center; color: var(--label2); }
+.mday { display: flex; flex-direction: column; align-items: stretch; gap: 3px; min-width: 0; min-height: 76px; padding: 6px 4px; overflow: hidden;
+  font: inherit; color: var(--label); text-align: left; background: var(--card); border: 0; border-radius: 10px; box-shadow: 0 0 0 1px var(--sep); cursor: pointer; }
+.mday.out { opacity: .4; }
+.mday.off { background: color-mix(in srgb, var(--green) 11%, var(--card)); }
+.mday .n { align-self: flex-start; min-width: 22px; padding: 0 5px; font-size: 13px; font-weight: 700; line-height: 20px; text-align: center; border-radius: 999px; }
+.mday.today .n { color: #fff; background: var(--blue); }
+.mday .hol { font-size: 10px; font-weight: 600; color: var(--green); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mday .e { padding: 1px 4px; font-size: 10.5px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 5px;
+  color: color-mix(in srgb, var(--c) 70%, var(--label)); background: color-mix(in srgb, var(--c) 18%, transparent); }
+.mday .more { font-size: 10px; color: var(--label2); }
+@media (min-width: 900px) { .month { gap: 6px; } .mday { min-height: 112px; padding: 8px 6px; } .mday .e { font-size: 12px; } }
+@media (max-width: 599px) { /* schmal: Farbbalken statt abgeschnittenem Text */
+  .mday { min-height: 62px; border-radius: 10px; }
+  .mday .e { height: 5px; padding: 0; font-size: 0; border-radius: 3px; background: var(--c); }
+  .mday .hol { font-size: 0; height: 3px; border-radius: 2px; background: var(--green); }
+  .mday .more { font-size: 9px; line-height: 1; }
+}
+/* Stundenplan drucken (A4 quer); alles andere ist beim Drucken weg */
+#print-area { display: none; }
+@media print {
+  @page { size: A4 landscape; margin: 12mm; }
+  html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+  body > *:not(#print-area) { display: none !important; }
+  #print-area { display: block; color: #000; font: 10.5pt/1.3 -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  #print-area h1 { margin: 0; font-size: 20pt; }
+  #print-area header p { margin: 1mm 0 5mm; color: #444; }
+  #print-area table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  #print-area th, #print-area td { padding: 1.6mm; vertical-align: top; text-align: left; border: .3mm solid #c4c9d6; }
+  #print-area thead th { background: #eef1f8; font-size: 11pt; }
+  #print-area tbody th { width: 17mm; font-size: 12pt; }
+  #print-area small { display: block; font-size: 8pt; font-weight: 400; color: #555; }
+  #print-area .pl { padding-left: 2mm; border-left: 1.2mm solid var(--c); }
+  #print-area .pl + .pl { margin-top: 1.5mm; }
+  #print-area footer { margin-top: 4mm; font-size: 8pt; color: #777; }
+}
 .week-nav .circle { width: 38px; height: 38px; color: var(--blue); }
 .week-nav .circle svg { width: 18px; height: 18px; stroke-width: 2.6; }
 .week-range { font-size: 17px; font-weight: 600; letter-spacing: -.43px; font-variant-numeric: tabular-nums; }

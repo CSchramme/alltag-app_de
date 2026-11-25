@@ -147,6 +147,7 @@ let planDay = null;
 // Kalenderwoche Mo–So; am Wochenende zeigt der Kalender schon die kommende Woche
 const mondayOf = (iso) => addDays(iso, -((parseDay(iso).getDay() + 6) % 7));
 let weekStart = null;
+let calMode = store.get('cal-mode', 'week'), monthStart = null; // Kalender als Woche oder Monat (pro Gerät gemerkt)
 const defaultWeek = () => mondayOf(addDays(today(), [0, 6].includes(now().getDay()) ? 2 : 0));
 const calWeek = () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 const extraDays = new Map(); // nachgeladene Tage anderer Wochen
@@ -954,14 +955,74 @@ function dayPage(date) {
     <button class="add-row pressable" data-new-event="${date}">+ Termin</button>`;
 }
 
+const calTools = () => `<div class="cal-tools"><div class="billing cal-mode" role="group" aria-label="Ansicht">${[['week', 'Woche'], ['month', 'Monat']]
+  .map(([k, l]) => `<button type="button" data-calmode="${k}" aria-pressed="${calMode === k}">${l}</button>`).join('')}</div>
+  <button class="btn-plain pressable print-btn" type="button" data-print aria-label="Stundenplan drucken oder als PDF sichern"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 9V4h10v5M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v6H7z"/></svg>Drucken</button></div>`;
+const F_MONTH = new Intl.DateTimeFormat('de-DE', { month: 'long', year: 'numeric' });
+const shiftMonth = (n) => { const d = parseDay(monthStart); return isoDay(new Date(d.getFullYear(), d.getMonth() + n, 1)); };
+function monthItems(date) { // was im Monatsfeld steht: Prüfungen, eigene Termine, verbundene Kalender, Geburtstage
+  return [
+    ...S().tasks.filter((t) => t.kind === 'exam' && t.due === date).map((t) => ({ c: 'var(--red)', t: [t.label, t.subject].filter(Boolean).join(' ') || t.title })),
+    ...D.db.events.filter((e) => Recur.occursOn(e, date)).map((e) => ({ c: CAT[e.category] || CAT.privat, t: e.title })),
+    ...(D.ical || []).filter((x) => x.date === date).map((x) => ({ c: `var(--${calOf(x.cal)?.color || 'orange'})`, t: x.title })),
+    ...(D.db.birthdays || []).filter((b) => Recur.birthdayOn(b, date)).map((b) => ({ c: 'var(--pink)', t: b.name })),
+  ];
+}
+function renderMonth() {
+  monthStart ??= `${today().slice(0, 7)}-01`;
+  planSeg = null; // Tag-Umschalter gibt es nur in der Wochenansicht
+  const v = $('#view-kalender'), first = parseDay(monthStart), m = first.getMonth(), cur = `${today().slice(0, 7)}-01`;
+  const end = addDays(mondayOf(isoDay(new Date(first.getFullYear(), m + 1, 0))), 6), off = (d) => (D.holidays || []).find((h) => h.start <= d && d <= h.end);
+  const cells = [];
+  for (let d = mondayOf(monthStart); d <= end; d = addDays(d, 1)) cells.push(d);
+  v.innerHTML = `${largeTitle('Kalender', 'Monat')}${calTools()}
+    <div class="week-nav">
+      <button class="glass circle pressable" data-month="-1" aria-label="Vorheriger Monat"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="week-range">${esc(F_MONTH.format(first))}</div>
+      <button class="glass circle pressable" data-month="1" aria-label="Nächster Monat"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+      ${monthStart !== cur ? '<button class="today-pill glass pressable" data-month="0">Heute</button>' : ''}
+    </div>
+    <div class="month">${['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map((w) => `<div class="wd">${w}</div>`).join('')}
+    ${cells.map((d) => {
+      const items = monthItems(d), h = off(d), dt = parseDay(d);
+      return `<button type="button" class="mday${dt.getMonth() !== m ? ' out' : ''}${d === today() ? ' today' : ''}${h ? ' off' : ''}" data-month-day="${d}"
+        aria-label="${esc(F.long.format(dt))}${items.length ? `, ${items.length} ${items.length === 1 ? 'Eintrag' : 'Einträge'}` : ''}${h ? `, ${holidayLabel(h.name)}` : ''}">
+        <span class="n">${dt.getDate()}</span>${h && (d === h.start || dt.getDay() === 1) ? `<span class="hol">${esc(holidayLabel(h.name))}</span>` : ''}
+        ${items.slice(0, 3).map((x) => `<span class="e" style="--c:${x.c}">${esc(x.t)}</span>`).join('')}${items.length > 3 ? `<span class="more">+${items.length - 3}</span>` : ''}</button>`;
+    }).join('')}</div>
+    <p class="footnote" style="text-align:left">Tippe auf einen Tag, dann siehst du die Woche mit allen Stunden.</p>`;
+}
+
+// Stundenplan der Woche (wie das Sperrbildschirm-Bild) als Druckseite; im Druckdialog geht auch „Als PDF sichern“
+async function printPlan() {
+  const week = await wallWeek(), byPeriod = week.every((d) => d.lessons.every((l) => l.period)), key = (l) => (byPeriod ? l.period : l.start);
+  const keys = [...new Set(week.flatMap((d) => d.lessons.map(key)))].sort((a, b) => (byPeriod ? a - b : String(a).localeCompare(String(b))));
+  if (!keys.length) return toast('In dieser Woche ist kein Unterricht eingetragen.');
+  const css = getComputedStyle(document.documentElement), tone = (s) => css.getPropertyValue(colorOf(s).slice(4, -1)).trim() || '#2e6bf0', st = S().student || {};
+  const area = document.createElement('div');
+  area.id = 'print-area';
+  area.innerHTML = `<header><h1>Stundenplan</h1><p>${esc([st.name || D.account?.name, st.class && `Klasse ${st.class}`, `Woche ab ${F.long.format(parseDay(week[0].date))}`].filter(Boolean).join(' · '))}</p></header>
+    <table><thead><tr><th></th>${week.map((d) => `<th>${esc(F.wd.format(parseDay(d.date)))}</th>`).join('')}</tr></thead><tbody>
+    ${keys.map((k) => {
+      const first = week.flatMap((d) => d.lessons.filter((l) => key(l) === k).map((l) => `${l.start}–${l.end}`)).sort()[0] || '';
+      return `<tr><th>${byPeriod ? `${k}.` : ''}<small>${esc(first)}</small></th>${week.map((d) => `<td>${d.lessons.filter((l) => key(l) === k).map((l) => `<div class="pl" style="--c:${tone(l.subject)}"><b>${esc(l.subject)}</b><small>${esc([l.rooms?.join(' '), l.teachers?.join(', ')].filter(Boolean).join(' · '))}</small></div>`).join('')}</td>`).join('')}</tr>`;
+    }).join('')}</tbody></table>
+    <footer>Erstellt mit Alltag · alltag-app.de · Stand ${esc(F.short.format(new Date()))}. Vertretungen dieser Woche sind schon eingerechnet.</footer>`;
+  document.getElementById('print-area')?.remove();
+  document.body.append(area);
+  addEventListener('afterprint', () => area.remove(), { once: true });
+  window.print();
+}
+
 function renderKalender() {
+  if (calMode === 'month') return renderMonth();
   weekStart ??= defaultWeek();
   const v = $('#view-kalender'), days = calWeek(), first = parseDay(days[0]), last = parseDay(days[6]);
   const range = first.getMonth() === last.getMonth() ? `${first.getDate()}. – ${F.dayMonth.format(last)}` : `${F.dayMonth.format(first)} – ${F.dayMonth.format(last)}`;
   // leeres Wochenende schmal, damit die Schultage am PC Platz haben
   const emptyWeekend = days.slice(5).every((d) => !agenda(d).length);
   v.innerHTML = `
-    ${largeTitle('Kalender', `KW ${isoWeek(first)}`)}
+    ${largeTitle('Kalender', `KW ${isoWeek(first)}`)}${calTools()}
     <div class="week-nav">
       <button class="glass circle pressable" data-week="-1" aria-label="Vorherige Woche"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
       <div class="week-range">${esc(range)}</div>
@@ -1251,8 +1312,9 @@ scrim.addEventListener('click', () => closeSheet());
 $('.sheet-close', sheet).addEventListener('click', () => closeSheet());
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') return closeSheet();
-  // Kalender: Pfeiltasten wechseln die Woche
+  // Kalender: Pfeiltasten wechseln die Woche bzw. den Monat
   if (tab !== 'kalender' || sheetOpen || !/^Arrow(Left|Right)$/.test(e.key) || e.target.closest?.('input, textarea')) return;
+  if (calMode === 'month') { monthStart = shiftMonth(e.key === 'ArrowRight' ? 1 : -1); return renderKalender(); }
   shiftWeek(e.key === 'ArrowRight' ? 1 : -1);
 });
 
@@ -2863,7 +2925,7 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-vote],[data-ical],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-plans],[data-umfrage]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-calmode],[data-month],[data-month-day],[data-print],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-vote],[data-ical],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-plans],[data-umfrage]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (el.id === 'me' || 'settings' in ds) return openSettings();
@@ -2873,6 +2935,10 @@ document.addEventListener('click', async (e) => {
   if (el.id === 'add') return ADD[tab]();
   if (el.id === 'search') return openSearch();
   if (ds.week !== undefined) return shiftWeek(Number(ds.week));
+  if (ds.calmode) { calMode = ds.calmode; store.set('cal-mode', calMode); haptic(); return renderKalender(); }
+  if (ds.month !== undefined) { monthStart = ds.month === '0' ? null : shiftMonth(Number(ds.month)); haptic(); return renderKalender(); }
+  if (ds.monthDay) { calMode = 'week'; store.set('cal-mode', 'week'); weekStart = mondayOf(ds.monthDay); planDay = ds.monthDay; haptic(); renderKalender(); return syncPlan(); }
+  if ('print' in ds) return printPlan();
   if ('bells' in ds) return openBells();
   if ('screen' in ds) return openScreen();
   if (ds.bday) return birthdayForm(D.db.birthdays.find((x) => x.id === ds.bday));
@@ -2908,7 +2974,7 @@ document.addEventListener('click', async (e) => {
   if (ds.subject) return openSubject(ds.subject);
   if (ds.grade) return gradeForm(D.db.grades.find((x) => x.id === ds.grade));
   if (ds.newGrade) return gradeForm(null, ds.newGrade);
-  if (ds.planDay) { closeSheet(); planDay = ds.planDay; weekStart = mondayOf(ds.planDay); renderKalender(); selectTab('kalender'); return syncPlan(); }
+  if (ds.planDay) { closeSheet(); calMode = 'week'; planDay = ds.planDay; weekStart = mondayOf(ds.planDay); renderKalender(); selectTab('kalender'); return syncPlan(); }
   if ('toggleDone' in ds) { showDone = !showDone; return renderTaskList(); }
   if ('editEdu' in ds) { sheet.dataset.editEdu = '1'; $('#edu-section').innerHTML = edupageSection(); return wireEduForm(); }
   if ('disconnect' in ds) {
