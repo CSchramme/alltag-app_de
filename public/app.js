@@ -422,6 +422,14 @@ function openBells() {
   }).join('')}</div>`);
 }
 const holidayLabel = (n) => n || 'Ferien';
+function examCard() { // nächste Prüfung der kommenden 3 Wochen, Antippen öffnet sie
+  const t = today(), x = S().tasks.filter((e) => e.kind === 'exam' && e.due >= t && !e.done).sort((a, b) => a.due.localeCompare(b.due))[0];
+  const n = x ? daysBetween(t, x.due) : 99;
+  if (n > 21) return '';
+  const what = [x.label, x.subject].filter(Boolean).join(' ') || 'Prüfung';
+  return `<button class="card holiday exam pressable" type="button" data-edu-task="${esc(x.id)}"><div class="big">${n || '!'}</div>
+    <div class="main"><div class="title">${n === 0 ? `Heute: ${esc(what)}` : `${n === 1 ? 'Tag' : 'Tage'} bis ${esc(what)}`}</div><div class="sub">${esc([x.title !== what && x.title, F.short.format(parseDay(x.due))].filter(Boolean).join(' · '))}</div></div></button>`;
+}
 function holidayCard() {
   const list = D.holidays || [], t = today(), off = (d) => list.some((h) => h.start <= d && d <= h.end);
   const cur = list.find((h) => h.start <= t && t <= h.end);
@@ -872,6 +880,7 @@ function renderHeute() {
       ${wayCard()}
       ${ticketRow()}
       ${holidayCard()}
+      ${examCard()}
       ${changes.length ? section('Vertretungen') + `<div class="list card">${changes.join('')}</div>` : ''}
       ${show ? section(show === t ? 'Tagesablauf' : dayName(show), 'kalender') + `<div class="list card">${agendaList(show)}</div>` : ''}
     </div><div class="col">
@@ -1157,8 +1166,9 @@ function sheetTo(target, { velocity, damping = 1, response = 0.42, done } = {}) 
   sheetAnim?.stop();
   sheetAnim = spring({ from: sheetY, to: target, velocity: v, damping, response, onUpdate: sheetSet, onRest: done });
 }
-function openSheet(title, html) {
+function openSheet(title, html, { wide = false } = {}) {
   $('#sheet-title').textContent = title;
+  sheet.classList.toggle('wide', wide); // am PC breiter für viel Inhalt
   sheetBody.innerHTML = html;
   sheetBody.scrollTop = 0;
   if (sheetOpen) { sheetBody.classList.remove('swap'); void sheetBody.offsetWidth; sheetBody.classList.add('swap'); return; }
@@ -2320,7 +2330,7 @@ function openPlans() {
     <div class="pro-hero"><h2>Mehr aus deinem <span class="pro-grad">Schultag</span> holen</h2><p>Alles für die Schule bleibt kostenlos. Pro gibt dir die Extras.</p></div>
     <div class="billing" role="group" aria-label="Zahlweise"><button type="button" data-bill="month">Monatlich</button><button type="button" data-bill="year">Jährlich <i>−${save} %</i></button></div>
     <div id="plans-body" class="plans"></div>
-    <p class="footnote" style="text-align:left">Alltag Pro kann man noch nicht kaufen. Preise inklusive Mehrwertsteuer, sie können sich bis zum Start noch ändern.</p>`);
+    <p class="footnote" style="text-align:left">Alltag Pro kann man noch nicht kaufen. Preise inklusive Mehrwertsteuer, sie können sich bis zum Start noch ändern.</p>`, { wide: true });
   const render = () => {
     $$('#sheet [data-bill]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.bill === billing)));
     $('#plans-body').innerHTML = Object.entries(p.list).map(([k, x]) => {

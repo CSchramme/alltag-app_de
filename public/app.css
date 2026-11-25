@@ -526,6 +526,8 @@ button.banner { display: flex; text-align: left; }
 .holiday { display: flex; align-items: center; gap: 14px; margin-top: 12px; padding: 14px 18px; }
 .holiday .big { min-width: 44px; font-size: 34px; line-height: 38px; font-weight: 700; letter-spacing: -.022em; font-variant-numeric: tabular-nums; color: var(--indigo); }
 .holiday .title { font-weight: 600; }
+.holiday.exam { width: 100%; text-align: left; font: inherit; color: inherit; border: 0; cursor: pointer; }
+.holiday.exam .big { color: var(--red); }
 
 /* ---------------------------------------------------------------- Schulweg: Wetter und Verbindungen */
 .way { margin-top: 12px; padding-top: 14px; overflow: hidden; }
@@ -757,7 +759,8 @@ button.banner { display: flex; text-align: left; }
   #view-kalender .lesson .num, #view-kalender .row .chev { display: none; }
   #view-kalender .lesson .time { width: 40px; }
   #view-kalender .break { padding-left: 12px; }
-  #sheet { top: 6vh; bottom: 6vh; max-width: 620px; border-radius: 38px; box-shadow: inset 0 1px .5px var(--rim), 0 24px 80px rgba(20, 28, 60, .28); }
+  #sheet.wide { max-width: min(1080px, 94vw); } /* viel Inhalt (Plan-Auswahl): breiter */
+  #sheet { top: 6vh; bottom: 6vh; max-width: 760px; border-radius: 38px; box-shadow: inset 0 1px .5px var(--rim), 0 24px 80px rgba(20, 28, 60, .28); }
   .sheet-body { padding-bottom: 28px; }
 }
 
