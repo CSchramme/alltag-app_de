@@ -2250,8 +2250,8 @@ function openAcc(a, password) {
     ${self ? '<p class="footnote" style="text-align:left">Das ist dein eigenes Konto. E-Mail, Passwort und Löschen findest du auf der Konto-Seite (Profil → Konto verwalten).</p>'
       : group('<button class="row" data-do="reset"><span class="btn-plain">Passwort zurücksetzen</span></button>',
         a.demo ? '' : `<button class="row" data-do="admin"><span class="btn-plain">${a.admin ? 'Admin-Rechte entziehen' : 'Zum Admin machen'}</span></button>`,
-        a.demo || a.admin ? '' : `<div class="row"><div class="main"><div class="title">Plan: ${esc(adminState?.plans?.list[a.plan]?.name || 'Kostenlos')}</div>
-          <div class="code-actions">${Object.entries(adminState?.plans?.list || {}).filter(([k]) => k !== a.plan).map(([k, p]) => `<button class="btn-plain" type="button" data-plan="${k}">${esc(p.name)}</button>`).join('')}</div></div></div>`,
+        a.demo || a.admin ? '' : `<div class="row"><div class="main"><div class="title">Abo-Plan</div><div class="sub">Für den Nutzer noch unsichtbar, schaltet die Pro-Funktionen frei.</div>
+          <div class="plan-pick" role="group" aria-label="Abo-Plan">${Object.entries(adminState?.plans?.list || {}).map(([k, p]) => `<button type="button" data-plan="${k}" aria-pressed="${k === (a.plan || 'free')}">${esc(p.name)}</button>`).join('')}</div></div></div>`,
         a.demo ? `<button class="row" data-do="jury"><span class="btn-plain">${a.jury ? 'Jugend-forscht-Kennzeichnung entfernen' : 'Als „Jugend forscht Version · Full Access“ kennzeichnen'}</span></button>` : '',
         a.demo ? '<button class="row" data-do="resetDemo"><span class="btn-plain">Demo-Daten zurücksetzen</span></button>' : '',
         a.admin ? '' : `<button class="row" data-do="demo"><span class="btn-plain">${a.demo ? 'Demo-Konto beenden' : 'Als Demo-Konto einrichten'}</span></button>`,
@@ -2264,6 +2264,7 @@ function openAcc(a, password) {
   const url = `/api/admin/accounts/${encodeURIComponent(a.id)}`;
   $$('#sheet [data-plan]').forEach((b) => {
     b.onclick = async () => {
+      if (b.getAttribute('aria-pressed') === 'true') return;
       try { const d = await api(url, { method: 'POST', body: { plan: b.dataset.plan } }); haptic(); openAdmin(d); openAcc(d.accounts.find((x) => x.id === a.id)); } catch (x) { toast(x.message); }
     };
   });
