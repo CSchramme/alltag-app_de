@@ -57,7 +57,7 @@ const ICONS = {
 const icon = (k) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${ICONS[k]}</svg>`;
 const panel = (title, sub, body, cls = '') => `<section class="panel ${cls}">${title ? `<h2>${title}</h2>` : ''}${sub ? `<p class="sub">${sub}</p>` : ''}${body}</section>`;
 const list = (rows, empty) => (rows.length ? `<div class="list">${rows.join('')}</div>` : `<p class="empty">${esc(empty)}</p>`);
-const row = (title, sub = '', trail = '') => `<div class="row"><div class="main"><div class="title">${title}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>${trail ? `<div class="trail">${trail}</div>` : ''}</div>`;
+const row = (title, sub = '', trail = '') => `<div class="row"><div class="main"><div class="title">${title}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>${trail !== '' ? `<div class="trail">${trail}</div>` : ''}</div>`; // 0 zeigen
 const linkRow = (attrs, title, sub = '') => `<button class="row" type="button" ${attrs}><div class="main"><div class="title">${title}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>${icon('chev')}</button>`;
 const field = (name, label, value = '', attrs = '') => `<label class="field"><span>${esc(label)}</span><input name="${name}" value="${esc(value)}" ${attrs}></label>`;
 const area = (name, label, value = '', rows = 3) => `<label class="field"><span>${esc(label)}</span><textarea name="${name}" rows="${rows}">${esc(value)}</textarea></label>`;
