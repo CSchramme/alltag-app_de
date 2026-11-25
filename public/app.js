@@ -2136,6 +2136,7 @@ async function openAdmin(data) {
       <section class="card admin-card wide" id="adm-fb"><h2>Rückmeldungen</h2><p class="sub">Lädt …</p></section>
       <section class="card admin-card wide" id="adm-um"><h2>Abschlussumfrage</h2><p class="sub">Lädt …</p></section>
       <section class="card admin-card wide" id="adm-oidc"><h2>Anmelden mit Alltag</h2><p class="sub">Lädt …</p></section>
+      ${plansSection(data.plans)}
       <section class="card admin-card">
         <h2>Flyer (A6, doppelseitig)</h2>
         <p class="sub">Ein Code für alle Flyer: Er gilt für die gewählte Zahl an Anmeldungen und bis zum Ablaufdatum. Du bekommst eine ZIP-Datei mit Vorder- und Rückseite als Bild (z. B. für den dm-Fotodruck) und eine Druck-PDF für Druckereien.</p>
@@ -2176,7 +2177,7 @@ async function openAdmin(data) {
       <section class="card admin-card wide">
         <h2>Konten (${data.accounts.length})</h2>
         ${group(`<label class="field"><input id="acc-q" type="search" placeholder="Name oder Support-ID" autocomplete="off" autocapitalize="off" spellcheck="false"></label>`)}
-        <div class="list card" id="acc-list">${data.accounts.map((a) => `<button class="row" data-acc="${esc(a.id)}" data-q="${esc(`${a.name} ${a.support} ${a.support.replace('-', '')}`.toLowerCase())}"><div class="main"><div class="title">${esc(a.name)}${a.admin ? ' · Admin' : a.pro ? ' · Pro' : ''}${a.jury ? ' · Jugend forscht' : a.demo ? ' · Demo' : ''}${a.disabled ? ' · gesperrt' : ''}</div>
+        <div class="list card" id="acc-list">${data.accounts.map((a) => `<button class="row" data-acc="${esc(a.id)}" data-q="${esc(`${a.name} ${a.support} ${a.support.replace('-', '')}`.toLowerCase())}"><div class="main"><div class="title">${esc(a.name)}${a.admin ? ' · Admin' : a.plan && a.plan !== 'free' && !a.demo ? ` · ${esc(data.plans?.list[a.plan]?.name || 'Pro')}` : ''}${a.jury ? ' · Jugend forscht' : a.demo ? ' · Demo' : ''}${a.disabled ? ' · gesperrt' : ''}</div>
           <div class="sub"><span class="code">${esc(a.support)}</span> · ${esc(schoolName(a.school))} · ${a.lastSeen ? `aktiv ${esc(ago(a.lastSeen))}` : `angelegt ${esc(ago(a.created))}`}</div></div>${ICON.chev}</button>`).join('')}</div>
       </section>
       ${used.length ? `<section class="card admin-card wide"><h2>Zuletzt eingelöste Einladungen</h2>${group(...used.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shownCode(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} → ${esc(nameOf(i.usedBy))}</div></div></div>`))}</section>` : ''}
@@ -2249,7 +2250,8 @@ function openAcc(a, password) {
     ${self ? '<p class="footnote" style="text-align:left">Das ist dein eigenes Konto. E-Mail, Passwort und Löschen findest du auf der Konto-Seite (Profil → Konto verwalten).</p>'
       : group('<button class="row" data-do="reset"><span class="btn-plain">Passwort zurücksetzen</span></button>',
         a.demo ? '' : `<button class="row" data-do="admin"><span class="btn-plain">${a.admin ? 'Admin-Rechte entziehen' : 'Zum Admin machen'}</span></button>`,
-        a.demo || a.admin ? '' : `<button class="row" data-do="pro"><span class="btn-plain">${a.pro ? 'Pro wieder sperren' : 'Pro freischalten'}</span></button>`,
+        a.demo || a.admin ? '' : `<div class="row"><div class="main"><div class="title">Plan: ${esc(adminState?.plans?.list[a.plan]?.name || 'Kostenlos')}</div>
+          <div class="code-actions">${Object.entries(adminState?.plans?.list || {}).filter(([k]) => k !== a.plan).map(([k, p]) => `<button class="btn-plain" type="button" data-plan="${k}">${esc(p.name)}</button>`).join('')}</div></div></div>`,
         a.demo ? `<button class="row" data-do="jury"><span class="btn-plain">${a.jury ? 'Jugend-forscht-Kennzeichnung entfernen' : 'Als „Jugend forscht Version · Full Access“ kennzeichnen'}</span></button>` : '',
         a.demo ? '<button class="row" data-do="resetDemo"><span class="btn-plain">Demo-Daten zurücksetzen</span></button>' : '',
         a.admin ? '' : `<button class="row" data-do="demo"><span class="btn-plain">${a.demo ? 'Demo-Konto beenden' : 'Als Demo-Konto einrichten'}</span></button>`,
@@ -2260,6 +2262,11 @@ function openAcc(a, password) {
   const pwBtn = $('#sheet [data-copy-pw]');
   if (pwBtn) pwBtn.onclick = () => copy(password, $('#acc-hint'));
   const url = `/api/admin/accounts/${encodeURIComponent(a.id)}`;
+  $$('#sheet [data-plan]').forEach((b) => {
+    b.onclick = async () => {
+      try { const d = await api(url, { method: 'POST', body: { plan: b.dataset.plan } }); haptic(); openAdmin(d); openAcc(d.accounts.find((x) => x.id === a.id)); } catch (x) { toast(x.message); }
+    };
+  });
   $$('#sheet [data-do]').forEach((b) => {
     b.onclick = async () => {
       const act = b.dataset.do;
@@ -2292,6 +2299,15 @@ const formRows = (id, x) => Formulare.FORMS[id].filter((f) => f.name && x[f.name
 const bars = (counts, total) => Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="row"><div class="main"><div class="title">${esc(k)}</div>
   <div class="meter" aria-hidden="true"><i style="width:${total ? Math.round((v / total) * 100) : 0}%"></i></div></div><div class="trail">${v}${total ? ` · ${Math.round((v / total) * 100)} %` : ''}</div></div>`).join('');
 
+// Abo-Pläne: nur hier sichtbar, solange man Pro nicht kaufen kann
+function plansSection(p) {
+  if (!p) return '';
+  const euro = (n) => (n ? `${n.toFixed(2).replace('.', ',')} €` : '–');
+  return `<section class="card admin-card wide"><h2>Abo-Pläne (noch versteckt)</h2>
+    <p class="sub">Für Nutzer unsichtbar und noch nicht kaufbar. Den Plan eines Kontos setzt du beim Konto. Admins und Demo-Konten haben alles.</p>
+    ${group(...Object.values(p.list).map((x) => `<div class="row"><div class="main"><div class="title">${esc(x.name)}${x.month ? ` · ${euro(x.month)} im Monat · ${euro(x.year)} im Jahr` : ''}${x.accounts > 1 ? ` · bis ${x.accounts} Konten` : ''}</div>
+      <div class="sub">${x.features.length ? x.features.map((f) => esc(p.features[f] + (p.soon.includes(f) ? ' (geplant)' : ''))).join(' · ') : 'Alles für den Schultag'}</div></div></div>`))}</section>`;
+}
 // Anmelden mit Alltag: eigene Apps eintragen (OpenID Connect beim Konto-Dienst); Schlüssel nur direkt nach Anlegen/Erneuern sichtbar
 async function oidcAdmin(el) {
   const box = $('#adm-oidc', el);

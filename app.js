@@ -15,6 +15,7 @@ const { Schulmanager } = require('./schulmanager');
 const demo = require('./demo');
 const { occursOn, birthdayOn, ageOn } = require('./public/recur');
 const Ical = require('./ical');
+const { PLANS, FEATURES, SOON } = require('./plaene');
 const Formulare = require('./public/formulare');
 
 // Einstellungen auch aus der Datei .env im App-Ordner (NAME=Wert je Zeile, # = Kommentar). Echte Umgebungsvariablen
@@ -181,7 +182,10 @@ const asUser = (a, fn) => ctx.run({ dir: userDir(a.id), account: a }, fn);
 const me = () => ctx.getStore()?.account || null;
 const isDemo = () => DEMO || !!me()?.demo; // Beispieldaten statt Schulsoftware
 const limited = () => OPEN_DEMO || (!!me()?.demo && !me()?.jury); // öffentliche Demo: keine Fotos, keine Mitteilungen, setzt sich zurück. Jugend-forscht-Konto: alles frei, Zurücksetzen per Admin
-const isPro = () => !ACCOUNTS || !!me()?.pro || !!me()?.admin || !!me()?.demo; // Pro-Funktionen: private App, Admins und Demo-Konten haben alles, sonst schaltet der Admin frei
+// Abo-Plan des Kontos (plaene.js): private App, Admins und Demo-Konten haben alles, sonst setzt der Admin den Plan
+const planOf = (a) => (!ACCOUNTS || a?.admin || a?.demo ? 'familie' : PLANS[a?.plan] ? a.plan : a?.pro ? 'pro' : 'free');
+const has = (f) => PLANS[planOf(me())].features.includes(f);
+const isPro = () => planOf(me()) !== 'free';
 const supportId = (a) => a.id.replace(/-/g, '').slice(0, 8).toUpperCase().replace(/^(.{4})/, '$1-'); // zum Nennen bei Fragen
 const school = () => me()?.school || 'edupage';
 function admin() { if (!me()?.admin) throw Object.assign(new Error('Nur für Admins'), { status: 403 }); }
@@ -190,6 +194,7 @@ async function adminData(extra = {}) { // Konten aus dem Abbild, Einladungscodes
   const seen = seenAt();
   return { accounts: accounts().map((a) => pubAccount(a, seen)), site: process.env.PUBLIC_URL || '',
     legal: legalInfo(), // Impressum-Angaben: Formular in der Verwaltung und Flyer
+    plans: { list: PLANS, features: FEATURES, soon: SOON }, // Abo-Pläne, nur für die Verwaltung
     invites: extra.invites || (await accountsApi('/api/invites')).invites, ...extra };
 }
 // Beta-Test: Anmeldungen, Rückmeldungen und Einstellungen der Instanz (Abschlussumfrage offen?)
@@ -200,7 +205,7 @@ const tellAdmins = (p) => { // kurze Mitteilung an alle Admins (neue Anmeldung, 
   if (ACCOUNTS) for (const a of accounts().filter((x) => x.admin && !x.disabled)) asUser(a, () => push(p)).catch(() => {});
 };
 const pubAccount = (a, seen = seenAt()) => ({ id: a.id, support: supportId(a), name: a.name, email: a.email || '', emailOk: !!a.emailOk, school: a.school, admin: !!a.admin,
-  disabled: !!a.disabled, demo: !!a.demo, jury: !!a.jury, pro: !!a.pro, created: a.created, lastSeen: seen[a.id] || null });
+  disabled: !!a.disabled, demo: !!a.demo, jury: !!a.jury, pro: !!a.pro, plan: planOf(a), created: a.created, lastSeen: seen[a.id] || null });
 /* ------------------------------------------------------------------ Eigene Statistik (nur mit Konten): ohne Cookies, ohne fremde Dienste */
 // Besucher = Hash aus IP, Browserkennung und einem Tages-Salz. Das Salz und die Hashes gibt es nur am selben Tag,
 // danach bleiben nur Zahlen. Aktive Konten zählen über das Laden der App-Daten (die App selbst kommt oft aus dem Cache).
@@ -614,7 +619,7 @@ const snapNow = () => (me()?.demo ? demo.snapshot() : school() === 'none' ? ownS
 
 // Private Kalender (Pro): Google/iCloud/Outlook per iCalendar-Link lesen. Link verschlüsselt, Termine (−2 Wochen bis +4 Monate)
 // im Zwischenspeicher, alle 30 Min. im Hintergrund neu. Nicht in Demo-Konten (die teilen sich alle Besucher).
-const calsOn = () => !isDemo() && isPro();
+const calsOn = () => !isDemo() && has('calendars');
 const CAL_COLORS = ['orange', 'green', 'purple', 'teal', 'pink'];
 const calList = () => load('calendars.json', []);
 const calCache = () => load('calendars-cache.json', {});
@@ -794,7 +799,7 @@ function payload() {
   const st = state(), snap = snapNow(), cfg = load('config.json', {})[school()];
   return {
     app: APP, demo: isDemo(), status: load('status.json', {}),
-    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited() && isPro(), calendar: !limited() && isPro(), wallpaper: !limited() && isPro(), calendars: calsOn(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
+    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited() && has('photos'), calendar: !limited() && has('calendar'), wallpaper: !limited() && has('wallpaper'), calendars: calsOn(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
     beta: ACCOUNTS && !limited() ? { feedback: true, umfrage: !!siteSettings().umfrage && !st.umfrage } : null,
     account: me() && pubAccount(me()), school: school(),
     ...settings(), holidays: load('holidays.json', null)?.list || [],
@@ -926,6 +931,7 @@ const routes = {
       return send(res, 200, await adminData());
     }
     const patch = Object.fromEntries(['reset', 'disabled', 'admin', 'demo', 'jury', 'pro'].filter((k) => typeof b[k] === 'boolean').map((k) => [k, b[k]]));
+    if (PLANS[b.plan]) patch.plan = b.plan;
     const r = await accountsApi(`/api/accounts/${id}`, 'PATCH', patch);
     if (typeof b.demo === 'boolean' && b.demo !== !!a.demo) { // Demo an: Beispieldaten statt eigener Daten. Demo aus: Konto ist danach leer.
       fs.rmSync(userDir(a.id), { recursive: true, force: true });
@@ -1309,7 +1315,7 @@ const routes = {
   // Tafelbilder: Bild als Formular-Datei (Base64, siehe readImage), Angaben in der Adresse
   'POST /api/photos': async (req, res) => {
     if (limited()) throw bad('In der Demo kannst du keine Fotos hochladen.');
-    if (!isPro()) throw bad('Tafelbilder gibt es mit Alltag Pro.');
+    if (!has('photos')) throw bad('Tafelbilder gibt es mit Alltag Pro.');
     if (ACCOUNTS && db().photos.length >= 300) throw bad('Du hast schon 300 Tafelbilder. Lösch ein paar alte, dann ist wieder Platz.');
     const u = new URL(req.url, 'http://x').searchParams, buf = await readImage(req, 11e6);
     if (!buf.length) throw bad('Bitte ein Foto (JPEG) senden');
@@ -1430,7 +1436,7 @@ const routes = {
     const t = userTokens(); t[kind] = token(); save('tokens.json', t);
     send(res, 200, { ok: true });
   },
-  'GET /api/tokens': (req, res) => send(res, 200, { widget: userTokens().widget, ...(!limited() && isPro() ? { calendar: userTokens().calendar } : {}),
+  'GET /api/tokens': (req, res) => send(res, 200, { widget: userTokens().widget, ...(!limited() && has('calendar') ? { calendar: userTokens().calendar } : {}),
     ...(!ACCOUNTS || me()?.admin ? { cron: TOKENS.cron } : {}), ...(PRIVATE ? { screen: TOKENS.screen } : {}) }),
   'POST /api/calendars': async (req, res) => { // gleich einmal abrufen: ein falscher Link fällt sofort auf
     if (!calsOn()) throw bad('Private Kalender gibt es mit Alltag Pro.');
@@ -1449,7 +1455,7 @@ const routes = {
     send(res, 200, payload());
   },
   'GET /api/calendar.ics': (req, res) => { // Kalender-Abo, gelesen mit dem Kalender-Schlüssel (?key=)
-    if (limited() || !isPro()) return send(res, 404, { error: 'unbekannt' });
+    if (limited() || !has('calendar')) return send(res, 404, { error: 'unbekannt' });
     res.writeHead(200, { 'Content-Type': 'text/calendar; charset=utf-8', 'Cache-Control': 'private, no-cache', 'Content-Disposition': 'inline; filename="alltag.ics"' });
     res.end(icsFeed());
   },

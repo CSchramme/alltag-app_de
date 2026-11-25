@@ -541,6 +541,13 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const tk2 = await (await call('/api/tokens', {}, c2)).json();
     await post(`/api/admin/accounts/${ben.id}`, { pro: false }, c1);
     assert.equal((await call(`/api/calendar.ics?key=${tk2.calendar}`)).status, 404); // ohne Pro kein Abo
+    // Abo-Pläne: Admin setzt den Plan, Pläne und Preise sieht nur die Verwaltung
+    const pa = await (await post(`/api/admin/accounts/${ben.id}`, { plan: 'familie' }, c1)).json();
+    assert.deepEqual([pa.accounts.find((a) => a.id === ben.id).plan, pa.plans.list.familie.accounts], ['familie', 5]);
+    assert.ok((await (await call('/api/data', {}, c2)).json()).features.wallpaper);
+    assert.ok(!('plans' in (await (await call('/api/data', {}, c2)).json())));
+    await post(`/api/admin/accounts/${ben.id}`, { plan: 'free' }, c1);
+    assert.ok(!(await (await call('/api/data', {}, c2)).json()).features.wallpaper);
     assert.ok(!(await (await call('/api/tokens', {}, c2)).json()).calendar);
     assert.match((await (await post('/api/calendars', { name: 'x', url: 'https://example.org/a.ics' }, c2)).json()).error, /Pro/);
     // Schulsoftware wechseln: gespeichert beim Konto-Dienst. WebUntis nur echte Server, Suche ab 3 Zeichen, EduPage-Funktionen gibt es dort nicht
