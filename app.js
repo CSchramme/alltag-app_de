@@ -873,7 +873,8 @@ const routes = {
   'POST /api/admin/invites': async (req, res) => {
     admin();
     const b = await readJson(req);
-    const r = await accountsApi('/api/invites', 'POST', { note: F.text(80)(b.note), days: Number(b.days) || 0, uses: Number(b.uses) || 0, count: Number(b.count) || 1 });
+    const r = await accountsApi('/api/invites', 'POST', { note: F.text(80)(b.note), days: Number(b.days) || 0, uses: Number(b.uses) || 0, count: Number(b.count) || 1,
+      forever: b.days === 'unbegrenzt', unlimited: b.uses === 'unbegrenzt' });
     send(res, 200, await adminData({ invites: r.invites, created: r.created }));
   },
   'DELETE /api/admin/invites/:code': async (req, res, code) => {

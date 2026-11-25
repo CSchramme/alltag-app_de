@@ -2100,7 +2100,8 @@ async function openAdmin(data) {
       <section class="card admin-card">
         <h2>Flyer (A6, doppelseitig)</h2>
         <p class="sub">Ein Code für alle Flyer: Er gilt für die gewählte Zahl an Anmeldungen und bis zum Ablaufdatum. Du bekommst eine ZIP-Datei mit Vorder- und Rückseite als Bild (z. B. für den dm-Fotodruck) und eine Druck-PDF für Druckereien.</p>
-        <form class="form" id="flyer-form">${group(fRow('Anmeldungen', opt('uses', [50, 100, 200, 500], (v) => `bis zu ${v}`, 100)), fRow('Gültig', opt('days', [30, 60, 90], (v) => `${v} Tage`, 90)),
+        <form class="form" id="flyer-form">${group(fRow('Anmeldungen', opt('uses', [50, 100, 200, 500, 'unbegrenzt'], (v) => (v === 'unbegrenzt' ? 'unbegrenzt' : `bis zu ${v}`), 100)),
+          fRow('Gültig', opt('days', [30, 60, 90, 'unbegrenzt'], (v) => (v === 'unbegrenzt' ? 'ohne Ablaufdatum' : `${v} Tage`), 90)),
           fText('email', 'Deine E-Mail für Fragen', data.legal?.email, 'type="email" inputmode="email" autocapitalize="off" spellcheck="false" maxlength="120"'),
           fText('site', 'Adresse der App', site, 'autocapitalize="off" spellcheck="false" maxlength="60" required'))}
           <button class="btn-primary pressable" type="submit">Code und Flyer erstellen</button></form>
@@ -2118,18 +2119,18 @@ async function openAdmin(data) {
       </section>
       <section class="card admin-card">
         <h2>Einladung für eine Person</h2>
-        <p class="sub">6 Ziffern, nur einmal nutzbar, 7 Tage gültig.</p>
-        <form class="form" id="invite-form">${group(fText('note', 'Für wen? (siehst nur du)', '', 'maxlength="80"'))}
+        <p class="sub">6 Ziffern, nur einmal nutzbar.</p>
+        <form class="form" id="invite-form">${group(fText('note', 'Für wen? (siehst nur du)', '', 'maxlength="80"'), fRow('Gültig', opt('days', [7, 'unbegrenzt'], (v) => (v === 'unbegrenzt' ? 'ohne Ablaufdatum' : `${v} Tage`), 7)))}
           <button class="btn-primary pressable" type="submit">Einladungscode erstellen</button></form>
         <p class="footnote" id="invite-hint" style="text-align:left"></p>
-        ${single.length ? group(...single.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shownCode(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} · gültig bis ${esc(F.short.format(new Date(i.expires)))}</div>
+        ${single.length ? group(...single.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shownCode(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} · ${i.expires ? `gültig bis ${esc(F.short.format(new Date(i.expires)))}` : 'ohne Ablaufdatum'}</div>
           <div class="code-actions"><button class="btn-plain" type="button" data-copy-code="${esc(i.code)}">Kopieren</button><button class="btn-plain danger" type="button" data-del-code="${esc(i.code)}">Löschen</button></div></div></div>`))
           : '<p class="footnote" style="text-align:left">Keine offenen Einladungen.</p>'}
       </section>
       <section class="card admin-card wide">
         <h2>Flyer-Codes</h2>
         ${flyers.length ? group(...flyers.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shownCode(i.code))}</div>
-          <div class="sub">${esc(i.note || 'Flyer')} · ${i.usedCount} von ${i.uses} Anmeldungen · ${i.open ? `gültig bis ${esc(F.short.format(new Date(i.expires)))}` : 'beendet'}</div>
+          <div class="sub">${esc(i.note || 'Flyer')} · ${i.unlimited ? `${i.usedCount} Anmeldungen` : `${i.usedCount} von ${i.uses} Anmeldungen`} · ${!i.open ? 'beendet' : i.expires ? `gültig bis ${esc(F.short.format(new Date(i.expires)))}` : 'ohne Ablaufdatum'}</div>
           ${i.open ? `<div class="code-actions"><button class="btn-plain" type="button" data-flyer="${esc(i.code)}">Flyer laden</button><button class="btn-plain danger" type="button" data-del-code="${esc(i.code)}">Stoppen</button></div>` : ''}</div></div>`))
           : '<p class="footnote" style="text-align:left">Noch keine Flyer.</p>'}
       </section>
@@ -2171,7 +2172,7 @@ async function openAdmin(data) {
     btn.textContent = 'Erstelle Flyer …';
     try {
       const { flyerA6 } = await import('/flyer.mjs');
-      lastFlyer = await flyerA6({ code: inv.code, until: new Date(inv.expires).toLocaleDateString('de-DE'), email: opts().email.trim(), site: opts().site.trim(), name: data.legal?.name, address: data.legal?.address?.replace(/\s*\n\s*/g, ', ') });
+      lastFlyer = await flyerA6({ code: inv.code, until: inv.expires ? new Date(inv.expires).toLocaleDateString('de-DE') : '', email: opts().email.trim(), site: opts().site.trim(), name: data.legal?.name, address: data.legal?.address?.replace(/\s*\n\s*/g, ', ') });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(lastFlyer.zip);
       a.download = `alltag-flyer-${inv.code}.zip`;

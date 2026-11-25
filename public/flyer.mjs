@@ -107,7 +107,7 @@ function back(g, icon, { code, until, email, site, name, address }) {
   g.fillText(`${code.slice(0, 3)} ${code.slice(3)}`, X + 44, cy + 270);
   if ('letterSpacing' in g) g.letterSpacing = '0px';
   g.fillStyle = '#98a1b6'; g.font = font(500, 38);
-  g.fillText(`gültig bis ${until}`, X + 50, cy + 350);
+  g.fillText(until ? `gültig bis ${until}` : 'ohne Ablaufdatum', X + 50, cy + 350);
 
   let y = cy + ch + 110;
   g.fillStyle = '#eef1f8'; g.font = font(600, 40);
