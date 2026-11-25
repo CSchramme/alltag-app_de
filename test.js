@@ -404,7 +404,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     // statische Dateien, kein Ausbruch aus public/
     const index = await call('/');
     const indexHtml = await index.text();
-    assert.ok(indexHtml.includes('<title>Alltag</title>') && !indexHtml.includes('data-skin')); // private App: Liquid Glass
+    assert.ok(indexHtml.includes('<title>Alltag – ') && !indexHtml.includes('data-skin')); // private App: Liquid Glass
     assert.match(indexHtml, /src="\/app\.js\?v=[0-9a-z]+"/); // Versionsnummer: nach Updates keine alten Skripte aus dem Browser-Cache
     assert.match(indexHtml, /href="\/app\.css\?v=[0-9a-z]+"/);
     assert.ok(index.headers.get('content-security-policy'));
