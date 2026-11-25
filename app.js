@@ -760,7 +760,7 @@ function payload() {
   const st = state(), snap = snapNow(), cfg = load('config.json', {})[school()];
   return {
     app: APP, demo: isDemo(), status: load('status.json', {}),
-    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited() && isPro(), calendar: !limited() && isPro(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
+    features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited() && isPro(), calendar: !limited() && isPro(), wallpaper: !limited() && isPro(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
     beta: ACCOUNTS && !limited() ? { feedback: true, umfrage: !!siteSettings().umfrage && !st.umfrage } : null,
     account: me() && pubAccount(me()), school: school(),
     ...settings(), holidays: load('holidays.json', null)?.list || [],

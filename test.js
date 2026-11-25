@@ -480,10 +480,12 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.deepEqual([wk.days.length, wk.days[0].lessons[0].subject, wk.days[0].lessons[0].rooms[0], wk.days[1].lessons.length], [5, 'Mathe', '104', 0]);
     assert.equal((await post('/api/edupage', {}, c2)).status, 400);
     // Pro: Tafelbilder nur, wenn der Admin freischaltet (Admins haben alles)
-    assert.ok(d1.features.photos && !(await (await call('/api/data', {}, c2)).json()).features.photos);
+    const nf = (await (await call('/api/data', {}, c2)).json()).features;
+    assert.ok(d1.features.photos && d1.features.wallpaper && !nf.photos && !nf.wallpaper && !nf.calendar);
     assert.match((await (await post('/api/photos', {}, c2)).json()).error, /Pro/);
     assert.ok((await (await post(`/api/admin/accounts/${ben.id}`, { pro: true }, c1)).json()).accounts.find((a) => a.id === ben.id).pro);
-    assert.ok((await (await call('/api/data', {}, c2)).json()).features.photos);
+    const pf = (await (await call('/api/data', {}, c2)).json()).features;
+    assert.ok(pf.photos && pf.wallpaper && pf.calendar);
     // Kalender-Abo (Pro): eigener Schlüssel, ohne Anmeldung lesbar, Widget-Schlüssel reicht nicht
     const tk = await (await call('/api/tokens', {}, c2)).json(), long = 'Ausflug zum Schloss Neuschwanstein mit Übernachtung, Busfahrt; Rückkehr spät';
     assert.ok(tk.calendar && tk.calendar !== tk.widget);

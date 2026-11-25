@@ -1628,6 +1628,77 @@ function toast(text) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 2400);
 }
 
+/* ---------------------------------------------------------------- Sperrbildschirm (Pro): Schulwoche als Hintergrundbild, im Browser gezeichnet */
+async function wallWeek() { // Woche wie im Kalender; fehlende Tage einmal nachladen
+  const start = defaultWeek(), dates = [0, 1, 2, 3, 4, 5].map((n) => addDays(start, n));
+  let extra = [];
+  if (D.link.connected && dates.slice(0, 5).some((d) => !dayOf(d))) { try { extra = (await api(`/api/week?start=${start}`)).days || []; } catch { /* nur was schon da ist */ } }
+  const week = dates.map((date) => ({ date, lessons: ((dayOf(date) || extra.find((x) => x?.date === date))?.lessons || []).filter((l) => l.start && !l.event) }));
+  return week.filter((d, i) => i < 5 || d.lessons.length); // Samstag nur mit Unterricht
+}
+function drawWallpaper(week) {
+  const byPeriod = week.every((d) => d.lessons.every((l) => l.period)), key = (l) => (byPeriod ? l.period : l.start);
+  const keys = [...new Set(week.flatMap((d) => d.lessons.map(key)))].sort((a, b) => (byPeriod ? a - b : String(a).localeCompare(String(b))));
+  if (!keys.length) return null;
+  // Handy: Bildschirm in echten Pixeln; PC/Tablet: iPhone-Größe
+  const dpr = Math.min(window.devicePixelRatio || 1, 3), sw = Math.min(screen.width, screen.height), sh = Math.max(screen.width, screen.height), phone = matchMedia('(pointer: coarse)').matches && sw * dpr >= 600 && sh / sw > 1.6;
+  const W = phone ? Math.round(sw * dpr) : 1179, H = phone ? Math.round(sh * dpr) : 2556, u = W / 100;
+  const cv = Object.assign(document.createElement('canvas'), { width: W, height: H }), g = cv.getContext('2d');
+  const css = getComputedStyle(document.documentElement), tone = (s) => css.getPropertyValue(colorOf(s).slice(4, -1)).trim() || '#2e6bf0'; // „var(--blue)“ → --blue
+  const dark = document.documentElement.dataset.theme === 'dark', ink = dark ? '#e8ecf7' : '#131a30', muted = dark ? 'rgba(232,236,247,.55)' : 'rgba(19,26,48,.5)';
+  const font = (w, s) => `${w} ${Math.round(s)}px -apple-system, system-ui, "Segoe UI", Roboto, sans-serif`;
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  (dark ? [[0, '#172150'], [0.55, '#111836'], [1, '#0c1229']] : [[0, '#f6f8fd'], [1, '#e2e8f6']]).forEach(([o, c]) => bg.addColorStop(o, c));
+  g.fillStyle = bg; g.fillRect(0, 0, W, H);
+  for (const [x, y, c] of [[W * 0.9, H * 0.05, 'rgba(255,95,134,'], [0, H, 'rgba(46,107,240,']]) {
+    const r = g.createRadialGradient(x, y, 0, x, y, W);
+    r.addColorStop(0, `${c}${dark ? 0.28 : 0.16})`); r.addColorStop(1, `${c}0)`);
+    g.fillStyle = r; g.fillRect(0, 0, W, H);
+  }
+  // Raster: oben bleiben Uhr und Widgets frei, unten die Knöpfe des Sperrbildschirms
+  const x0 = 5 * u, tw = 9 * u, top = H * 0.4, head = 5 * u, n = week.length, cw = (W - 2 * x0 - tw) / n;
+  const rh = Math.min(10 * u, (H * 0.85 - top - head) / keys.length), gap = 0.7 * u, WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  week.forEach((d, i) => { g.fillStyle = muted; g.font = font(700, 3.2 * u); g.fillText(WD[parseDay(d.date).getDay()], x0 + tw + cw * i + cw / 2, top + head / 2); });
+  keys.forEach((k, r) => {
+    const y = top + head + rh * r, first = week.flatMap((d) => d.lessons.filter((l) => key(l) === k).map((l) => l.start)).sort()[0];
+    if (byPeriod) {
+      g.fillStyle = ink; g.font = font(700, Math.min(3.2 * u, rh * 0.36)); g.fillText(`${k}.`, x0 + tw / 2, y + rh * 0.4);
+      g.fillStyle = muted; g.font = font(500, Math.min(2 * u, rh * 0.22)); g.fillText(first, x0 + tw / 2, y + rh * 0.7);
+    } else { g.fillStyle = muted; g.font = font(600, Math.min(2.4 * u, rh * 0.3)); g.fillText(first, x0 + tw / 2, y + rh / 2); }
+    week.forEach((d, i) => {
+      const ls = d.lessons.filter((l) => key(l) === k), x = x0 + tw + cw * i + gap / 2, w = cw - gap, h = rh - gap, yy = y + gap / 2;
+      g.beginPath(); g.roundRect(x, yy, w, h, 1.6 * u);
+      if (!ls.length) { g.fillStyle = dark ? 'rgba(255,255,255,.05)' : 'rgba(19,26,48,.05)'; g.fill(); return; }
+      g.fillStyle = tone(ls[0].subject); g.fill();
+      const name = [...new Set(ls.map((l) => l.short || l.subject))].join('/'), room = h > 6 * u ? [...new Set(ls.flatMap((l) => l.rooms || []))].join(' ') : '';
+      g.fillStyle = '#fff'; g.font = font(700, Math.min(3.6 * u, h * 0.4)); g.fillText(name, x + w / 2, yy + h * (room ? 0.4 : 0.5), w - 1.2 * u);
+      if (room) { g.globalAlpha = 0.85; g.font = font(500, Math.min(2.2 * u, h * 0.24)); g.fillText(room, x + w / 2, yy + h * 0.72, w - 1.2 * u); g.globalAlpha = 1; }
+    });
+  });
+  // Tagesbogen + Name, klein unten in der Mitte
+  const s = 4.4 * u, fx = W / 2 - 7.5 * u, fy = H * 0.895, arc = g.createLinearGradient(22, 0, 78, 0);
+  [[0, '#5b8cff'], [0.55, '#ff5f86'], [1, '#ffae57']].forEach(([o, c]) => arc.addColorStop(o, c));
+  g.save(); g.translate(fx, fy - 0.45 * s); g.scale(s / 100, s / 100); g.lineCap = 'round'; g.lineWidth = 9;
+  g.strokeStyle = dark ? 'rgba(255,255,255,.18)' : 'rgba(19,26,48,.15)'; g.stroke(new Path2D('M22 58A28 28 0 0 1 78 58'));
+  g.strokeStyle = arc; g.stroke(new Path2D('M22 58A28 28 0 0 1 58.65 31.37'));
+  g.beginPath(); g.arc(58.65, 31.37, 7.2, 0, Math.PI * 2); g.fillStyle = '#fff'; g.fill(); g.lineWidth = 3.4; g.strokeStyle = '#ff6f86'; g.stroke(); g.restore();
+  g.textAlign = 'left'; g.fillStyle = muted; g.font = font(650, 2.8 * u); g.fillText('Alltag', fx + s * 0.95, fy);
+  return cv;
+}
+async function openWallpaper() {
+  const cv = drawWallpaper(await wallWeek());
+  if (!cv) return toast('In dieser Woche ist kein Unterricht eingetragen.');
+  const blob = await new Promise((r) => cv.toBlob(r, 'image/png')), url = URL.createObjectURL(blob), file = new File([blob], 'alltag-stundenplan.png', { type: 'image/png' });
+  openSheet('Sperrbildschirm', `<img class="wall-preview" src="${url}" alt="Vorschau: Stundenplan als Hintergrundbild">
+    <button class="btn-primary pressable" type="button" id="wall-save">Bild sichern</button>
+    <p class="footnote" style="text-align:left">iPhone: „Bild sichern“, dann in Fotos öffnen → Teilen → „Als Hintergrundbild“. Android: in der Galerie öffnen → „Als Hintergrund festlegen“. Das Bild zeigt die Stunden dieser Woche. Ändert sich dein Plan, erstell es einfach neu.</p>`);
+  $('#wall-save').onclick = async () => { // Teilen-Menü (iPhone: „Bild sichern“), sonst Download
+    try { if (navigator.canShare?.({ files: [file] })) return await navigator.share({ files: [file] }); } catch (x) { if (x.name === 'AbortError') return; }
+    Object.assign(document.createElement('a'), { href: url, download: file.name }).click();
+  };
+}
+
 /* ---------------------------------------------------------------- Profil: EduPage, Mitteilungen, Widget, Plesk */
 const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -1783,6 +1854,9 @@ async function openSettings() {
       <button class="row" id="push-test" hidden><span class="btn-plain">Test-Mitteilung senden</span></button>
     </div>
     <p class="footnote" id="push-hint" style="margin-top:8px;text-align:left"></p>
+    ${D.features?.wallpaper ? `<p class="label-sm">Sperrbildschirm</p>
+    <div class="list card"><button class="row" id="wall-make"><span class="btn-plain">Stundenplan als Hintergrundbild</span></button></div>
+    <p class="footnote" style="margin-top:8px;text-align:left">Ein Bild deiner Schulwoche in der Größe deines Handys. Oben bleibt Platz für die Uhr.</p>` : ''}
     ${D.features?.calendar ? `<p class="label-sm">Kalender-Abo</p>
     <div class="list card">
       <div class="row"><div class="main"><div class="sub">Stundenplan, Prüfungen, Termine und Geburtstage in deinem Kalender. Aktualisiert sich von selbst. iPhone und Mac: „Abonnieren“ tippen. Google Kalender: Adresse kopieren und am PC unter „Weitere Kalender → Per URL“ einfügen.</div></div></div>
@@ -1835,6 +1909,8 @@ async function openSettings() {
     if (!rot.dataset.sure) { rot.dataset.sure = '1'; $('span', rot).textContent = 'Wirklich? Widget und Kurzbefehle musst du danach neu einrichten.'; return; }
     try { await api('/api/tokens/widget', { method: 'POST' }); haptic(); toast('Neuer Schlüssel. Bitte Widget-Skript und Kurzbefehle neu kopieren.'); openSettings(); } catch (x) { toast(x.message); }
   };
+  const wallBtn = $('#wall-make');
+  if (wallBtn) wallBtn.onclick = () => openWallpaper();
   const calRot = $('#cal-rotate');
   if (calRot) calRot.onclick = async () => { // alte Adresse hört auf zu funktionieren
     if (!calRot.dataset.sure) { calRot.dataset.sure = '1'; $('span', calRot).textContent = 'Wirklich? Die alte Adresse funktioniert dann nicht mehr.'; return; }
