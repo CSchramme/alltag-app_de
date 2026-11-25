@@ -49,6 +49,13 @@ if (ACCOUNTS && (!/^https?:\/\/[^/]+$/.test(ACCOUNTS_URL) || ACCOUNTS_SECRET.len
   console.error('Mit Konten braucht die App ACCOUNTS_URL (Adresse des Konto-Dienstes, z. B. https://accounts.alltag-app.de) und ACCOUNTS_SECRET (mindestens 32 Zeichen, derselbe Wert wie dort).');
   process.exit(1);
 }
+// Verwaltung als eigene Seite (Ordner admin/, z. B. https://admin.alltag-app.de). Nur sie darf die Admin-API aus dem Browser nutzen.
+// Sie muss zur selben Website gehören wie die App (Subdomain), sonst schickt der Browser das Sitzungs-Cookie (SameSite=Lax) nicht mit.
+const ADMIN_URL = ACCOUNTS ? String(process.env.ADMIN_URL || '').replace(/\/+$/, '') : '';
+if (ADMIN_URL && !/^https?:\/\/[^/]+$/.test(ADMIN_URL)) {
+  console.error('ADMIN_URL muss eine Adresse ohne Pfad sein, z. B. https://admin.alltag-app.de');
+  process.exit(1);
+}
 if (ACCOUNTS && String(process.env.DATA_KEY || '').length < 32) { // Schulpasswörter fremder Leute nie mit einem Schlüssel, der neben den Daten liegt
   console.error('DATA_KEY fehlt oder ist kürzer als 32 Zeichen. Mit Konten ist er Pflicht (Umgebungsvariable, zufällig, nie ändern).');
   process.exit(1);
@@ -193,7 +200,7 @@ function admin() { if (!me()?.admin) throw Object.assign(new Error('Nur für Adm
 const demoAccount = () => accounts().find((a) => a.demo && !a.disabled);
 async function adminData(extra = {}) { // Konten aus dem Abbild, Einladungscodes direkt vom Konto-Dienst
   const seen = seenAt();
-  return { accounts: accounts().map((a) => pubAccount(a, seen)), site: process.env.PUBLIC_URL || '',
+  return { me: me()?.id || null, accountsUrl: ACCOUNTS_URL, accounts: accounts().map((a) => pubAccount(a, seen)), site: process.env.PUBLIC_URL || '',
     legal: legalInfo(), // Impressum-Angaben: Formular in der Verwaltung und Flyer
     plans: { list: PLANS, features: FEATURES, soon: SOON, visible: plansVisible() }, // Abo-Pläne für die Verwaltung
     invites: extra.invites || (await accountsApi('/api/invites')).invites, ...extra };
@@ -900,7 +907,8 @@ const routes = {
   'GET /api/admin': async (req, res) => { admin(); send(res, 200, { ...await adminData(), stats: statsData() }); },
   'GET /api/admin/health': async (req, res) => { // Konto-Dienst erreichbar? Mailversand eingerichtet?
     admin();
-    try { send(res, 200, { ok: true, ...await accountsApi('/api/health') }); } catch (e) { send(res, 200, { ok: false, error: e.message }); }
+    const app = { node: process.version, since: new Date(Date.now() - process.uptime() * 1000).toISOString(), memory: Math.round(process.memoryUsage().rss / 1e6) }; // Passenger startet nach Leerlauf neu
+    try { send(res, 200, { ok: true, app, ...await accountsApi('/api/health') }); } catch (e) { send(res, 200, { ok: false, app, error: e.message }); }
   },
   // Anmelden mit Alltag: Apps liegen beim Konto-Dienst; den Schlüssel gibt es nur in der Antwort beim Anlegen bzw. Erneuern
   'GET /api/admin/clients': async (req, res) => { admin(); send(res, 200, await accountsApi('/api/clients')); },
@@ -1577,6 +1585,10 @@ const server = http.createServer(async (req, res) => {
     if (!url.pathname.startsWith('/api/')) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method Not Allowed');
       if (['/robots.txt', '/sitemap.xml', '/llms.txt'].includes(url.pathname)) return seoFile(req, res, url.pathname);
+      if (ADMIN_URL && url.pathname === '/admin') { // alte Verwaltung → eigene Seite; ohne Sitzung erst anmelden (kommt danach wieder hierher)
+        res.writeHead(302, { Location: sessionUser(req) ? `${ADMIN_URL}/` : `${ACCOUNTS_URL}/weiter?next=%2Fadmin`, 'Cache-Control': 'no-store' });
+        return res.end();
+      }
       return serveStatic(req, res, url.pathname);
     }
     if (url.pathname === '/api/ping') return send(res, 200, 'ok'); // Selbst-Wachhalten, verrät nichts
@@ -1585,8 +1597,19 @@ const server = http.createServer(async (req, res) => {
       await refreshAccounts().catch((e) => console.warn('Konten neu laden:', e.message));
       return send(res, 200, { ok: true });
     }
+    // Verwaltungs-Seite: darf Admin-API und Abmelden mit der Sitzung nutzen (CORS nur für genau diese Adresse)
+    const adminCors = !!ADMIN_URL && req.headers.origin === ADMIN_URL && (/^\/api\/admin(\/|$)/.test(url.pathname) || url.pathname === '/api/logout');
+    if (adminCors) {
+      res.setHeader('Access-Control-Allow-Origin', ADMIN_URL);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Vary', 'Origin');
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, { 'Access-Control-Allow-Methods': 'GET, POST, DELETE', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '600' });
+        return res.end();
+      }
+    }
     // Zusätzlich zum SameSite-Cookie: ändernde Anfragen nur von der eigenen Seite (Programme ohne Browser schicken keinen Origin)
-    if (!['GET', 'HEAD'].includes(req.method) && req.headers.origin) {
+    if (!['GET', 'HEAD'].includes(req.method) && req.headers.origin && !adminCors) {
       let own = false;
       try { own = new URL(req.headers.origin).host === req.headers.host; } catch { /* ungültig = fremd */ }
       if (!own) return send(res, 403, { error: 'Anfrage von fremder Seite abgelehnt' });

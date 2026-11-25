@@ -1,0 +1,9 @@
+{
+  "name": "alltag-admin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Verwaltung für Alltag (admin.alltag-app.de): liefert nur die Oberfläche, Daten kommen von der Admin-API der App (API_URL)",
+  "main": "server.js",
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "node server.js" }
+}

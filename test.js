@@ -452,8 +452,8 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-konten-'));
   // Umzug: Konten aus der Zeit vor dem Konto-Dienst liegen noch in der App
   fs.writeFileSync(path.join(dir2, 'accounts.json'), JSON.stringify([{ id: crypto.randomUUID(), name: 'alt', salt: 'a', hash: 'b', school: 'none', ver: 1, lastSeen: '2026-11-01T10:00:00.000Z' }]));
-  const port2 = port + 100;
-  const srv2 = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, ENV_FILE: '', DEMO: '', PRIVATE: '', ACCOUNTS: '1', APP_PASSWORD: '', ACCOUNTS_URL: ACC, ACCOUNTS_SECRET: KS,
+  const port2 = port + 100, AD = 'http://admin.example';
+  const srv2 = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, ENV_FILE: '', DEMO: '', PRIVATE: '', ACCOUNTS: '1', APP_PASSWORD: '', ACCOUNTS_URL: ACC, ACCOUNTS_SECRET: KS, ADMIN_URL: AD,
     DATA_KEY: 'k'.repeat(40), LEGAL_NAME: 'Max <Muster>', LEGAL_EMAIL: '', DATA_DIR: dir2, PORT: String(port2) }, stdio: 'pipe' });
   try {
     await new Promise((resolve, reject) => { srv2.stdout.on('data', (b) => String(b).includes('läuft') && resolve()); srv2.on('exit', reject); });
@@ -478,7 +478,8 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.ok(robots.includes('Disallow: /admin') && robots.includes(`Sitemap: ${base}/sitemap.xml`) && sm.includes(`<loc>${base}/funktionen</loc>`) && llms.startsWith('# Alltag'));
     const fx = await (await call('/funktionen')).text();
     assert.ok(fx.includes('<meta name="robots" content="index, follow">') && fx.includes(`<link rel="canonical" href="${base}/funktionen">`) && fx.includes('"@type":"FAQPage"') && !fx.includes('{{'));
-    assert.ok((await (await call('/admin')).text()).includes('noindex'));
+    const ad0 = await call('/admin', { redirect: 'manual' }); // Verwaltung: ohne Sitzung erst anmelden, danach zurück über /admin
+    assert.deepEqual([ad0.status, ad0.headers.get('location')], [302, `${ACC}/weiter?next=%2Fadmin`]);
     const imp = await (await call('/impressum.html')).text(); // Angaben aus Plesk-Variablen, sicher eingesetzt; fehlende sichtbar markiert
     assert.ok(imp.includes('Max &#60;Muster&#62;') && imp.includes('noch eintragen: LEGAL_EMAIL') && !imp.includes('{{'));
     assert.ok((await (await call('/datenschutz.html')).text()).includes('PEIN GbR'));
@@ -679,7 +680,19 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await call('/api/items/notes', { method: 'POST', body: '{}', headers: { Origin: 'https://boese.example' } }, c1)).status, 403);
     assert.equal((await call('/api/items/notes', { method: 'POST', body: JSON.stringify({ title: 'x' }), headers: { Origin: base } }, c1)).status, 200);
     assert.equal((await call('/flyer.mjs')).headers.get('content-type'), 'text/javascript; charset=utf-8');
-    assert.ok((await (await call('/admin')).text()).includes('data-skin="modern"')); // Verwaltung als eigene Seite
+    // Verwaltung auf eigener Adresse (admin/): angemeldet weiter dorthin; nur diese Adresse darf die Admin-API mit der Sitzung nutzen
+    assert.equal((await call('/admin', { redirect: 'manual' }, c1)).headers.get('location'), `${AD}/`);
+    const pre = await call('/api/admin/legal', { method: 'OPTIONS', headers: { Origin: AD, 'Access-Control-Request-Method': 'POST' } });
+    assert.deepEqual([pre.status, pre.headers.get('access-control-allow-origin'), pre.headers.get('access-control-allow-credentials'), pre.headers.get('access-control-allow-methods')], [204, AD, 'true', 'GET, POST, DELETE']);
+    assert.equal((await call('/api/admin/legal', { method: 'OPTIONS', headers: { Origin: 'https://boese.example' } })).headers.get('access-control-allow-origin'), null);
+    const ga = await call('/api/admin', { headers: { Origin: AD } }, c1), gj = await ga.json();
+    assert.deepEqual([ga.headers.get('access-control-allow-origin'), gj.me, gj.accountsUrl], [AD, chef.id, ACC]);
+    assert.equal((await call('/api/data', { headers: { Origin: AD } }, c1)).headers.get('access-control-allow-origin'), null); // nur die Admin-API
+    assert.equal((await call('/api/admin/plans', { method: 'POST', body: JSON.stringify({ visible: false }), headers: { Origin: AD } }, c1)).status, 200);
+    assert.equal((await call('/api/items/notes', { method: 'POST', body: JSON.stringify({ title: 'x' }), headers: { Origin: AD } }, c1)).status, 403);
+    assert.equal((await call('/api/admin', { headers: { Origin: AD } }, ct)).status, 403); // kein Admin
+    assert.equal((await call('/api/admin', { headers: { Origin: AD } })).headers.get('access-control-allow-origin'), AD); // 401 lesbar → Anmelde-Knopf
+    assert.match((await (await call('/api/admin/health', {}, c1)).json()).app.node, /^v\d+/);
     // Widget-Schlüssel erneuern: der alte gilt sofort nicht mehr
     const w1 = (await (await call('/api/tokens', {}, c1)).json()).widget;
     assert.equal((await call(`/api/summary?key=${w1}`)).status, 200);
@@ -706,7 +719,22 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   assert.ok(ptxt.startsWith('%PDF-1.4') && ptxt.slice(xrefAt).startsWith('xref') && /\/Count 2/.test(ptxt) && /\/TrimBox \[8\.50 8\.50 306\.14 428\.03\]/.test(ptxt));
   [...ptxt.slice(xrefAt).matchAll(/^(\d{10}) 00000 n $/gm)].forEach(([, off], i) => assert.ok(ptxt.startsWith(`${i + 1} 0 obj`, Number(off))));
 
-  // 8. Mit Konten startet der Server nicht ohne ausreichend langen DATA_KEY
+  // 8. Verwaltung (admin/server.js): liefert nur die Oberfläche, Daten nur von der App (CSP), Dateien nur aus der Liste
+  new (require('vm').Script)(fs.readFileSync(path.join(__dirname, 'admin', 'public', 'admin.js'), 'utf8')); // Syntax der Oberfläche
+  const port3 = port + 300, adm = spawn(process.execPath, ['admin/server.js'], { cwd: __dirname, env: { ...process.env, API_URL: 'https://alltag.example', PORT: String(port3) }, stdio: 'pipe' });
+  try {
+    await new Promise((resolve, reject) => { adm.stdout.on('data', (b) => String(b).includes('läuft') && resolve()); adm.on('exit', reject); });
+    const ab = `http://localhost:${port3}`, home = await fetch(`${ab}/`), html = await home.text();
+    assert.ok(home.headers.get('content-security-policy').includes('connect-src https://alltag.example;') && html.includes('<meta name="api" content="https://alltag.example">') && /\/admin\.js\?v=\w+/.test(html));
+    for (const [p, t] of [['/admin.js', 'text/javascript'], ['/flyer.mjs', 'text/javascript'], ['/formulare.js', 'text/javascript'], ['/icon.svg', 'image/svg+xml']]) assert.ok((await fetch(`${ab}${p}`)).headers.get('content-type').startsWith(t), p);
+    for (const p of ['/app.js', '/server.js', '/index.html/../server.js', '/sw.js']) assert.equal((await fetch(`${ab}${p}`)).status, 404, p);
+    assert.equal((await fetch(`${ab}/robots.txt`).then((r) => r.text())), 'User-agent: *\nDisallow: /\n');
+    assert.equal((await fetch(`${ab}/`, { method: 'POST' })).status, 405);
+  } finally { adm.kill(); }
+  const noApi = spawn(process.execPath, ['admin/server.js'], { cwd: __dirname, env: { ...process.env, API_URL: '', PORT: String(port3 + 1) }, stdio: 'pipe' });
+  assert.equal(await new Promise((r) => noApi.on('exit', r)), 1);
+
+  // 9. Mit Konten startet der Server nicht ohne ausreichend langen DATA_KEY
   const noKey = spawn(process.execPath, ['app.js'], { cwd: __dirname, env: { ...process.env, ENV_FILE: '', DEMO: '', ACCOUNTS: '1', APP_PASSWORD: 'x', DATA_KEY: 'kurz', DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'alltag-ohne-')), PORT: String(port + 200) }, stdio: 'pipe' });
   assert.equal(await new Promise((r) => noKey.on('exit', r)), 1);
   console.log('alle Tests ok');
