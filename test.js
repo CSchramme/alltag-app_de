@@ -409,6 +409,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.match(indexHtml, /href="\/app\.css\?v=[0-9a-z]+"/);
     assert.ok(index.headers.get('content-security-policy'));
     assert.equal((await call('/..%2fapp.js')).status, 404);
+    assert.equal((await call('/admin')).status, 404); // Verwaltung gibt es nur als eigene Seite (ADMIN_URL)
     assert.equal((await call('/data/secret.json')).status, 404);
   } finally {
     srv.kill();

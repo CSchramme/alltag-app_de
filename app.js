@@ -1530,7 +1530,7 @@ function seoFile(req, res, pathname) {
 // Die HTML-Seiten liegen in pages/, nicht in public/: Plesk liefert alles in public/ direkt über nginx aus, an der App vorbei.
 // Dann fehlten Look, Impressum-Angaben und Sicherheits-Header. Nur die App liefert sie deshalb aus.
 const PAGES = path.join(__dirname, 'pages');
-const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/admin': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html', '/beta': 'beta.html', '/funktionen': 'funktionen.html',
+const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html', '/beta': 'beta.html', '/funktionen': 'funktionen.html',
   // Kurz-Links für den Beta-Test (Flyer, Gruppen-Chat): Anmeldung ohne Konto, der Rest öffnet das Formular in der App
   '/poll/anmeldung': 'beta.html', '/poll/fehler': 'index.html', '/poll/verbesserung': 'index.html', '/poll/rueckmeldung': 'index.html' };
 function serveStatic(req, res, pathname) {
@@ -1538,7 +1538,7 @@ function serveStatic(req, res, pathname) {
   try { rel = decodeURIComponent(pathname); } catch { return send(res, 400, 'Bad Request'); }
   const page = PAGE_FILES[pathname], fp = page ? path.join(PAGES, page) : path.join(PUBLIC, rel);
   if (!page && !fp.startsWith(PUBLIC + path.sep)) return send(res, 404, 'Not Found');
-  if (page && pathname !== '/admin' && req.method === 'GET') trackView(req);
+  if (page && req.method === 'GET') trackView(req);
   fs.readFile(fp, (err, buf) => {
     if (err) return send(res, 404, 'Not Found');
     const type = TYPES[path.extname(fp)] || 'application/octet-stream';
@@ -1552,7 +1552,7 @@ function serveStatic(req, res, pathname) {
         try { v = Math.floor(fs.statSync(path.join(PUBLIC, f)).mtimeMs).toString(36); } catch { /* Datei fehlt: ohne Version */ }
         return `${q}/${f}?v=${v}${q}`;
       });
-      buf = Buffer.from(legal(html).replace(/\{\{SITE_URL\}\}/g, siteUrl(req)).replace(/\{\{ROBOTS\}\}/g, indexable() && pathname !== '/admin' ? 'index, follow' : 'noindex, nofollow'));
+      buf = Buffer.from(legal(html).replace(/\{\{SITE_URL\}\}/g, siteUrl(req)).replace(/\{\{ROBOTS\}\}/g, indexable() ? 'index, follow' : 'noindex, nofollow'));
     }
     res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
       ...(https(req) ? { 'Strict-Transport-Security': 'max-age=31536000' } : {}), // Browser nutzt danach immer HTTPS
@@ -1585,7 +1585,7 @@ const server = http.createServer(async (req, res) => {
     if (!url.pathname.startsWith('/api/')) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method Not Allowed');
       if (['/robots.txt', '/sitemap.xml', '/llms.txt'].includes(url.pathname)) return seoFile(req, res, url.pathname);
-      if (ADMIN_URL && url.pathname === '/admin') { // alte Verwaltung → eigene Seite; ohne Sitzung erst anmelden (kommt danach wieder hierher)
+      if (ADMIN_URL && url.pathname === '/admin') { // Verwaltung liegt auf ADMIN_URL (ohne: 404); ohne Sitzung erst anmelden (kommt danach wieder hierher)
         res.writeHead(302, { Location: sessionUser(req) ? `${ADMIN_URL}/` : `${ACCOUNTS_URL}/weiter?next=%2Fadmin`, 'Cache-Control': 'no-store' });
         return res.end();
       }
