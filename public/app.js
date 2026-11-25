@@ -1824,6 +1824,7 @@ async function openSettings() {
       <div class="avatar" style="--c:var(--blue);width:58px;height:58px;font-size:21px">${esc(initials(s.name || D.account?.name || 'Ich'))}</div>
       <div class="main"><div class="title">${esc(D.account?.name || s.name || 'Alltag')}</div><div class="sub">${D.account ? `${esc(schoolName(D.school))}${D.account.admin ? ' · Admin' : ''}` : s.class ? `Klasse ${esc(s.class)}` : 'Schule und Privates'}</div></div>
     </div>
+    ${D.plans ? proCard() : ''}
     ${accountSection()}
     ${D.beta ? `<p class="label-sm">Beta-Test</p>${group('<button class="row" data-feedback><div class="main"><div class="title">Fehler oder Idee melden</div><div class="sub">Geht direkt an den Entwickler, mit deiner Tester-ID</div></div></button>',
       D.beta.umfrage ? '<button class="row" data-umfrage><div class="main"><div class="title">Abschlussumfrage</div><div class="sub">Drei Minuten, anonym</div></div></button>' : '')}` : ''}
@@ -2184,6 +2185,8 @@ async function openAdmin(data) {
     </div></div>`;
   betaAdmin(el, data);
   oidcAdmin(el);
+  const pv = $('#plans-visible', el);
+  if (pv) pv.onchange = async () => { try { openAdmin(await api('/api/admin/plans', { method: 'POST', body: { visible: pv.checked } })); haptic(); } catch (x) { toast(x.message); pv.checked = !pv.checked; } };
   api('/api/admin/health').then((h) => {
     const box = $('#acc-health', el);
     if (box) box.textContent = h.ok ? `Konto-Dienst erreichbar · Mailversand: ${h.mail} · ${h.unconfirmed} Konten warten auf E-Mail-Bestätigung` : `Konto-Dienst nicht erreichbar: ${h.error}`;
@@ -2300,12 +2303,50 @@ const formRows = (id, x) => Formulare.FORMS[id].filter((f) => f.name && x[f.name
 const bars = (counts, total) => Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="row"><div class="main"><div class="title">${esc(k)}</div>
   <div class="meter" aria-hidden="true"><i style="width:${total ? Math.round((v / total) * 100) : 0}%"></i></div></div><div class="trail">${v}${total ? ` · ${Math.round((v / total) * 100)} %` : ''}</div></div>`).join('');
 
+/* ---------------------------------------------------------------- Alltag Pro: Plan-Auswahl für Nutzer (noch ohne Kaufen) */
+const FREE_POINTS = ['Stundenplan mit Vertretungen', 'Hausaufgaben und Lernplan', 'Termine, Erinnerungen und Noten', 'Mitteilungen, Widget und Kurzbefehle'];
+const euro = (n) => `${n.toFixed(2).replace('.', ',')} €`;
+let billing = 'year';
+function proCard() {
+  const p = D.plans, free = p.current === 'free';
+  return `<button class="card pro-card pressable" type="button" data-plans>
+    <div class="main"><div class="pro-kicker">${free ? 'Alltag Pro' : `Dein Plan: ${esc(p.list[p.current].name)}`}</div>
+      <div class="title">${free ? 'Mehr aus deinem Schultag holen' : 'Alle Pro-Funktionen sind an'}</div>
+      <div class="sub">Private Kalender, Tafelbilder, Sperrbildschirm und mehr</div></div>${ICON.chev}</button>`;
+}
+function openPlans() {
+  const p = D.plans, save = Math.round((1 - p.list.pro.year / (p.list.pro.month * 12)) * 100);
+  openSheet('Alltag Pro', `${p.preview ? '<div class="card banner info"><div><b>Vorschau</b>Nur Admins sehen das. In der Verwaltung schaltest du es für alle ein.</div></div>' : ''}
+    <div class="pro-hero"><h2>Mehr aus deinem <span class="pro-grad">Schultag</span> holen</h2><p>Alles für die Schule bleibt kostenlos. Pro gibt dir die Extras.</p></div>
+    <div class="billing" role="group" aria-label="Zahlweise"><button type="button" data-bill="month">Monatlich</button><button type="button" data-bill="year">Jährlich <i>−${save} %</i></button></div>
+    <div id="plans-body" class="plans"></div>
+    <p class="footnote" style="text-align:left">Alltag Pro kann man noch nicht kaufen. Preise inklusive Mehrwertsteuer, sie können sich bis zum Start noch ändern.</p>`);
+  const render = () => {
+    $$('#sheet [data-bill]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.bill === billing)));
+    $('#plans-body').innerHTML = Object.entries(p.list).map(([k, x]) => {
+      const cur = k === p.current, price = billing === 'year' ? x.year : x.month;
+      const points = k === 'free' ? FREE_POINTS : k === 'familie' ? ['Alles aus Pro', `Bis zu ${x.accounts} Konten in einer Familie`] : x.features.map((f) => `${p.features[f]}${p.soon.includes(f) ? ' · bald' : ''}`);
+      return `<div class="plan-card${k === 'pro' ? ' featured' : ''}${cur ? ' current' : ''}">
+        ${cur ? '<span class="plan-badge mine">Dein Plan</span>' : k === 'pro' ? '<span class="plan-badge">Beliebt</span>' : ''}
+        <h3>${esc(x.name)}</h3>
+        <div class="plan-price">${price ? `<b>${euro(price)}</b><span>${billing === 'year' ? 'im Jahr' : 'im Monat'}</span>` : '<b>0 €</b><span>für immer</span>'}</div>
+        <div class="plan-hint">${price && billing === 'year' ? `nur ${euro(x.year / 12)} im Monat` : price ? `oder ${euro(x.year)} im Jahr` : 'ohne Werbung'}</div>
+        <ul>${points.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>
+        <button class="${k === 'pro' ? 'btn-primary' : 'btn-plain'}" type="button" disabled>${cur ? 'Dein aktueller Plan' : k === 'free' ? 'Immer dabei' : 'Bald verfügbar'}</button></div>`;
+    }).join('');
+  };
+  $$('#sheet [data-bill]').forEach((b) => { b.onclick = () => { billing = b.dataset.bill; haptic(); render(); }; });
+  render();
+}
+
 // Abo-Pläne: nur hier sichtbar, solange man Pro nicht kaufen kann
 function plansSection(p) {
   if (!p) return '';
   const euro = (n) => (n ? `${n.toFixed(2).replace('.', ',')} €` : '–');
   return `<section class="card admin-card wide"><h2>Abo-Pläne (noch versteckt)</h2>
-    <p class="sub">Für Nutzer unsichtbar und noch nicht kaufbar. Den Plan eines Kontos setzt du beim Konto. Admins und Demo-Konten haben alles.</p>
+    <p class="sub">Noch nicht kaufbar. Den Plan eines Kontos setzt du beim Konto. Admins und Demo-Konten haben alles.</p>
+    ${group(`<label class="row"><div class="main"><div class="title">Plan-Auswahl für Nutzer zeigen</div><div class="sub">Im Profil erscheint „Alltag Pro“ mit den Plänen und Preisen, kaufen geht noch nicht. Du siehst die Vorschau auch so.</div></div>
+      <input type="checkbox" class="switch" id="plans-visible"${p.visible ? ' checked' : ''} aria-label="Plan-Auswahl für Nutzer zeigen"></label>`)}
     ${group(...Object.values(p.list).map((x) => `<div class="row"><div class="main"><div class="title">${esc(x.name)}${x.month ? ` · ${euro(x.month)} im Monat · ${euro(x.year)} im Jahr` : ''}${x.accounts > 1 ? ` · bis ${x.accounts} Konten` : ''}</div>
       <div class="sub">${x.features.length ? x.features.map((f) => esc(p.features[f] + (p.soon.includes(f) ? ' (geplant)' : ''))).join(' · ') : 'Alles für den Schultag'}</div></div></div>`))}</section>`;
 }
@@ -2812,11 +2853,12 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-vote],[data-ical],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-umfrage]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-vote],[data-ical],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-plans],[data-umfrage]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (el.id === 'me' || 'settings' in ds) return openSettings();
   if ('feedback' in ds) return openFeedback();
+  if ('plans' in ds) return openPlans();
   if ('umfrage' in ds) return openUmfrage();
   if (el.id === 'add') return ADD[tab]();
   if (el.id === 'search') return openSearch();

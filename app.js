@@ -186,6 +186,7 @@ const limited = () => OPEN_DEMO || (!!me()?.demo && !me()?.jury); // öffentlich
 const planOf = (a) => (!ACCOUNTS || a?.admin || a?.demo ? 'familie' : PLANS[a?.plan] ? a.plan : a?.pro ? 'pro' : 'free');
 const has = (f) => PLANS[planOf(me())].features.includes(f);
 const isPro = () => planOf(me()) !== 'free';
+const plansVisible = () => !!siteSettings().plansVisible; // Plan-Auswahl für Nutzer: schaltet der Admin frei, sonst nur Vorschau für Admins
 const supportId = (a) => a.id.replace(/-/g, '').slice(0, 8).toUpperCase().replace(/^(.{4})/, '$1-'); // zum Nennen bei Fragen
 const school = () => me()?.school || 'edupage';
 function admin() { if (!me()?.admin) throw Object.assign(new Error('Nur für Admins'), { status: 403 }); }
@@ -194,7 +195,7 @@ async function adminData(extra = {}) { // Konten aus dem Abbild, Einladungscodes
   const seen = seenAt();
   return { accounts: accounts().map((a) => pubAccount(a, seen)), site: process.env.PUBLIC_URL || '',
     legal: legalInfo(), // Impressum-Angaben: Formular in der Verwaltung und Flyer
-    plans: { list: PLANS, features: FEATURES, soon: SOON }, // Abo-Pläne, nur für die Verwaltung
+    plans: { list: PLANS, features: FEATURES, soon: SOON, visible: plansVisible() }, // Abo-Pläne für die Verwaltung
     invites: extra.invites || (await accountsApi('/api/invites')).invites, ...extra };
 }
 // Beta-Test: Anmeldungen, Rückmeldungen und Einstellungen der Instanz (Abschlussumfrage offen?)
@@ -818,6 +819,7 @@ function payload() {
       }),
     },
     db: db(), ...calPayload(),
+    plans: ACCOUNTS && !isDemo() && (plansVisible() || me()?.admin) ? { list: PLANS, features: FEATURES, soon: SOON, current: planOf(me()), preview: !plansVisible() } : null,
   };
 }
 
@@ -1050,6 +1052,12 @@ const routes = {
     const l = { name: F.text(120, true)(b.name), address: F.text(300, true)(b.address).replace(/\r/g, '').replace(/\n{2,}/g, '\n'), email: F.text(120, true)(b.email), phone: F.text(40)(b.phone) };
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(l.email)) throw bad('Bitte eine gültige E-Mail-Adresse eintragen.');
     atRoot(() => save('site.json', { ...siteSettings(), legal: l }));
+    send(res, 200, await adminData());
+  },
+  'POST /api/admin/plans': async (req, res) => { // Plan-Auswahl im Profil für alle zeigen (kaufen geht noch nicht)
+    admin();
+    const b = await readJson(req);
+    atRoot(() => save('site.json', { ...siteSettings(), plansVisible: b.visible === true }));
     send(res, 200, await adminData());
   },
   'GET /api/admin/umfrage': (req, res) => { admin(); send(res, 200, { open: !!siteSettings().umfrage, answers: atRoot(() => load('umfrage.json', [])) }); },

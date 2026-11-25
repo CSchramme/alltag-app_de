@@ -555,7 +555,13 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const pa = await (await post(`/api/admin/accounts/${ben.id}`, { plan: 'familie' }, c1)).json();
     assert.deepEqual([pa.accounts.find((a) => a.id === ben.id).plan, pa.plans.list.familie.accounts], ['familie', 5]);
     assert.ok((await (await call('/api/data', {}, c2)).json()).features.wallpaper);
-    assert.ok(!('plans' in (await (await call('/api/data', {}, c2)).json())));
+    assert.equal((await (await call('/api/data', {}, c2)).json()).plans, null); // Nutzer sehen die Pläne erst nach Freigabe
+    assert.equal((await (await call('/api/data', {}, c1)).json()).plans.preview, true); // Admin: Vorschau
+    assert.equal((await post('/api/admin/plans', { visible: true }, c2)).status, 403);
+    assert.equal((await (await post('/api/admin/plans', { visible: true }, c1)).json()).plans.visible, true);
+    const up = (await (await call('/api/data', {}, c2)).json()).plans;
+    assert.deepEqual([up.current, up.preview, up.list.pro.year], ['familie', false, 19.99]);
+    await post('/api/admin/plans', { visible: false }, c1);
     await post(`/api/admin/accounts/${ben.id}`, { plan: 'free' }, c1);
     assert.ok(!(await (await call('/api/data', {}, c2)).json()).features.wallpaper);
     assert.ok(!(await (await call('/api/tokens', {}, c2)).json()).calendar);
