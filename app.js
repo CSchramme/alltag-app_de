@@ -861,6 +861,15 @@ const routes = {
     admin();
     try { send(res, 200, { ok: true, ...await accountsApi('/api/health') }); } catch (e) { send(res, 200, { ok: false, error: e.message }); }
   },
+  // Anmelden mit Alltag: Apps liegen beim Konto-Dienst; den Schlüssel gibt es nur in der Antwort beim Anlegen bzw. Erneuern
+  'GET /api/admin/clients': async (req, res) => { admin(); send(res, 200, await accountsApi('/api/clients')); },
+  'POST /api/admin/clients': async (req, res) => { admin(); const b = await readJson(req); send(res, 200, await accountsApi('/api/clients', 'POST', { name: b.name, redirects: b.redirects })); },
+  'POST /api/admin/clients/:id': async (req, res, id) => {
+    admin();
+    const b = await readJson(req);
+    send(res, 200, await accountsApi(`/api/clients/${encodeURIComponent(id)}`, 'PATCH', Object.fromEntries(['name', 'redirects', 'disabled', 'newSecret'].filter((k) => k in b).map((k) => [k, b[k]]))));
+  },
+  'DELETE /api/admin/clients/:id': async (req, res, id) => { admin(); send(res, 200, await accountsApi(`/api/clients/${encodeURIComponent(id)}`, 'DELETE')); },
   'POST /api/admin/invites': async (req, res) => {
     admin();
     const b = await readJson(req);

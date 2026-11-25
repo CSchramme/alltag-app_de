@@ -383,7 +383,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
 
   // 6. Öffentliche Version mit Konten: Anmelden über den Konto-Dienst (hier nachgebaut), getrennte Daten, Admin über dessen API
   const KS = 'k'.repeat(40), http = require('http');
-  const fakeAcc = { list: [], deleted: [], invites: [], codes: new Map(), imported: null };
+  const fakeAcc = { list: [], deleted: [], invites: [], codes: new Map(), imported: null, clients: [] };
   const mk = (name, extra = {}) => {
     const a = { id: crypto.randomUUID(), name, email: `${name}@example.org`, emailOk: true, school: 'edupage', admin: false, demo: false, jury: false, disabled: false, ver: 0, created: new Date().toISOString(), ...extra };
     fakeAcc.list.push(a);
@@ -409,6 +409,8 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     if (req.url === '/api/invites' && req.method === 'POST') { const code = String(482910 + fakeAcc.invites.length); fakeAcc.invites.push({ code, note: b.note, days: b.days, open: true }); return out(200, { invites: fakeAcc.invites, created: [code] }); }
     if (req.url === '/api/invites') return out(200, { invites: fakeAcc.invites });
     if (/^\/api\/invites\//.test(req.url)) { fakeAcc.invites = fakeAcc.invites.filter((i) => !req.url.endsWith(i.code)); return out(200, { invites: fakeAcc.invites }); }
+    if (req.url === '/api/clients' && req.method === 'POST') { const c = { id: `app-${fakeAcc.clients.length + 1}`, name: b.name, redirects: String(b.redirects).split(/\s+/) }; fakeAcc.clients.push(c); return out(200, { clients: fakeAcc.clients, created: c.id, secret: 'geheim' }); }
+    if (req.url === '/api/clients') return out(200, { clients: fakeAcc.clients });
     if (req.url === '/api/import') { fakeAcc.imported = b; return out(200, { imported: b.accounts.length }); }
     out(404, { error: 'unbekannt' });
   }).listen(0);
@@ -461,6 +463,10 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const imp2 = await (await call('/impressum.html')).text();
     assert.ok(imp2.includes('Max Muster<br>c/o Impressum-Dienst<br>Hauptstr. 1<br>12345 Ort') && imp2.includes('kontakt@example.org') && !imp2.includes('Telefon') && !imp2.includes('&#60;Muster'));
     await post('/api/admin/legal', { ...lg, phone: '0123 456' }, c1);
+    // Anmelden mit Alltag: Apps verwaltet nur der Admin, die App reicht an den Konto-Dienst weiter
+    assert.equal((await post('/api/admin/clients', { name: 'Spiel', redirects: 'https://spiel.example/cb' }, c2)).status, 403);
+    assert.equal((await (await post('/api/admin/clients', { name: 'Spiel', redirects: 'https://spiel.example/cb' }, c1)).json()).secret, 'geheim');
+    assert.deepEqual((await (await call('/api/admin/clients', {}, c1)).json()).clients.map((c) => c.name), ['Spiel']);
     assert.ok((await (await call('/impressum.html')).text()).includes('<br>Telefon: 0123 456'));
     // jedes Konto sieht nur seine eigenen Daten
     await post('/api/items/notes', { title: 'Nur für Ben' }, c2);

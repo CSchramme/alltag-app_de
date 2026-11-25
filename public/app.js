@@ -2020,6 +2020,7 @@ async function openAdmin(data) {
       <section class="card admin-card wide" id="adm-beta"><h2>Beta-Anmeldungen</h2><p class="sub">Lädt …</p></section>
       <section class="card admin-card wide" id="adm-fb"><h2>Rückmeldungen</h2><p class="sub">Lädt …</p></section>
       <section class="card admin-card wide" id="adm-um"><h2>Abschlussumfrage</h2><p class="sub">Lädt …</p></section>
+      <section class="card admin-card wide" id="adm-oidc"><h2>Anmelden mit Alltag</h2><p class="sub">Lädt …</p></section>
       <section class="card admin-card">
         <h2>Flyer (A6, doppelseitig)</h2>
         <p class="sub">Ein Code für alle Flyer: Er gilt für die gewählte Zahl an Anmeldungen und bis zum Ablaufdatum. Du bekommst eine ZIP-Datei mit Vorder- und Rückseite als Bild (z. B. für den dm-Fotodruck) und eine Druck-PDF für Druckereien.</p>
@@ -2065,6 +2066,7 @@ async function openAdmin(data) {
       ${used.length ? `<section class="card admin-card wide"><h2>Zuletzt eingelöste Einladungen</h2>${group(...used.map((i) => `<div class="row"><div class="main"><div class="title code">${esc(shownCode(i.code))}</div><div class="sub">${esc(i.note || 'ohne Notiz')} → ${esc(nameOf(i.usedBy))}</div></div></div>`))}</section>` : ''}
     </div></div>`;
   betaAdmin(el, data);
+  oidcAdmin(el);
   api('/api/admin/health').then((h) => {
     const box = $('#acc-health', el);
     if (box) box.textContent = h.ok ? `Konto-Dienst erreichbar · Mailversand: ${h.mail} · ${h.unconfirmed} Konten warten auf E-Mail-Bestätigung` : `Konto-Dienst nicht erreichbar: ${h.error}`;
@@ -2174,6 +2176,43 @@ const formRows = (id, x) => Formulare.FORMS[id].filter((f) => f.name && x[f.name
 const bars = (counts, total) => Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="row"><div class="main"><div class="title">${esc(k)}</div>
   <div class="meter" aria-hidden="true"><i style="width:${total ? Math.round((v / total) * 100) : 0}%"></i></div></div><div class="trail">${v}${total ? ` · ${Math.round((v / total) * 100)} %` : ''}</div></div>`).join('');
 
+// Anmelden mit Alltag: eigene Apps eintragen (OpenID Connect beim Konto-Dienst); Schlüssel nur direkt nach Anlegen/Erneuern sichtbar
+async function oidcAdmin(el) {
+  const box = $('#adm-oidc', el);
+  if (!box) return;
+  const render = (list, shown) => {
+    box.innerHTML = `<h2>Anmelden mit Alltag</h2>
+      <p class="sub">Für deine eigenen Apps, wie „Anmelden mit Google“ (Standard OpenID Connect). In der App einstellen: Anbieter <span class="code">${esc(D.accountsUrl || '')}</span>, Client-ID und Schlüssel, Scopes <span class="code">openid profile</span> (mit E-Mail: <span class="code">email</span> dazu). Nutzer stimmen beim ersten Anmelden zu.</p>
+      ${shown ? `<div class="card banner"><div><b>Schlüssel für ${esc(list.find((c) => c.id === shown.id)?.name || 'die App')}</b>Nur jetzt sichtbar, gleich in die App eintragen: <span class="code">${esc(shown.secret)}</span>
+        <div class="code-actions"><button class="btn-plain" type="button" data-cl-copy="${esc(shown.secret)}">Schlüssel kopieren</button></div></div></div>` : ''}
+      ${list.length ? group(...list.map((c) => `<div class="row"><div class="main"><div class="title">${esc(c.name)}${c.disabled ? ' · gesperrt' : ''}</div>
+        <div class="sub"><span class="code">${esc(c.id)}</span> · ${esc(c.redirects.join(', '))}</div>
+        <div class="code-actions"><button class="btn-plain" type="button" data-cl-copy="${esc(c.id)}">ID kopieren</button><button class="btn-plain" type="button" data-cl-secret="${esc(c.id)}">Neuer Schlüssel</button>
+          <button class="btn-plain" type="button" data-cl-off="${esc(c.id)}">${c.disabled ? 'Entsperren' : 'Sperren'}</button><button class="btn-plain danger" type="button" data-cl-del="${esc(c.id)}">Löschen</button></div></div></div>`))
+        : '<p class="footnote" style="text-align:left">Noch keine Apps eingetragen.</p>'}
+      <form class="form" id="cl-form">${group(fText('name', 'Name der App (sehen Nutzer beim Zustimmen)', '', 'maxlength="60" required'), fArea('redirects', 'Rücksprung-Adressen, eine pro Zeile (https://…/callback)', '', 2))}
+        <button class="btn-primary pressable" type="submit">App eintragen</button></form>
+      <p class="footnote" id="cl-hint" style="text-align:left"></p>`;
+    const hint = $('#cl-hint', box), url = (id) => `/api/admin/clients/${encodeURIComponent(id)}`;
+    $('#cl-form', box).onsubmit = async (e) => {
+      e.preventDefault();
+      try { const d = await api('/api/admin/clients', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); haptic(); render(d.clients, { id: d.created, secret: d.secret }); } catch (x) { hint.textContent = x.message; }
+    };
+    box.onclick = async (e) => {
+      const b = e.target.closest('button[data-cl-copy],button[data-cl-secret],button[data-cl-off],button[data-cl-del]');
+      if (!b) return;
+      const ds = b.dataset;
+      if (ds.clCopy) return copy(ds.clCopy, hint);
+      if ((ds.clSecret || ds.clDel) && !ds.sure) { ds.sure = '1'; b.textContent = ds.clDel ? 'Wirklich löschen?' : 'Alter Schlüssel geht dann nicht mehr. Sicher?'; return; }
+      try {
+        if (ds.clDel) return render((await api(url(ds.clDel), { method: 'DELETE' })).clients);
+        if (ds.clSecret) { const d = await api(url(ds.clSecret), { method: 'POST', body: { newSecret: true } }); return render(d.clients, { id: ds.clSecret, secret: d.secret }); }
+        render((await api(url(ds.clOff), { method: 'POST', body: { disabled: !list.find((c) => c.id === ds.clOff)?.disabled } })).clients);
+      } catch (x) { hint.textContent = x.message; }
+    };
+  };
+  try { render((await api('/api/admin/clients')).clients); } catch (x) { box.innerHTML = `<h2>Anmelden mit Alltag</h2><p class="sub">${esc(x.message)}</p>`; }
+}
 async function betaAdmin(el, data) {
   const [beta, fb, um] = await Promise.all(['/api/admin/beta', '/api/admin/feedback', '/api/admin/umfrage'].map((u) => api(u).catch(() => null)));
   const nameOf = (id) => data.accounts.find((a) => a.id === id)?.name;
