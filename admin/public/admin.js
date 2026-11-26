@@ -523,9 +523,17 @@ function pageSystem(main) {
     ${panel('Konto-Dienst', `<a href="${esc(S.data.accountsUrl)}/" target="_blank" rel="noopener">${esc(host(S.data.accountsUrl))}</a>`, list(h.ok ? [row(state(true, 'erreichbar')), row('Mailversand', '', esc(h.mail)), row('Konten', '', h.accounts), row('warten auf E-Mail-Bestätigung', '', h.unconfirmed)]
       : [row(state(false, 'nicht erreichbar'), esc(h.error))], ''))}
     </div>
+    ${panel('Testmail', 'Prüft den Mailversand und zeigt, wie die Mails aussehen', `<form id="test-mail" class="test-mail"><input type="email" name="to" required maxlength="120" autocomplete="email" placeholder="E-Mail-Adresse" value="${esc(S.data.me?.email || '')}" aria-label="An diese Adresse"><button class="btn" type="submit">Testmail senden</button></form>`)}
     <p class="sub">Die App startet nach längerer Ruhe neu (Hoster), „läuft seit“ ist deshalb oft kurz. Neue Konten ohne bestätigte E-Mail löscht der Konto-Dienst nach 7 Tagen.</p>
     <div><button class="btn" type="button" id="re-check">Neu prüfen</button></div>`;
   $('#re-check', main).onclick = () => { S.health = null; render(); };
+  $('#test-mail', main).onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target, b = $('button', f);
+    b.disabled = true;
+    try { await api('/api/admin/test-mail', { method: 'POST', body: { to: f.to.value } }); toast(`Testmail an ${f.to.value} ist unterwegs.`); } catch (x) { toast(x.message); }
+    b.disabled = false;
+  };
 }
 
 start();

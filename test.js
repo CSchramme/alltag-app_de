@@ -446,6 +446,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     if (/^\/api\/invites\//.test(req.url)) { fakeAcc.invites = fakeAcc.invites.filter((i) => !req.url.endsWith(i.code)); return out(200, { invites: fakeAcc.invites }); }
     if (req.url === '/api/clients' && req.method === 'POST') { const c = { id: `app-${fakeAcc.clients.length + 1}`, name: b.name, redirects: String(b.redirects).split(/\s+/) }; fakeAcc.clients.push(c); return out(200, { clients: fakeAcc.clients, created: c.id, secret: 'geheim' }); }
     if (req.url === '/api/clients') return out(200, { clients: fakeAcc.clients });
+    if (req.url === '/api/test-mail') return /@/.test(b.to) ? out(200, { ok: true, via: 'ordner', to: b.to }) : out(400, { error: 'Bitte eine gültige E-Mail-Adresse eingeben.' });
     if (req.url === '/api/import') { fakeAcc.imported = b; return out(200, { imported: b.accounts.length }); }
     out(404, { error: 'unbekannt' });
   }).listen(0);
@@ -560,6 +561,8 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await (await call('/api/data', {}, c2)).json()).plans, null); // Nutzer sehen die Pläne erst nach Freigabe
     assert.equal((await (await call('/api/data', {}, c1)).json()).plans.preview, true); // Admin: Vorschau
     assert.equal((await post('/api/admin/plans', { visible: true }, c2)).status, 403);
+    assert.equal((await post('/api/admin/test-mail', { to: 'chef@example.org' }, c2)).status, 403); // Testmail nur für Admins
+    assert.equal((await (await post('/api/admin/test-mail', { to: 'chef@example.org' }, c1)).json()).to, 'chef@example.org');
     assert.equal((await (await post('/api/admin/plans', { visible: true }, c1)).json()).plans.visible, true);
     const up = (await (await call('/api/data', {}, c2)).json()).plans;
     assert.deepEqual([up.current, up.preview, up.list.pro.year], ['familie', false, 19.99]);
@@ -682,7 +685,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await call('/api/items/notes', { method: 'POST', body: JSON.stringify({ title: 'x' }), headers: { Origin: base } }, c1)).status, 200);
     assert.equal((await call('/flyer.mjs')).headers.get('content-type'), 'text/javascript; charset=utf-8');
     // Verwaltung auf eigener Adresse (admin/): angemeldet weiter dorthin; nur diese Adresse darf die Admin-API mit der Sitzung nutzen
-    assert.equal((await call('/admin', { redirect: 'manual' }, c1)).headers.get('location'), `${AD}/`);
+    assert.ok((await (await call('/admin', { redirect: 'manual' }, c1)).text()).includes(`url=${AD}/"`)); // Zwischenseite statt 302 (CSP form-action)
     const pre = await call('/api/admin/legal', { method: 'OPTIONS', headers: { Origin: AD, 'Access-Control-Request-Method': 'POST' } });
     assert.deepEqual([pre.status, pre.headers.get('access-control-allow-origin'), pre.headers.get('access-control-allow-credentials'), pre.headers.get('access-control-allow-methods')], [204, AD, 'true', 'GET, POST, DELETE']);
     assert.equal((await call('/api/admin/legal', { method: 'OPTIONS', headers: { Origin: 'https://boese.example' } })).headers.get('access-control-allow-origin'), null);

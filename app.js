@@ -1062,6 +1062,7 @@ const routes = {
     atRoot(() => save('site.json', { ...siteSettings(), legal: l }));
     send(res, 200, await adminData());
   },
+  'POST /api/admin/test-mail': async (req, res) => { admin(); send(res, 200, await accountsApi('/api/test-mail', 'POST', { to: String((await readJson(req)).to || '').slice(0, 120) })); },
   'POST /api/admin/plans': async (req, res) => { // Plan-Auswahl im Profil für alle zeigen (kaufen geht noch nicht)
     admin();
     const b = await readJson(req);
@@ -1586,8 +1587,10 @@ const server = http.createServer(async (req, res) => {
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method Not Allowed');
       if (['/robots.txt', '/sitemap.xml', '/llms.txt'].includes(url.pathname)) return seoFile(req, res, url.pathname);
       if (ADMIN_URL && url.pathname === '/admin') { // Verwaltung liegt auf ADMIN_URL (ohne: 404); ohne Sitzung erst anmelden (kommt danach wieder hierher)
-        res.writeHead(302, { Location: sessionUser(req) ? `${ADMIN_URL}/` : `${ACCOUNTS_URL}/weiter?next=%2Fadmin`, 'Cache-Control': 'no-store' });
-        return res.end();
+        if (!sessionUser(req)) { res.writeHead(302, { Location: `${ACCOUNTS_URL}/weiter?next=%2Fadmin`, 'Cache-Control': 'no-store' }); return res.end(); }
+        // 200 + meta refresh statt 302: direkt nach dem Anmelde-Formular sperrt die form-action-CSP des Konto-Diensts eine Weiterleitung auf ADMIN_URL
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'" });
+        return res.end(`<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${ADMIN_URL}/"><title>Verwaltung</title><a href="${ADMIN_URL}/">Weiter zur Verwaltung</a>`);
       }
       return serveStatic(req, res, url.pathname);
     }
