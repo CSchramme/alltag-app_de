@@ -28,8 +28,8 @@ async function http(url, body, jwt) {
 }
 
 class Schulmanager {
-  constructor({ user, pass }, session = {}) {
-    Object.assign(this, { user, pass, jwt: session?.jwt || null, kid: session?.student || null, hours: null });
+  constructor({ user, pass, child }, session = {}) { // child: bei Elternkonten das gewählte Kind (sonst das erste)
+    Object.assign(this, { user, pass, child: child ? String(child) : '', jwt: session?.jwt || null, kid: session?.student || null, kids: null, hours: null });
   }
   get session() { return { jwt: this.jwt, student: this.kid }; }
 
@@ -47,7 +47,13 @@ class Schulmanager {
     const kids = u.associatedStudent ? [u.associatedStudent] : (u.associatedParents || []).map((p) => p.student).filter(Boolean);
     if (!kids.length) throw new SmError('In diesem Schulmanager-Konto ist kein Schüler hinterlegt.', 'credentials');
     this.jwt = r.jwt;
-    this.kid = kids[0]; // shortcut: bei Elternkonten mit mehreren Kindern nur das erste
+    this.kids = kids;
+    this.kid = this.child ? kids.find((k) => String(k.id) === this.child) : kids[0];
+    if (!this.kid) throw new SmError('Dieses Kind ist im Schulmanager-Zugang nicht (mehr) hinterlegt.', 'credentials');
+  }
+  async children() { // Eltern-Zugang: alle hinterlegten Kinder
+    if (!this.kids) await this.login();
+    return this.kids.map((k) => ({ id: String(k.id ?? ''), name: person(k) })).filter((k) => k.id && k.name);
   }
   async calls(requests, retry = true) {
     if (!this.jwt || !this.kid) await this.login();

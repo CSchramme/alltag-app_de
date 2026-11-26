@@ -257,6 +257,21 @@ class Edupage {
       .filter((t) => t.name).sort((a, b) => a.name.localeCompare(b.name, 'de'));
   }
 
+  // Elternkonto (userid „Rodic…“): Kinder stehen in dbi.students, umschalten wie im Webclient (/login/switchchild, edupage-api parent.py)
+  isParent() { return /^Rodic/i.test(String(this.data?.userid || '')); }
+  children() {
+    return Object.entries(this.data?.dbi?.students || {}).map(([id, p]) => ({ id: String(id), name: `${p.firstname || ''} ${p.lastname || ''}`.trim() }))
+      .filter((k) => /^\d+$/.test(k.id) && k.name);
+  }
+  async useChild(id) {
+    const uid = String(this.data?.userid || '');
+    if (!/^Rodic/i.test(uid) && uid.replace(/\D/g, '') === String(id)) return; // Sitzung steht schon auf dem Kind
+    if (!/^Rodic/i.test(uid)) throw new EduError('credentials', 'Das ist kein Eltern-Zugang von EduPage.');
+    const r = await this.req(`/login/switchchild?studentid=${encodeURIComponent(id)}`);
+    if (r.text.trim() !== 'OK') throw new EduError('credentials', 'Dieses Kind ist im EduPage-Zugang nicht (mehr) hinterlegt.');
+    this.data.userid = uid.replace(/^Rodic/i, 'Student').replace(/\d+$/, String(id)); // ab jetzt der persönliche Tagesplan des Kindes
+  }
+
   whoami() {
     const sid = String(this.data?.userid || '').replace(/\D/g, '');
     const me = this.dbi('students', sid);

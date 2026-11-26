@@ -37,10 +37,15 @@ async function searchSchools(q) {
 }
 
 class Untis {
-  constructor({ server, school, user, pass }, session = {}) {
+  constructor({ server, school, user, pass, child }, session = {}) { // child: bei Elternkonten die Schüler-ID des Kindes
     if (!SERVER_RE.test(server || '')) throw new UntisError('Unbekannter WebUntis-Server. Bitte die Schule neu suchen.', 'config');
-    Object.assign(this, { server, school, user, pass, s: session?.sid ? session : null, jwt: null, grid: null });
+    Object.assign(this, { server, school, user, pass, child: Number(child) || null, s: session?.sid ? session : null, jwt: null, grid: null });
   }
+  async children() { // Eltern-Zugang: Kinder aus den App-Daten des Webclients
+    const app = await this.rest('/api/rest/view/v1/app/data', {}, true);
+    return (app?.user?.students || []).map((s) => ({ id: String(s.id ?? ''), name: String(s.displayName || `${s.firstName || ''} ${s.lastName || ''}`).trim() })).filter((k) => /^\d+$/.test(k.id) && k.name);
+  }
+  forKid() { return this.child ? { studentId: this.child } : {}; }
   get session() { return this.s || {}; }
   get base() { return `https://${this.server}/WebUntis`; }
   cookie() { return `JSESSIONID=${this.s.sid}; schoolname=${encodeURIComponent(`_${Buffer.from(this.school).toString('base64')}`)}`; }
@@ -88,7 +93,8 @@ class Untis {
     const opts = (element) => ({ options: { element, startDate: toUntis(from), endDate: toUntis(to), showInfo: true, showSubstText: true, showLsText: true, showStudentgroup: true,
       klasseFields: ['id', 'name', 'longname'], roomFields: ['id', 'name', 'longname'], subjectFields: ['id', 'name', 'longname'], teacherFields: ['id', 'name', 'longname'] } });
     let list;
-    try { list = await this.rpc('getTimetable', opts({ id: this.s.personId, type: this.s.personType })); } catch (e) {
+    if (this.child) list = await this.rpc('getTimetable', opts({ id: this.child, type: 5 })); // Elternkonto: Plan des gewählten Kindes
+    else try { list = await this.rpc('getTimetable', opts({ id: this.s.personId, type: this.s.personType })); } catch (e) {
       if (e.code || !this.s?.klasseId) throw e;
       list = await this.rpc('getTimetable', opts({ id: this.s.klasseId, type: 1 })); // z. B. Elternkonten: Plan der Klasse
     }
@@ -101,13 +107,14 @@ class Untis {
   async student() {
     const app = await this.rest('/api/rest/view/v1/app/data', {}, true).catch(() => null);
     const classes = await this.rpc('getKlassen').catch(() => []);
+    if (this.child) return { name: String((app?.user?.students || []).find((x) => Number(x.id) === this.child)?.displayName || ''), class: '' };
     return { name: String(app?.user?.person?.displayName || ''), class: String(classes.find?.((k) => k.id === this.s?.klasseId)?.name || '') };
   }
   async homework(today, until) { // auch ältere Einträge, die erst noch fällig werden
-    return untisHomework((await this.rest('/api/homeworks/lessons', { startDate: toUntis(shift(today, -14)), endDate: toUntis(until) })).data, today);
+    return untisHomework((await this.rest('/api/homeworks/lessons', { startDate: toUntis(shift(today, -14)), endDate: toUntis(until), ...this.forKid() })).data, today);
   }
   async exams(today, until) {
-    return untisExams((await this.rest('/api/exams', { startDate: toUntis(today), endDate: toUntis(until), klasseId: -1, withGrades: false })).data?.exams, today);
+    return untisExams((await this.rest('/api/exams', { startDate: toUntis(today), endDate: toUntis(until), klasseId: -1, withGrades: false, ...this.forKid() })).data?.exams, today);
   }
   async messages(today) {
     const [news, inbox] = await Promise.allSettled([

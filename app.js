@@ -207,6 +207,13 @@ function famPayload() { // wer zur Familie gehört, wen ich ansehen darf, wer mi
     members: accounts().filter((x) => x.family?.owner === f.owner && !x.disabled)
       .map((x) => ({ id: x.id, name: x.name, role: x.id === f.owner ? 'parent' : x.family.role, owner: x.id === f.owner, me: x.id === a.id })) };
 }
+// Eltern-Zugang der Schule: einer pro Schule, daraus alle Kinder. Jedes Kind hat einen eigenen Datenordner unter users/<id>/kinder/<key>
+// (Zugang mit gewähltem Kind, Sitzung, Stand) und gleicht dort ab wie ein Konto; Eltern sehen es nur an (forParents).
+const KID_MAX = 6, KID_LINKS = 3;
+const kidsOf = () => load('config.json', {}).kids || [];
+const kidDir = (parentId, key) => path.join(userDir(parentId), 'kinder', key);
+const asKid = (parent, k, fn, viewer) => ctx.run({ dir: kidDir(parent.id, k.key), account: { ...parent, name: k.name, school: k.kind, kidKey: k.key }, ...(viewer ? { viewer } : {}) }, fn);
+const ownKid = (user, key) => (user?.id ? asUser(user, kidsOf).find((k) => k.key === key) : null);
 function famMe() { const a = me(); if (!ACCOUNTS || !a || a.demo) throw bad('Familien gibt es nur mit eigenem Konto.'); return a; }
 async function famChange(p, method, body) { // im Namen des angemeldeten Kontos; der Konto-Dienst prüft, wer was darf
   const r = await accountsApi(`/api/family/${famMe().id}${p}`, method, body);
@@ -298,6 +305,7 @@ async function eachUser(fn) {
   // neue, noch unbestätigte Konten haben noch keinen Datenordner; umgezogene Konten ohne bestätigte E-Mail gleichen weiter ab
   for (const a of accounts().filter((x) => !x.disabled && (x.emailOk || x.demo || fs.existsSync(userDir(x.id))))) {
     try { await asUser(a, fn); } catch (e) { console.error(`Konto ${a.name}:`, e); }
+    for (const k of asUser(a, kidsOf)) { try { await asKid(a, k, fn); } catch (e) { console.error(`Kind von ${a.name}:`, e); } } // Eltern-Zugänge
   }
 }
 
@@ -489,6 +497,7 @@ function loadSession() { // passt der Schlüssel nicht (mehr), einfach neu anmel
 async function connect(cfg) {
   const ep = new Edupage(cfg.school, loadSession());
   try { await ep.refresh(); } catch (e) { if (!(e instanceof EduError) && !(e instanceof SyntaxError)) throw e; await ep.login(cfg.user, unseal(cfg.pass)); }
+  if (cfg.child) await ep.useChild(cfg.child); // Eltern-Zugang: auf das Kind dieses Datenordners umschalten
   saveSession(Object.fromEntries(ep.cookies));
   return ep;
 }
@@ -825,8 +834,8 @@ function settings() {
 }
 // Eltern beim Kind: nur Stundenplan, Hausaufgaben, Prüfungen und Termine. Notizen, Noten, Nachrichten, Schulweg und Kalender bleiben privat.
 function forParents(p) {
-  const kid = me(), keep = { events: p.db.events, lessons: p.db.lessons, reminders: p.db.reminders.filter((r) => r.category === 'schule') };
-  return { ...p, viewing: { id: kid.id, name: kid.name }, account: { id: kid.id, name: kid.name }, beta: null, plans: null, family: null, timer: null,
+  const kid = me(), id = kid.kidKey ? `kid:${kid.kidKey}` : kid.id, keep = { events: p.db.events, lessons: p.db.lessons, reminders: p.db.reminders.filter((r) => r.category === 'schule') };
+  return { ...p, viewing: { id, name: kid.name }, account: { id, name: kid.name }, beta: null, plans: null, family: null, kids: [], timer: null,
     weather: [], place: null, stops: {}, ticket: null, ha: { connected: false }, features: { accounts: true }, link: { connected: !!p.link.connected, school: p.link.school || '' },
     calendars: [], ical: [], snap: p.snap && { ...p.snap, messages: [] }, db: { ...Object.fromEntries(Object.keys(p.db).map((k) => [k, []])), ...keep } };
 }
@@ -854,6 +863,7 @@ function fullPayload() {
       }),
     },
     db: db(), ...calPayload(), family: famPayload(),
+    kids: ACCOUNTS && me() && !me().demo ? kidsOf().map((k) => ({ key: k.key, name: k.name, kind: k.kind, link: k.link, where: k.where, error: asKid(me(), k, () => load('status.json', {})).error || null })) : [],
     plans: ACCOUNTS && !isDemo() && (plansVisible() || me()?.admin) ? { list: PLANS, features: FEATURES, soon: SOON, current: planOf(me()), preview: !plansVisible() } : null,
   };
 }
@@ -1112,6 +1122,40 @@ const routes = {
   },
   'DELETE /api/family/invites/:email': async (req, res, email) => send(res, 200, await famChange(`/invites/${encodeURIComponent(email)}`, 'DELETE')),
   'DELETE /api/family/members/:id': async (req, res, id) => send(res, 200, await famChange(`/members/${encodeURIComponent(id)}`, 'DELETE')),
+  'POST /api/kids': async (req, res) => {
+    const a = me();
+    if (!ACCOUNTS || !a || a.demo) throw bad('Das geht nur mit eigenem Konto.');
+    const b = await readJson(req), kind = ['edupage', 'untis', 'schulmanager'].includes(b.kind) ? b.kind : null;
+    if (!kind) throw bad('Bitte die Schulsoftware wählen.');
+    const cfg = { user: String(b.user || '').trim().slice(0, 200), pass: String(b.pass || '') };
+    if (kind === 'edupage') cfg.school = String(b.school || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\.edupage\.org.*$/, '');
+    if (kind === 'untis') Object.assign(cfg, { server: String(b.server || '').trim().toLowerCase(), school: String(b.school || '').trim().slice(0, 100), name: F.text(160)(b.name) || String(b.school || '') });
+    if (kind === 'edupage' && !/^[a-z0-9-]{2,63}$/.test(cfg.school)) throw bad('Bitte die Schul-Adresse angeben (der Teil vor „.edupage.org“).');
+    if (kind === 'untis' && (!SERVER_RE.test(cfg.server) || !cfg.school)) throw bad('Bitte such zuerst die Schule und wähl sie aus.');
+    if (!cfg.user || !cfg.pass) throw bad('Bitte Benutzername und Passwort angeben.');
+    const kids = kidsOf(), schoolKey = kind === 'edupage' ? `edupage:${cfg.school}` : kind === 'untis' ? `untis:${cfg.server}/${cfg.school.toLowerCase()}` : `sm:${cfg.user.toLowerCase()}`;
+    if (kids.some((k) => k.schoolKey === schoolKey)) throw bad('Für diese Schule gibt es schon einen Eltern-Zugang. Er gilt für alle deine Kinder dort.');
+    if (new Set(kids.map((k) => k.link)).size >= KID_LINKS) throw bad(`Es gehen höchstens ${KID_LINKS} Eltern-Zugänge.`);
+    let found;
+    try {
+      if (kind === 'edupage') { const ep = new Edupage(cfg.school); await ep.login(cfg.user, cfg.pass); found = ep.isParent() ? ep.children() : []; } else found = await new LINKS[kind](cfg).children();
+    } catch (e) { return send(res, 400, { error: e.code ? e.message : `${SCHOOL_NAMES[kind]} nicht erreichbar (${e.message})` }); }
+    if (!found.length) throw bad('In diesem Zugang sind keine Kinder hinterlegt. Bitte den Eltern-Zugang der Schule nehmen.');
+    if (found.length > KID_MAX) throw bad(`Dieser Zugang zeigt mehr als ${KID_MAX} Schüler. Bitte den Eltern-Zugang nehmen, keinen Lehrer-Zugang.`);
+    if (kids.length + found.length > KID_MAX) throw bad(`Es gehen höchstens ${KID_MAX} Kinder.`);
+    const link = crypto.randomBytes(4).toString('hex'), where = kind === 'edupage' ? `${cfg.school}.edupage.org` : kind === 'untis' ? cfg.name : 'Schulmanager', st = load('config.json', {}).state;
+    const added = found.map((k) => ({ key: `${link}-${k.id.replace(/\W/g, '').slice(0, 20)}`, child: k.id, name: k.name.slice(0, 80), kind, link, where, schoolKey }));
+    for (const k of added) asKid(a, k, () => { fs.mkdirSync(home(), { recursive: true, mode: 0o700 }); save('config.json', { ...(st ? { state: st } : {}), [kind]: { ...cfg, pass: seal(cfg.pass), child: k.child } }); });
+    save('config.json', { ...load('config.json', {}), kids: [...kids, ...added.map(({ child, ...k }) => k)] });
+    (async () => { for (const k of added) await asKid(a, k, () => sync(0)); })().catch(() => {}); // nacheinander: jedes Kind meldet sich selbst an
+    send(res, 200, payload());
+  },
+  'DELETE /api/kids/:link': (req, res, link) => {
+    const a = me(), kids = kidsOf();
+    for (const k of kids.filter((x) => x.link === link)) fs.rmSync(kidDir(a.id, k.key), { recursive: true, force: true });
+    save('config.json', { ...load('config.json', {}), kids: kids.filter((x) => x.link !== link) });
+    send(res, 200, payload());
+  },
   'GET /api/data': (req, res) => {
     if (viewer()) return send(res, 200, payload()); // Elternteil schaut beim Kind: nichts zählen, nichts nachladen
     const origin = `${https(req) ? 'https' : 'http'}://${req.headers.host}`;
@@ -1670,7 +1714,8 @@ const server = http.createServer(async (req, res) => {
     const user = sessionUser(req) || reader;
     if (!['/api/login', '/api/demo', '/api/beta'].includes(url.pathname) && !user) return send(res, 401, { error: 'login' });
     // Eltern sehen ein Kind ihrer Familie: nur diese Lese-Abfragen, nur mit Sitzung, im Datenordner des Kindes
-    const as = req.method === 'GET' && ['/api/data', '/api/week'].includes(url.pathname) ? url.searchParams.get('as') : null, kid = as && viewable(sessionUser(req), as);
+    const as = req.method === 'GET' && ['/api/data', '/api/week'].includes(url.pathname) ? url.searchParams.get('as') : null;
+    const kid = as && (as.startsWith('kid:') ? ownKid(sessionUser(req), as.slice(4)) : viewable(sessionUser(req), as)); // eigenes Kind (Eltern-Zugang) oder Kind der Familie
     if (as && !kid) return send(res, 403, { error: 'Das darfst du nicht ansehen.' });
     const parts = url.pathname.split('/').filter(Boolean); // ['api', 'items', 'notes', '<id>']
     for (const [key, fn] of Object.entries(routes)) {
@@ -1679,6 +1724,7 @@ const server = http.createServer(async (req, res) => {
       const args = [];
       if (!p.every((seg, i) => (seg.startsWith(':') ? (args.push(decodeURIComponent(parts[i])), true) : seg === parts[i]))) continue;
       const run = () => { if (limited()) demoTouch(req); return fn(req, res, ...args); };
+      if (kid?.key) return await asKid(user, kid, run, user);
       if (kid) return await ctx.run({ dir: userDir(kid.id), account: kid, viewer: user }, run);
       return await (ACCOUNTS && user?.id ? asUser(user, run) : run()); // alles Weitere läuft im Datenordner dieses Kontos
     }

@@ -1917,6 +1917,7 @@ async function openSettings() {
     ${D.plans ? proCard() : ''}
     ${accountSection()}
     ${familySection()}
+    ${kidsSection()}
     ${D.beta ? `<p class="label-sm">Beta-Test</p>${group('<button class="row" data-feedback><div class="main"><div class="title">Fehler oder Idee melden</div><div class="sub">Geht direkt an den Entwickler, mit deiner Tester-ID</div></div></button>',
       D.beta.umfrage ? '<button class="row" data-umfrage><div class="main"><div class="title">Abschlussumfrage</div><div class="sub">Drei Minuten, anonym</div></div></button>' : '')}` : ''}
     ${D.school === 'none' && !D.demo ? `<p class="label-sm">Stundenplan</p><div id="own-plan">${ownPlan()}</div>` : ''}
@@ -2023,6 +2024,7 @@ async function openSettings() {
   if (D.features?.ha !== false) wireHa();
   wireAccount();
   if (D.family) wireFamily();
+  wireKids();
   const rot = $('#widget-rotate');
   if (rot) rot.onclick = async () => { // falls der Lese-Schlüssel in falsche Hände geraten ist
     if (!rot.dataset.sure) { rot.dataset.sure = '1'; $('span', rot).textContent = 'Wirklich? Widget und Kurzbefehle musst du danach neu einrichten.'; return; }
@@ -2174,6 +2176,61 @@ function wireFamily() {
       try { await api(`/api/family/members/${encodeURIComponent(b.dataset.famDel)}`, { method: 'DELETE' }); reload(); } catch (x) { toast(x.message); }
     };
   });
+}
+/* ---------------------------------------------------------------- Kinder: Eltern-Zugang der Schule (einer pro Schule), nur ansehen */
+function kidsSection() {
+  if (!D.features?.accounts || !D.account || D.account.demo || (D.family?.role === 'child' && !D.kids?.length)) return ''; // nur für Eltern
+  const kids = D.kids || [], links = [...new Map(kids.map((k) => [k.link, k])).values()];
+  return `<p class="label-sm">Kinder</p>
+    ${kids.length ? `<div class="list card">${kids.map((k) => `<div class="row"><div class="avatar small" style="--c:var(--pink)">${esc(initials(k.name))}</div>
+      <div class="main"><div class="title">${esc(k.name)}</div><div class="sub">${esc(schoolName(k.kind))} · ${esc(k.where)}</div>${k.error ? `<div class="sub warn-text">${esc(k.error)}</div>` : ''}
+      <div class="code-actions"><button class="btn-plain" type="button" data-view-kid="kid:${esc(k.key)}">Ansehen</button></div></div></div>`).join('')}</div>` : ''}
+    <div class="list card"${kids.length ? ' style="margin-top:8px"' : ''}>${links.map((k) => `<button class="row" type="button" data-kid-del="${esc(k.link)}"><span class="btn-plain danger">Zugang ${esc(k.where)} entfernen</span></button>`).join('')}
+      <button class="row" type="button" data-kid-add><span class="btn-plain">Eltern-Zugang der Schule hinzufügen</span></button></div>
+    <p class="footnote" style="margin-top:8px;text-align:left">Für Eltern: Ein Eltern-Zugang pro Schule reicht, Alltag findet darin alle deine Kinder. Du siehst Stundenplan, Vertretungen, Hausaufgaben und Prüfungen, ändern kannst du nichts.</p>`;
+}
+function wireKids() {
+  const add = $('#sheet [data-kid-add]');
+  if (add) add.onclick = () => openKidLink();
+  $$('#sheet [data-kid-del]').forEach((b) => {
+    b.onclick = async () => {
+      if (!b.dataset.sure) { b.dataset.sure = '1'; $('span', b).textContent = 'Sicher? Die Kinder verschwinden aus Alltag.'; return; }
+      try { setData(await api(`/api/kids/${encodeURIComponent(b.dataset.kidDel)}`, { method: 'DELETE' })); haptic(); openSettings(); } catch (x) { toast(x.message); }
+    };
+  });
+}
+let kidKind = 'edupage';
+function openKidLink() {
+  const k = kidKind;
+  untisChoice = null; untisFound = [];
+  openSheet('Eltern-Zugang', `<p class="footnote" style="text-align:left;margin-top:0">Melde dich mit dem Eltern-Zugang der Schule an. Alltag sucht darin alle deine Kinder und zeigt sie unter Profil → Kinder. Pro Schule reicht ein Zugang.</p>
+    ${fChoice('kid-kind', [['edupage', 'EduPage'], ['untis', 'WebUntis'], ['schulmanager', 'Schulmanager']], k)}
+    <form class="form" id="edu-form" autocomplete="off" style="margin-top:14px">
+      ${k === 'untis' ? `<div id="untis-pick">${untisPick()}</div>` : ''}
+      ${group(k === 'edupage' ? fRow('Schule', '<input name="school" placeholder="meineschule" autocapitalize="off" spellcheck="false" required><em class="suffix">.edupage.org</em>') : '',
+        fText('user', k === 'schulmanager' ? 'Benutzername oder E-Mail' : 'Benutzername', '', 'autocapitalize="off" spellcheck="false" required'),
+        fText('pass', 'Passwort', '', 'type="password" autocomplete="new-password" required'))}
+      <p class="form-error" role="alert"></p>
+      <button class="btn-primary pressable" type="submit">Kinder suchen</button>
+      <p class="footnote" style="text-align:left">Die Zugangsdaten liegen verschlüsselt auf dem Server und gehen nur an ${schoolName(k)}. Mit Zwei-Faktor-Anmeldung geht es noch nicht.</p></form>
+    <button class="btn-plain" type="button" id="kid-back">Zurück zum Profil</button>`);
+  $$('#sheet input[name=kid-kind]').forEach((r) => { r.onchange = () => { kidKind = r.value; haptic(); openKidLink(); }; });
+  $('#kid-back').onclick = openSettings;
+  wireUntisPick();
+  const f = $('#edu-form');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = $('button[type=submit]', f), err = $('.form-error', f);
+    if (k === 'untis' && !untisChoice) { err.textContent = 'Bitte such zuerst die Schule und wähl sie aus.'; return; }
+    btn.disabled = true; btn.textContent = `Suche Kinder bei ${schoolName(k)} …`; err.textContent = '';
+    try {
+      const before = (D.kids || []).length;
+      setData(await api('/api/kids', { method: 'POST', body: { ...Object.fromEntries(new FormData(f)), kind: k } }));
+      untisChoice = null; haptic();
+      toast(`${D.kids.length - before} ${D.kids.length - before === 1 ? 'Kind' : 'Kinder'} gefunden`);
+      openSettings();
+    } catch (x) { err.textContent = x.message; btn.disabled = false; btn.textContent = 'Kinder suchen'; }
+  };
 }
 function accountSection() {
   const a = D.account;

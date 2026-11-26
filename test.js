@@ -205,6 +205,29 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   assert.deepEqual(SMO.smExams([{ id: 3, date: '2026-11-24', subject: { name: 'Englisch' }, type: { name: 'Schulaufgabe' } }], '2026-11-18').map((t) => [t.id, t.title, t.due]),
     [['ex:3', 'Schulaufgabe Englisch', '2026-11-24']]);
 
+  // Eltern-Zugang: Kinder finden und auswählen (EduPage schaltet um, WebUntis fragt den Plan des Kindes, Schulmanager nimmt das gewählte Kind)
+  const pe = new Edupage('schule'), switched = [];
+  pe.data = { userid: 'Rodic-9', dbi: { students: { 41: { firstname: 'Lena', lastname: 'M' }, 42: { firstname: 'Tim', lastname: 'M' } } } };
+  pe.req = async (p) => { switched.push(p); return { text: p.includes('studentid=42') ? 'OK' : 'Error' }; };
+  assert.deepEqual([pe.isParent(), pe.children().map((k) => [k.id, k.name])], [true, [['41', 'Lena M'], ['42', 'Tim M']]]);
+  await pe.useChild('42');
+  assert.deepEqual([pe.data.userid, switched[0]], ['Student-42', '/login/switchchild?studentid=42']);
+  await pe.useChild('42'); // steht schon auf dem Kind: kein zweites Umschalten
+  assert.equal(switched.length, 1);
+  pe.data.userid = 'Rodic-9';
+  await assert.rejects(pe.useChild('43'), { code: 'credentials' });
+  const uk = new U.Untis({ server: 'x.webuntis.com', school: 's', user: 'u', pass: 'p', child: '77' }), rpcs = [];
+  Object.assign(uk, { s: { sid: '1', personId: 5, personType: 12 }, rpc: async (m, p) => { rpcs.push([m, p?.options?.element]); return []; }, rest: async () => ({ user: { students: [{ id: 77, displayName: 'Kim M' }, { id: 'x' }] } }) });
+  await uk.lessons('2026-11-16', '2026-11-20');
+  assert.deepEqual([rpcs[1], await uk.children(), uk.forKid()], [['getTimetable', { id: 77, type: 5 }], [{ id: '77', name: 'Kim M' }], { studentId: 77 }]);
+  const realFetch = global.fetch; // Schulmanager: nachgebauter Login eines Elternkontos mit zwei Kindern
+  global.fetch = async (url) => new Response(JSON.stringify(/get-salt/.test(url) ? 'salz' : { jwt: 'j', user: { associatedParents: [{ student: { id: 1, firstname: 'Ada' } }, { student: { id: 2, firstname: 'Ben' } }] } }));
+  try {
+    const sm = new SMO.Schulmanager({ user: 'eltern', pass: 'x', child: '2' });
+    assert.deepEqual([await sm.children(), sm.kid.firstname], [[{ id: '1', name: 'Ada' }, { id: '2', name: 'Ben' }], 'Ben']);
+    await assert.rejects(new SMO.Schulmanager({ user: 'eltern', pass: 'x', child: '3' }).login(), { code: 'credentials' });
+  } finally { global.fetch = realFetch; }
+
   // Wiederholungen (gemeinsam für Server und App)
   const R = require('./public/recur');
   assert.ok(R.occursOn({ date: '2026-11-17', repeat: 'weekly' }, '2026-11-24'));
@@ -596,6 +619,21 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await call(`/api/data?as=${lena.id}`, {}, c2)).status, 403);
     delete ben.family; ben.plan = 'free';
     await hook();
+    // Eltern-Zugang: Kinder in eigenen Datenordnern unter dem Konto, nur dieses Konto sieht sie (ohne Nachrichten), Entfernen löscht den Ordner
+    assert.equal((await post('/api/kids', { kind: 'quatsch' }, c2)).status, 400);
+    assert.match((await (await post('/api/kids', { kind: 'edupage', school: 'x y', user: 'a', pass: 'b' }, c2)).json()).error, /Schul-Adresse/);
+    const kidKey = 'ab12cd34-41', kd = path.join(dir2, 'users', ben.id, 'kinder', kidKey), benCfg = path.join(dir2, 'users', ben.id, 'config.json');
+    fs.mkdirSync(kd, { recursive: true });
+    fs.writeFileSync(path.join(kd, 'snapshot.json'), JSON.stringify({ v: 8, updated: new Date().toISOString(), student: { name: 'Kim', class: '5a' }, days: [], missing: [], people: [], bells: [], errors: [],
+      tasks: [{ id: 'hw:1', kind: 'homework', label: 'Hausaufgabe', title: 'Vokabeln', subject: 'E', due: '2030-01-02', created: '2029-12-30T10:00:00Z' }], messages: [{ id: 'm1', text: 'geheim', replies: [] }] }));
+    fs.writeFileSync(benCfg, JSON.stringify({ ...(fs.existsSync(benCfg) ? JSON.parse(fs.readFileSync(benCfg, 'utf8')) : {}), kids: [{ key: kidKey, name: 'Kim', kind: 'untis', link: 'ab12cd34', where: 'Testschule', schoolKey: 'untis:x/y' }] }));
+    assert.deepEqual((await (await call('/api/data', {}, c2)).json()).kids.map((k) => [k.name, k.where, k.error]), [['Kim', 'Testschule', null]]);
+    const kv2 = await (await call(`/api/data?as=kid%3A${kidKey}`, {}, c2)).json();
+    assert.deepEqual([kv2.viewing, kv2.snap.tasks.map((t) => t.title), kv2.snap.messages, kv2.kids], [{ id: `kid:${kidKey}`, name: 'Kim' }, ['Vokabeln'], [], []]);
+    assert.equal((await call(`/api/data?as=kid%3A${kidKey}`, {}, c1)).status, 403); // Kind eines anderen Kontos
+    assert.equal((await call('/api/data?as=kid%3A..%2F..', {}, c2)).status, 403);
+    await call('/api/kids/ab12cd34', { method: 'DELETE' }, c2);
+    assert.ok(!fs.existsSync(kd) && !(await (await call('/api/data', {}, c2)).json()).kids.length);
     // Schulsoftware wechseln: gespeichert beim Konto-Dienst. WebUntis nur echte Server, Suche ab 3 Zeichen, EduPage-Funktionen gibt es dort nicht
     const su = await (await post('/api/account', { school: 'untis' }, c2)).json();
     assert.deepEqual([su.school, su.link.connected, fakeAcc.list.find((a) => a.id === ben.id).school], ['untis', false, 'untis']);
