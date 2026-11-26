@@ -446,6 +446,8 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     if (/^\/api\/invites\//.test(req.url)) { fakeAcc.invites = fakeAcc.invites.filter((i) => !req.url.endsWith(i.code)); return out(200, { invites: fakeAcc.invites }); }
     if (req.url === '/api/clients' && req.method === 'POST') { const c = { id: `app-${fakeAcc.clients.length + 1}`, name: b.name, redirects: String(b.redirects).split(/\s+/) }; fakeAcc.clients.push(c); return out(200, { clients: fakeAcc.clients, created: c.id, secret: 'geheim' }); }
     if (req.url === '/api/clients') return out(200, { clients: fakeAcc.clients });
+    const fm = /^\/api\/family\/([^/]+)(\/.*)?$/.exec(req.url); // Familie: nur durchreichen, Regeln prüft der Konto-Dienst (dessen Tests)
+    if (fm) return out(200, { family: { owner: fm[1], path: fm[2] || '', method: req.method, body: b } });
     if (req.url === '/api/test-mail') return /@/.test(b.to) ? out(200, { ok: true, via: 'ordner', to: b.to }) : out(400, { error: 'Bitte eine gültige E-Mail-Adresse eingeben.' });
     if (req.url === '/api/import') { fakeAcc.imported = b; return out(200, { imported: b.accounts.length }); }
     out(404, { error: 'unbekannt' });
@@ -571,6 +573,29 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.ok(!(await (await call('/api/data', {}, c2)).json()).features.wallpaper);
     assert.ok(!(await (await call('/api/tokens', {}, c2)).json()).calendar);
     assert.match((await (await post('/api/calendars', { name: 'x', url: 'https://example.org/a.ics' }, c2)).json()).error, /Pro/);
+    // Familie: Eltern sehen beim Kind nur Stundenplan, Hausaufgaben und Termine (nur lesen), Fremde und Kinder nichts
+    const lena = mk('lena', { school: 'none', plan: 'familie', family: { owner: ben.id, role: 'child', active: true } });
+    Object.assign(ben, { plan: 'familie', family: { owner: ben.id, role: 'parent', active: true } });
+    await hook();
+    const c3 = (await login(lena)).cookie;
+    for (const [k, v] of [['notes', { title: 'Tagebuch' }], ['events', { title: 'Kino', date: '2030-01-05' }], ['reminders', { title: 'Mathe lernen', category: 'schule' }], ['reminders', { title: 'Geschenk', category: 'privat' }]]) await post(`/api/items/${k}`, v, c3);
+    const fam = (await (await call('/api/data', {}, c2)).json()).family;
+    assert.deepEqual([fam.owner, fam.role, fam.members.map((m) => [m.name, m.role])], [true, 'parent', [['ben', 'parent'], ['lena', 'child']]]);
+    assert.deepEqual((await (await call('/api/data', {}, c3)).json()).family.role, 'child');
+    const kv = await (await call(`/api/data?as=${lena.id}`, {}, c2)).json();
+    assert.deepEqual([kv.viewing.name, kv.db.notes, kv.db.events.map((e) => e.title), kv.db.reminders.map((r) => r.title), kv.family, kv.plans, kv.place],
+      ['lena', [], ['Kino'], ['Mathe lernen'], null, null, null]);
+    assert.equal((await call(`/api/week?start=2030-01-07&as=${lena.id}`, {}, c2)).status, 200);
+    assert.equal((await call(`/api/data?as=${lena.id}`, {}, c1)).status, 403); // nicht in der Familie
+    assert.equal((await call(`/api/data?as=${ben.id}`, {}, c3)).status, 403); // Kinder sehen Eltern nicht
+    const fi = await (await post('/api/family/invite', { email: 'oma@example.org', role: 'quatsch', extra: 1 }, c2)).json();
+    assert.deepEqual([fi.family.owner, fi.family.path, fi.family.body], [ben.id, '/invite', { email: 'oma@example.org', role: 'parent' }]);
+    assert.equal((await (await call(`/api/family/members/${lena.id}`, { method: 'DELETE' }, c2)).json()).family.path, `/members/${lena.id}`);
+    lena.family.active = ben.family.active = false; // Plan abgelaufen: Ansehen endet
+    await hook();
+    assert.equal((await call(`/api/data?as=${lena.id}`, {}, c2)).status, 403);
+    delete ben.family; ben.plan = 'free';
+    await hook();
     // Schulsoftware wechseln: gespeichert beim Konto-Dienst. WebUntis nur echte Server, Suche ab 3 Zeichen, EduPage-Funktionen gibt es dort nicht
     const su = await (await post('/api/account', { school: 'untis' }, c2)).json();
     assert.deepEqual([su.school, su.link.connected, fakeAcc.list.find((a) => a.id === ben.id).school], ['untis', false, 'untis']);
@@ -582,7 +607,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await call('/api/admin', {}, c2)).status, 403);
     // eigene Statistik: Besuch, neue Konten, aktive Konten; gespeichert werden nur Hashes, keine IP
     const st = (await (await call('/api/admin', {}, c1)).json()).stats, td = st.days.at(-1);
-    assert.deepEqual([st.days.length, td.signups, td.active, td.visitors >= 1, st.schools.none, st.accounts], [30, 2, 1, true, 1, 2]);
+    assert.deepEqual([st.days.length, td.signups, td.active, td.visitors >= 1, st.schools.none, st.accounts], [30, 3, 2, true, 2, 3]); // mit Lena aus dem Familien-Test (Ansehen durch Eltern zählt nicht als aktiv)
     const rawStats = JSON.parse(fs.readFileSync(path.join(dir2, 'stats.json'), 'utf8'));
     assert.ok(rawStats.days[td.date].visitors.every((h) => /^[0-9a-f]{16}$/.test(h)) && !JSON.stringify(rawStats).includes('127.0.0.1'));
     assert.equal((await call('/api/ha/pc', {}, c1)).status, 404);

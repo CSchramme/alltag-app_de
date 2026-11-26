@@ -193,6 +193,26 @@ const limited = () => OPEN_DEMO || (!!me()?.demo && !me()?.jury); // öffentlich
 const planOf = (a) => (!ACCOUNTS || a?.admin || a?.demo ? 'familie' : PLANS[a?.plan] ? a.plan : a?.pro ? 'pro' : 'free');
 const has = (f) => PLANS[planOf(me())].features.includes(f);
 const isPro = () => planOf(me()) !== 'free';
+// Familie (Konto-Dienst verwaltet, hier nur das Abbild): Eltern dürfen Kinder derselben aktiven Familie ansehen, nur lesen
+const viewer = () => ctx.getStore()?.viewer || null; // gesetzt, solange ein Elternteil beim Kind schaut
+function viewable(user, id) {
+  const f = user?.family, k = f?.active && f.role === 'parent' && accounts().find((x) => x.id === id);
+  return k && !k.disabled && k.family?.active && k.family.owner === f.owner && k.family.role === 'child' ? k : null;
+}
+function famPayload() { // wer zur Familie gehört, wen ich ansehen darf, wer mich sieht
+  const a = me(), f = a?.family;
+  if (!ACCOUNTS || !a || a.demo) return null;
+  if (!f) return a.plan === 'familie' ? { owner: true, active: true, role: 'parent', members: [{ id: a.id, name: a.name, role: 'parent', owner: true, me: true }] } : null;
+  return { owner: f.owner === a.id, active: !!f.active, role: f.role,
+    members: accounts().filter((x) => x.family?.owner === f.owner && !x.disabled)
+      .map((x) => ({ id: x.id, name: x.name, role: x.id === f.owner ? 'parent' : x.family.role, owner: x.id === f.owner, me: x.id === a.id })) };
+}
+function famMe() { const a = me(); if (!ACCOUNTS || !a || a.demo) throw bad('Familien gibt es nur mit eigenem Konto.'); return a; }
+async function famChange(p, method, body) { // im Namen des angemeldeten Kontos; der Konto-Dienst prüft, wer was darf
+  const r = await accountsApi(`/api/family/${famMe().id}${p}`, method, body);
+  await refreshAccounts().catch(() => {});
+  return r;
+}
 const plansVisible = () => !!siteSettings().plansVisible; // Plan-Auswahl für Nutzer: schaltet der Admin frei, sonst nur Vorschau für Admins
 const supportId = (a) => a.id.replace(/-/g, '').slice(0, 8).toUpperCase().replace(/^(.{4})/, '$1-'); // zum Nennen bei Fragen
 const school = () => me()?.school || 'edupage';
@@ -803,7 +823,15 @@ function settings() {
   return { state: c.state || 'BY', lessonPush: !!c.lessonPush, place: c.place || null, stops: c.stops || {}, wakeLead: c.wakeLead ?? 60, ticket: c.ticket || null,
     ha: c.ha ? { connected: true, url: c.ha.url, todo: c.ha.todo || '', pc: c.ha.pc || [] } : { connected: false } }; // Token bleibt auf dem Server
 }
-function payload() {
+// Eltern beim Kind: nur Stundenplan, Hausaufgaben, Prüfungen und Termine. Notizen, Noten, Nachrichten, Schulweg und Kalender bleiben privat.
+function forParents(p) {
+  const kid = me(), keep = { events: p.db.events, lessons: p.db.lessons, reminders: p.db.reminders.filter((r) => r.category === 'schule') };
+  return { ...p, viewing: { id: kid.id, name: kid.name }, account: { id: kid.id, name: kid.name }, beta: null, plans: null, family: null, timer: null,
+    weather: [], place: null, stops: {}, ticket: null, ha: { connected: false }, features: { accounts: true }, link: { connected: !!p.link.connected, school: p.link.school || '' },
+    calendars: [], ical: [], snap: p.snap && { ...p.snap, messages: [] }, db: { ...Object.fromEntries(Object.keys(p.db).map((k) => [k, []])), ...keep } };
+}
+const payload = () => (viewer() ? forParents(fullPayload()) : fullPayload());
+function fullPayload() {
   const st = state(), snap = snapNow(), cfg = load('config.json', {})[school()];
   return {
     app: APP, demo: isDemo(), status: load('status.json', {}),
@@ -825,7 +853,7 @@ function payload() {
           poll: m.poll && st.votes?.[m.id] ? { ...m.poll, mine: m.poll.answers.filter((a) => st.votes[m.id][a.id] ?? m.poll.mine.includes(a.id)).map((a) => a.id) } : m.poll };
       }),
     },
-    db: db(), ...calPayload(),
+    db: db(), ...calPayload(), family: famPayload(),
     plans: ACCOUNTS && !isDemo() && (plansVisible() || me()?.admin) ? { list: PLANS, features: FEATURES, soon: SOON, current: planOf(me()), preview: !plansVisible() } : null,
   };
 }
@@ -1076,7 +1104,16 @@ const routes = {
     atRoot(() => save('site.json', { ...siteSettings(), umfrage: b.open === true }));
     send(res, 200, { open: !!siteSettings().umfrage, answers: atRoot(() => load('umfrage.json', [])) });
   },
+  // Familie: Verwalten läuft über den Konto-Dienst, die App reicht im Namen des angemeldeten Kontos weiter
+  'GET /api/family': async (req, res) => send(res, 200, await accountsApi(`/api/family/${famMe().id}`)),
+  'POST /api/family/invite': async (req, res) => {
+    const b = await readJson(req);
+    send(res, 200, await famChange('/invite', 'POST', { email: String(b.email || '').slice(0, 120), role: b.role === 'child' ? 'child' : 'parent' }));
+  },
+  'DELETE /api/family/invites/:email': async (req, res, email) => send(res, 200, await famChange(`/invites/${encodeURIComponent(email)}`, 'DELETE')),
+  'DELETE /api/family/members/:id': async (req, res, id) => send(res, 200, await famChange(`/members/${encodeURIComponent(id)}`, 'DELETE')),
   'GET /api/data': (req, res) => {
+    if (viewer()) return send(res, 200, payload()); // Elternteil schaut beim Kind: nichts zählen, nichts nachladen
     const origin = `${https(req) ? 'https' : 'http'}://${req.headers.host}`;
     if (loggedIn(req) && /^[\w.:-]+$/.test(req.headers.host || '') && atRoot(() => load('origin.json', null)) !== origin) atRoot(() => save('origin.json', origin));
     const a = me();
@@ -1632,6 +1669,9 @@ const server = http.createServer(async (req, res) => {
     const reader = req.method === 'GET' && (url.pathname === '/api/calendar.ics' ? readerFor(bearer, 'calendar') : ['/api/data', '/api/summary', '/api/wake', '/api/focus'].includes(url.pathname) && readerFor(bearer));
     const user = sessionUser(req) || reader;
     if (!['/api/login', '/api/demo', '/api/beta'].includes(url.pathname) && !user) return send(res, 401, { error: 'login' });
+    // Eltern sehen ein Kind ihrer Familie: nur diese Lese-Abfragen, nur mit Sitzung, im Datenordner des Kindes
+    const as = req.method === 'GET' && ['/api/data', '/api/week'].includes(url.pathname) ? url.searchParams.get('as') : null, kid = as && viewable(sessionUser(req), as);
+    if (as && !kid) return send(res, 403, { error: 'Das darfst du nicht ansehen.' });
     const parts = url.pathname.split('/').filter(Boolean); // ['api', 'items', 'notes', '<id>']
     for (const [key, fn] of Object.entries(routes)) {
       const [method, pattern] = key.split(' '), p = pattern.split('/').filter(Boolean);
@@ -1639,6 +1679,7 @@ const server = http.createServer(async (req, res) => {
       const args = [];
       if (!p.every((seg, i) => (seg.startsWith(':') ? (args.push(decodeURIComponent(parts[i])), true) : seg === parts[i]))) continue;
       const run = () => { if (limited()) demoTouch(req); return fn(req, res, ...args); };
+      if (kid) return await ctx.run({ dir: userDir(kid.id), account: kid, viewer: user }, run);
       return await (ACCOUNTS && user?.id ? asUser(user, run) : run()); // alles Weitere läuft im Datenordner dieses Kontos
     }
     send(res, 404, { error: 'unbekannt' });

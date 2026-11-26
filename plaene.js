@@ -10,6 +10,6 @@ const ALL = Object.keys(FEATURES);
 const PLANS = {
   free: { name: 'Kostenlos', month: 0, year: 0, accounts: 1, features: [] },
   pro: { name: 'Pro', month: 2.49, year: 19.99, accounts: 1, features: ALL },
-  familie: { name: 'Familie', month: 4.99, year: 39.99, accounts: 5, features: ALL }, // bis zu 5 Konten einer Familie (Verknüpfen kommt später)
+  familie: { name: 'Familie', month: 4.99, year: 39.99, accounts: 5, features: ALL }, // bis zu 5 Konten einer Familie (Einladen per Mail, siehe Konto-Dienst „Familie“)
 };
 module.exports = { PLANS, FEATURES, SOON };

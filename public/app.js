@@ -158,7 +158,10 @@ let showDone = false;
 let firstRead = store.get('read', null) === null; // erster Start: vorhandene Nachrichten gelten als gelesen
 const read = new Set(store.get('read', []));
 
+let viewAs = null; // Elternteil sieht gerade das Konto eines Kindes (nur lesen)
+const asQ = () => (viewAs ? `&as=${encodeURIComponent(viewAs)}` : '');
 async function api(path, { method = 'GET', body } = {}) {
+  if (viewAs && method !== 'GET') { setTimeout(renderAll); throw new Error(`Bei ${D?.viewing?.name || 'deinem Kind'} kannst du nur ansehen, nichts ändern.`); }
   const res = await fetch(path, {
     method, credentials: 'same-origin',
     headers: body ? { 'Content-Type': 'application/json' } : {},
@@ -172,11 +175,11 @@ async function api(path, { method = 'GET', body } = {}) {
 
 let loading = null;
 function load(refresh = false) {
-  loading ??= api(refresh ? '/api/refresh' : '/api/data', { method: refresh ? 'POST' : 'GET' })
-    .then(setData)
+  const want = viewAs, p = loading ??= api(viewAs ? `/api/data?as=${encodeURIComponent(viewAs)}` : refresh ? '/api/refresh' : '/api/data', { method: refresh && !viewAs ? 'POST' : 'GET' })
+    .then((d) => { if (want === viewAs) setData(d); }) // inzwischen umgeschaltet (Kind ↔ eigenes Konto): alte Antwort verwerfen
     .catch((e) => { if (e.status !== 401 && !D) { boot('Server nicht erreichbar. Neuer Versuch in Kürze …'); setTimeout(load, 10000); } })
-    .finally(() => { loading = null; });
-  return loading;
+    .finally(() => { if (loading === p) loading = null; });
+  return p;
 }
 
 function setData(d) {
@@ -195,7 +198,23 @@ function setData(d) {
 
 function boot(msg) { $('#boot').hidden = false; $('#boot p').textContent = msg; }
 
+function viewKid(id) { // Kinder-Konto ansehen bzw. zurück zum eigenen
+  viewAs = id || null;
+  extraDays.clear(); loadedWeeks.clear();
+  loading = null; // nicht auf eine laufende Anfrage für das andere Konto warten
+  closeSheet();
+  haptic();
+  return load().then(() => { if (!viewAs) toast('Wieder bei dir'); });
+}
+function renderViewBar() {
+  let bar = $('#view-bar');
+  document.body.classList.toggle('viewing', !!D.viewing);
+  if (!D.viewing) return bar?.remove();
+  if (!bar) { bar = document.createElement('div'); bar.id = 'view-bar'; bar.className = 'glass'; document.body.append(bar); }
+  bar.innerHTML = `<span><b>${esc(D.viewing.name)}</b> · nur ansehen</span><button type="button" data-view-back>Zurück zu mir</button>`;
+}
 function renderAll() {
+  renderViewBar();
   renderHeute(); renderKalender(); renderAufgaben(); renderNotizen(); renderSchule(); renderBadges();
   $('#me').textContent = initials(S().student?.name || D.account?.name || 'Ich');
   $('#subjects').innerHTML = subjects().map((s) => `<option value="${esc(s)}">`).join('');
@@ -931,7 +950,7 @@ function loadWeek(start) {
   if (!D.link.connected || (have && loadedWeeks.has(start)) || loadedWeeks.get(start) === 'loading') return;
   if (have && start === mondayOf(today())) return;
   loadedWeeks.set(start, 'loading');
-  api(`/api/week?start=${start}`).then(({ days }) => {
+  api(`/api/week?start=${start}${asQ()}`).then(({ days }) => {
     days.forEach((d) => { if (!S().days.some((x) => x.date === d.date)) extraDays.set(d.date, d); });
     loadedWeeks.set(start, Date.now());
     if (weekStart === start) renderKalender();
@@ -1418,7 +1437,7 @@ const NEW = { reminder: () => reminderForm(), event: () => eventForm(null, planD
 const ADD = { heute: newChooser, kalender: () => eventForm(null, planDay), aufgaben: () => reminderForm(),
   notizen: () => (notesSeg === 'tafel' ? pickPhoto() : notesSeg === 'einkauf' ? $('#shop-add input')?.focus() : noteForm()),
   schule: () => (schoolSeg === 'noten' ? gradeForm() : composeMessage()) };
-const updateAdd = () => { $('#add').hidden = tab === 'schule' && (schoolSeg === 'lehrer' || (schoolSeg === 'nachrichten' && !(D.link.connected && eduLike()))); }; // Nachrichten schreiben nur über EduPage
+const updateAdd = () => { $('#add').hidden = !!D.viewing || tab === 'schule' && (schoolSeg === 'lehrer' || (schoolSeg === 'nachrichten' && !(D.link.connected && eduLike()))); }; // Nachrichten schreiben nur über EduPage
 
 /* ---------------------------------------------------------------- Detail-Sheets */
 function openLesson(date, i) {
@@ -1721,7 +1740,7 @@ function toast(text) {
 async function wallWeek() { // Woche wie im Kalender; fehlende Tage einmal nachladen
   const start = defaultWeek(), dates = [0, 1, 2, 3, 4, 5].map((n) => addDays(start, n));
   let extra = [];
-  if (D.link.connected && dates.slice(0, 5).some((d) => !dayOf(d))) { try { extra = (await api(`/api/week?start=${start}`)).days || []; } catch { /* nur was schon da ist */ } }
+  if (D.link.connected && dates.slice(0, 5).some((d) => !dayOf(d))) { try { extra = (await api(`/api/week?start=${start}${asQ()}`)).days || []; } catch { /* nur was schon da ist */ } }
   const week = dates.map((date) => ({ date, lessons: ((dayOf(date) || extra.find((x) => x?.date === date))?.lessons || []).filter((l) => l.start && !l.event) }));
   return week.filter((d, i) => i < 5 || d.lessons.length); // Samstag nur mit Unterricht
 }
@@ -1897,6 +1916,7 @@ async function openSettings() {
     </div>
     ${D.plans ? proCard() : ''}
     ${accountSection()}
+    ${familySection()}
     ${D.beta ? `<p class="label-sm">Beta-Test</p>${group('<button class="row" data-feedback><div class="main"><div class="title">Fehler oder Idee melden</div><div class="sub">Geht direkt an den Entwickler, mit deiner Tester-ID</div></div></button>',
       D.beta.umfrage ? '<button class="row" data-umfrage><div class="main"><div class="title">Abschlussumfrage</div><div class="sub">Drei Minuten, anonym</div></div></button>' : '')}` : ''}
     ${D.school === 'none' && !D.demo ? `<p class="label-sm">Stundenplan</p><div id="own-plan">${ownPlan()}</div>` : ''}
@@ -2002,6 +2022,7 @@ async function openSettings() {
   };
   if (D.features?.ha !== false) wireHa();
   wireAccount();
+  if (D.family) wireFamily();
   const rot = $('#widget-rotate');
   if (rot) rot.onclick = async () => { // falls der Lese-Schlüssel in falsche Hände geraten ist
     if (!rot.dataset.sure) { rot.dataset.sure = '1'; $('span', rot).textContent = 'Wirklich? Widget und Kurzbefehle musst du danach neu einrichten.'; return; }
@@ -2110,6 +2131,50 @@ const linkName = () => schoolName(D?.school && D.school !== 'none' ? D.school : 
 const eduLike = () => !!D?.demo || D?.school === 'edupage'; // Antworten, Gefällt mir, Lehrkräfte: nur EduPage (Demo-Daten sehen wie EduPage aus)
 const WEEKDAYS = [[1, 'Montag'], [2, 'Dienstag'], [3, 'Mittwoch'], [4, 'Donnerstag'], [5, 'Freitag'], [6, 'Samstag']];
 
+/* ---------------------------------------------------------------- Familie (Plan „familie“): Mitglieder, Einladen per Mail, Kinder ansehen */
+const ROLE_NAME = { parent: 'Elternteil', child: 'Kind' };
+function familySection() {
+  const f = D.family;
+  if (!f) return '';
+  const parents = f.members.filter((m) => m.role === 'parent' && !m.me).map((m) => m.name);
+  const rows = f.members.map((m) => `<div class="row"><div class="avatar small" style="--c:var(--${m.role === 'child' ? 'pink' : 'blue'})">${esc(initials(m.name))}</div>
+    <div class="main"><div class="title">${esc(m.name)}${m.me ? ' (du)' : ''}</div><div class="sub">${m.owner ? 'Elternteil · hat den Familien-Plan' : ROLE_NAME[m.role]}</div>
+    ${(f.role === 'parent' && m.role === 'child' && f.active) || (f.owner && !m.owner) ? `<div class="code-actions">${f.role === 'parent' && m.role === 'child' && f.active ? `<button class="btn-plain" type="button" data-view-kid="${esc(m.id)}">Ansehen</button>` : ''}${f.owner && !m.owner ? `<button class="btn-plain danger" type="button" data-fam-del="${esc(m.id)}">Entfernen</button>` : ''}</div>` : ''}</div></div>`);
+  return `<p class="label-sm">Familie</p>
+    <div class="list card">${rows.join('')}<div id="fam-invites"></div>
+      ${!f.owner ? `<button class="row" type="button" data-fam-del="${esc(f.members.find((m) => m.me)?.id || '')}"><span class="btn-plain danger">Familie verlassen</span></button>` : ''}</div>
+    ${f.owner ? `<form class="form" id="fam-invite">${group(fText('email', 'E-Mail-Adresse', '', 'type="email" autocomplete="off" required maxlength="120"'),
+      fRow('Als', `<select name="role"><option value="child">Kind</option><option value="parent">Elternteil</option></select>`))}
+      <button class="btn-plain" type="submit">Einladen</button></form>` : ''}
+    <p class="footnote" style="margin-top:8px;text-align:left">${!f.active ? 'Der Familien-Plan ist gerade nicht aktiv. Pro-Funktionen und das Ansehen gehen erst wieder, wenn er läuft. '
+      : ''}${f.role === 'child' ? `${parents.length ? `${esc(parents.join(' und '))} ${parents.length > 1 ? 'können' : 'kann'}` : 'Eltern in der Familie können'} deinen Stundenplan, deine Hausaufgaben und deine Termine sehen, aber nichts ändern. Notizen, Noten und Nachrichten bleiben privat.`
+      : `Bis zu 5 Konten. Alle bekommen die Pro-Funktionen. Eltern sehen Stundenplan, Hausaufgaben und Termine der Kinder (nur ansehen).${f.owner ? ' Die Einladung kommt per Mail und gilt 7 Tage.' : ''}`}</p>`;
+}
+function wireFamily() {
+  const f = D.family, form = $('#fam-invite'), reload = async () => { haptic(); await load(); openSettings(); };
+  const wireInvites = () => $$('#sheet [data-fam-inv]').forEach((b) => {
+    b.onclick = async () => { try { await api(`/api/family/invites/${encodeURIComponent(b.dataset.famInv)}`, { method: 'DELETE' }); reload(); } catch (x) { toast(x.message); } };
+  });
+  if (f.owner) api('/api/family').then(({ family }) => { // offene Einladungen sieht nur, wer den Plan hat
+    const box = $('#fam-invites');
+    if (!box || !family?.invites?.length) return;
+    box.innerHTML = family.invites.map((i) => `<div class="row"><div class="main"><div class="title">${esc(i.email)}</div><div class="sub">eingeladen als ${ROLE_NAME[i.role]} · gilt bis ${esc(F.short.format(new Date(i.expires)))}</div>
+      <div class="code-actions"><button class="btn-plain danger" type="button" data-fam-inv="${esc(i.email)}">Zurückziehen</button></div></div></div>`).join('');
+    wireInvites();
+  }).catch(() => {});
+  if (form) form.onsubmit = async (e) => {
+    e.preventDefault();
+    const b = $('button[type=submit]', form);
+    b.disabled = true;
+    try { await api('/api/family/invite', { method: 'POST', body: Object.fromEntries(new FormData(form)) }); toast('Einladung ist unterwegs'); reload(); } catch (x) { toast(x.message); b.disabled = false; }
+  };
+  $$('#sheet [data-fam-del]').forEach((b) => {
+    b.onclick = async () => {
+      if (!b.dataset.sure) { b.dataset.sure = '1'; (b.querySelector('span') || b).textContent = 'Sicher?'; return; }
+      try { await api(`/api/family/members/${encodeURIComponent(b.dataset.famDel)}`, { method: 'DELETE' }); reload(); } catch (x) { toast(x.message); }
+    };
+  });
+}
 function accountSection() {
   const a = D.account;
   if (!a) return '';
@@ -2544,9 +2609,11 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-week],[data-calmode],[data-month],[data-month-day],[data-print],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-vote],[data-ical],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-plans],[data-umfrage]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-calmode],[data-month],[data-month-day],[data-print],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-vote],[data-ical],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-plans],[data-umfrage],[data-view-kid],[data-view-back]');
   if (!el || !D) return;
   const ds = el.dataset;
+  if (ds.viewKid) return viewKid(ds.viewKid);
+  if ('viewBack' in ds || (D.viewing && el.id === 'me')) return viewKid(null);
   if (el.id === 'me' || 'settings' in ds) return openSettings();
   if ('feedback' in ds) return openFeedback();
   if ('plans' in ds) return openPlans();

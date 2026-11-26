@@ -713,6 +713,14 @@ button.banner { display: flex; text-align: left; }
   transition: transform .55s cubic-bezier(.34, 1.4, .64, 1), opacity .3s;
 }
 #toast.show { transform: none; opacity: 1; }
+/* Elternteil sieht ein Kinder-Konto: Hinweis mit Knopf zurück, über der Tab-Leiste */
+#view-bar {
+  position: fixed; z-index: 55; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 96px); translate: -50% 0;
+  display: flex; align-items: center; gap: 12px; max-width: calc(100% - 32px); padding: 8px 8px 8px 16px; border-radius: 999px;
+  font-size: 14px; color: var(--label); white-space: nowrap;
+}
+#view-bar span { overflow: hidden; text-overflow: ellipsis; }
+#view-bar button { flex: none; padding: 7px 12px; border: 0; border-radius: 999px; font: inherit; font-weight: 600; color: #fff; background: var(--blue); }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .35s; }
 
 /* ---------------------------------------------------------------- Dunkelmodus (theme.js setzt data-theme vor dem ersten Zeichnen) */
