@@ -524,9 +524,19 @@ function pageSystem(main) {
       : [row(state(false, 'nicht erreichbar'), esc(h.error))], ''))}
     </div>
     ${panel('Testmail', 'Prüft den Mailversand und zeigt, wie die Mails aussehen', `<form id="test-mail" class="test-mail"><input type="email" name="to" required maxlength="120" autocomplete="email" placeholder="E-Mail-Adresse" value="${esc(S.data.me?.email || '')}" aria-label="An diese Adresse"><button class="btn" type="submit">Testmail senden</button></form>`)}
+    ${(() => { const u = S.data.updateMail; return u ? panel(`Update-Mail für Version ${esc(u.version)}`, `${u.wanted} ${u.wanted === 1 ? 'Konto möchte' : 'Konten möchten'} bei jedem Update eine Mail (fragt die App in den Neuigkeiten und im Profil).${u.sent === u.version ? ' Für diese Version schon verschickt.' : ''}`,
+      `<ul class="update-items">${u.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul><div class="test-mail"><button class="btn" type="button" id="update-mail"${u.wanted ? '' : ' disabled'}>${u.sent === u.version ? 'Noch einmal senden' : `An ${u.wanted} senden`}</button></div>`) : ''; })()}
     <p class="sub">Die App startet nach längerer Ruhe neu (Hoster), „läuft seit“ ist deshalb oft kurz. Neue Konten ohne bestätigte E-Mail löscht der Konto-Dienst nach 7 Tagen.</p>
     <div><button class="btn" type="button" id="re-check">Neu prüfen</button></div>`;
   $('#re-check', main).onclick = () => { S.health = null; render(); };
+  const um = $('#update-mail', main);
+  if (um) um.onclick = async () => {
+    const u = S.data.updateMail, again = u.sent === u.version;
+    if (!um.dataset.sure) { um.dataset.sure = '1'; um.textContent = again ? 'Wirklich noch einmal an alle?' : `Wirklich an ${u.wanted} senden?`; return; }
+    um.disabled = true;
+    try { const r = await api('/api/admin/update-mail', { method: 'POST', body: { again } }); toast(`Update-Mail an ${r.sent} verschickt.`); u.sent = u.version; } catch (x) { toast(x.message); }
+    render();
+  };
   $('#test-mail', main).onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target, b = $('button', f);

@@ -294,7 +294,30 @@ button.row:active { background-color: var(--press); transition-duration: 0s; }
 .fam-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; }
 .fam-role { font-size: 12px; color: var(--label2); }
 .avatar.big { width: 64px; height: 64px; margin-bottom: 6px; font-size: 24px; }
-.avatar.empty { background: none; box-shadow: none; border: 2px dashed var(--label3); color: var(--blue); font-size: 26px; font-weight: 500; }
+.avatar.slot { background: none; box-shadow: none; border: 2px dashed var(--label3); color: var(--blue); font-size: 26px; font-weight: 500; }
+.avatar.slot .plus { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+/* Neuigkeiten nach einem Update */
+.news-hero { margin: 0 0 14px; padding: 22px 20px; border-radius: 22px; color: #fff; background: linear-gradient(125deg, var(--blue), color-mix(in srgb, var(--blue) 30%, var(--pink)) 55%, var(--orange));
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--blue) 30%, transparent); }
+.news-k { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; opacity: .85; }
+.news-v { margin-top: 4px; font-size: 32px; font-weight: 800; line-height: 1.1; letter-spacing: -.02em; }
+.news-d { margin-top: 4px; font-size: 14px; opacity: .85; }
+.news-list { display: grid; gap: 10px; }
+.news-item { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border-radius: 16px; background: var(--card); box-shadow: 0 0 0 1px var(--sep); animation: appear .5s cubic-bezier(.34, 1.4, .64, 1) both; }
+.news-ico { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; color: #fff; background: var(--c); }
+.news-ico svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.news-ico svg.fill { fill: currentColor; stroke: none; }
+.news-text { padding-top: 5px; font-size: 15px; line-height: 1.4; color: var(--label); }
+.news-ask { margin-top: 16px; padding: 16px; border-radius: 18px; background: linear-gradient(125deg, color-mix(in srgb, var(--blue) 14%, var(--card)), color-mix(in srgb, var(--pink) 12%, var(--card))); }
+.news-ask .title { font-size: 16px; font-weight: 700; }
+.news-ask .sub { margin-top: 4px; font-size: 14px; color: var(--label2); }
+.news-ask-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 12px; }
+.news-ask-btns .btn-primary { flex: 1 1 140px; margin: 0; }
+.news-ask-btns .btn-plain { width: auto; }
+.news-old { margin-top: 16px; }
+.news-old summary { cursor: pointer; color: var(--blue); font-weight: 600; }
+.app-version { margin: 18px 0 0; text-align: center; font-size: 14px; }
+.app-version .btn-link { padding: 6px 10px; font: inherit; background: none; border: 0; cursor: pointer; }
 .pro-kicker { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--blue); }
 .pro-card .title { margin-top: 2px; font-size: 17px; font-weight: 700; }
 .pro-card .sub { margin-top: 2px; font-size: 14px; color: var(--label2); }

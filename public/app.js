@@ -116,6 +116,7 @@ const average = (gs) => {
 };
 
 const ICON = {
+  plus: '<svg class="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   chev: '<svg class="chev" viewBox="0 0 8 14"><path d="M1 1l6 6-6 6"/></svg>',
   cal: '<svg viewBox="0 0 44 44"><rect x="7" y="9" width="30" height="28" rx="7"/><path d="M7 17h30M15 5v7M29 5v7"/></svg>',
   check: '<svg viewBox="0 0 44 44"><circle cx="22" cy="22" r="15"/><path d="M15 22.5l4.5 4.5 9-10"/></svg>',
@@ -194,6 +195,48 @@ function setData(d) {
   renderAll();
   if (first) { measureTabs(); lensSet(tabGeo[tabIndex(tab)][0]); route(); setTimeout(() => repairPush().catch(() => {}), 3000); }
   if (first && POLL_PAGE) openPollPage();
+  else if (first) setTimeout(whatsNew, 900);
+}
+
+/* ---------------------------------------------------------------- Neuigkeiten: nach einem Update einmal zeigen, was sich geändert hat */
+const verNum = (v) => String(v).split('.').map(Number);
+const newer = (a, b) => { const x = verNum(a), y = verNum(b); for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+const newsItems = (c) => c.items.map((i) => (typeof i === 'string' ? { text: i } : i)).filter((i) => !i.need || (i.need === 'family' && D.family));
+const NEWS_KIND = { // Symbol und Farbe je Art
+  neu: ['blue', '<svg viewBox="0 0 24 24" class="fill"><path d="M12 2.5l2.2 6.3 6.3 2.2-6.3 2.2L12 19.5l-2.2-6.3L3.5 11l6.3-2.2z"/></svg>'],
+  besser: ['green', '<svg viewBox="0 0 24 24"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5"/></svg>'],
+  fix: ['orange', '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>'],
+  familie: ['pink', '<svg viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3"/><circle cx="16.5" cy="10" r="2.3"/><path d="M3.8 19c.8-3.2 2.8-4.8 5.2-4.8s4.4 1.6 5.2 4.8M14.6 15c2.5-.5 4.6.8 5.6 4"/></svg>'],
+};
+const askUpdateMail = () => !!D.account && !D.account.demo && !!D.beta && D.account.updateMail == null; // Tester einmal fragen
+function whatsNew() {
+  if (!D?.version || D.viewing || D.demo || sheetOpen) return;
+  const seen = store.get('version', null);
+  store.set('version', D.version);
+  if (seen === D.version) return;
+  if (!seen && D.account?.created && Date.now() - Date.parse(D.account.created) < 864e5) return; // ganz neues Konto: kein „Neu“-Hinweis
+  const list = (D.changelog || []).filter((c) => (seen ? newer(c.version, seen) : c.version === D.version) && newsItems(c).length);
+  if (list.length) openNews(list);
+  else if (askUpdateMail() && seen) openNews(); // ältere Tester einmal nach der Update-Mail fragen
+}
+function openNews(list = (D.changelog || []).slice(0, 1)) { // neueste Version groß, ältere aufklappbar
+  const long = new Intl.DateTimeFormat('de-DE', { day: 'numeric', month: 'long', year: 'numeric' }), [top, ...rest] = list, older = (D.changelog || []).filter((c) => !list.includes(c));
+  const items = (c) => `<div class="news-list">${newsItems(c).map((i, n) => { const [color, svg] = NEWS_KIND[i.kind] || NEWS_KIND.neu;
+    return `<div class="news-item" style="animation-delay:${n * 70}ms"><span class="news-ico" style="--c:var(--${color})">${svg}</span><div class="news-text">${esc(i.text)}</div></div>`; }).join('')}</div>`;
+  const block = (c) => `<p class="label-sm">Version ${esc(c.version)} · ${esc(long.format(parseDay(c.date)))}</p>${items(c)}`;
+  openSheet('Neuigkeiten', `<div class="news-hero"><div class="news-k">Neu in Alltag</div><div class="news-v">Version ${esc(top.version)}</div><div class="news-d">${esc(long.format(parseDay(top.date)))}</div></div>
+    ${items(top)}${rest.map(block).join('')}
+    ${askUpdateMail() ? `<div class="card news-ask" id="news-ask"><div class="title">Bei jedem Update eine kurze Mail?</div><div class="sub">Mit dem, was neu ist. Abbestellen geht jederzeit im Profil oder mit einem Klick in der Mail.</div>
+      <div class="news-ask-btns"><button class="btn-primary pressable" type="button" data-um="1">Ja, gerne</button><button class="btn-plain" type="button" data-um="0">Nein, danke</button></div></div>` : ''}
+    ${older.length ? `<details class="news-old"><summary>Frühere Versionen</summary>${older.map(block).join('')}</details>` : ''}
+    <button class="btn-primary pressable" type="button" id="news-ok" style="margin-top:18px">Weiter</button>`);
+  $('#news-ok').onclick = () => closeSheet();
+  $$('#news-ask [data-um]').forEach((b) => {
+    b.onclick = async () => {
+      try { setData(await api('/api/account', { method: 'POST', body: { updateMail: b.dataset.um === '1' } })); haptic(); } catch (x) { return toast(x.message); }
+      $('#news-ask').innerHTML = `<div class="sub">${b.dataset.um === '1' ? 'Gemerkt: Du bekommst bei jedem Update eine Mail.' : 'Gemerkt: keine Update-Mails.'} Ändern kannst du das im Profil unter Beta-Test.</div>`;
+    };
+  });
 }
 
 function boot(msg) { $('#boot').hidden = false; $('#boot p').textContent = msg; }
@@ -1293,7 +1336,7 @@ function dragEnd() {
   if (!drag) return;
   const v = drag.tr.velocity();
   drag = null;
-  if (sheetY > 0 && v > -150 && sheetY + project(v) > sheetH * 0.4) closeSheet(v);
+  if (sheetY > 0 && v > -150 && sheetY + project(v) > sheetH * 0.4 && !sheetDirty()) closeSheet(v); // mit ungesicherten Eingaben federt es zurück (schließen über ×)
   else sheetTo(0, { velocity: v, damping: sheetY < 0 ? 1 : 0.86, response: 0.36 });
 }
 
@@ -1307,10 +1350,12 @@ head.addEventListener('pointermove', (e) => drag && dragMove(e.clientY));
 head.addEventListener('pointerup', dragEnd);
 head.addEventListener('pointercancel', dragEnd);
 
-/* Inhalt: ganz oben angekommen, wird weiteres Ziehen nach unten zum Schließen-Ziehen (nicht in Eingabefeldern) */
+/* Inhalt: ganz oben angekommen, wird weiteres Ziehen nach unten zum Schließen-Ziehen (nicht in Eingabefeldern, nicht beim Tippen) */
+const sheetTyping = () => { const a = document.activeElement; return !!a && sheet.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); };
+const sheetDirty = () => [...sheetBody.querySelectorAll('input, textarea')].some((i) => !['hidden', 'radio', 'checkbox', 'submit', 'button'].includes(i.type) && i.value !== i.defaultValue);
 let touch = null;
 sheetBody.addEventListener('touchstart', (e) => {
-  touch = e.touches.length === 1 && !e.target.closest('textarea, input') ? { y: e.touches[0].clientY, active: false } : null;
+  touch = e.touches.length === 1 && !e.target.closest('textarea, input') && !sheetTyping() ? { y: e.touches[0].clientY, active: false } : null;
 }, { passive: true });
 sheetBody.addEventListener('touchmove', (e) => {
   if (!touch) return;
@@ -1919,7 +1964,9 @@ async function openSettings() {
     ${familySection()}
     ${kidsSection()}
     ${D.beta ? `<p class="label-sm">Beta-Test</p>${group('<button class="row" data-feedback><div class="main"><div class="title">Fehler oder Idee melden</div><div class="sub">Geht direkt an den Entwickler, mit deiner Tester-ID</div></div></button>',
-      D.beta.umfrage ? '<button class="row" data-umfrage><div class="main"><div class="title">Abschlussumfrage</div><div class="sub">Drei Minuten, anonym</div></div></button>' : '')}` : ''}
+      D.beta.umfrage ? '<button class="row" data-umfrage><div class="main"><div class="title">Abschlussumfrage</div><div class="sub">Drei Minuten, anonym</div></div></button>' : '',
+      D.account && !D.account.demo ? `<label class="row"><div class="main"><div class="title">Mail bei jedem Update</div><div class="sub">Kurz, was neu ist. An ${esc(D.account.email || 'deine E-Mail-Adresse')}</div></div>
+        <input type="checkbox" class="switch" id="update-mail"${D.account.updateMail ? ' checked' : ''} aria-label="Mail bei jedem Update"></label>` : '')}` : ''}
     ${D.school === 'none' && !D.demo ? `<p class="label-sm">Stundenplan</p><div id="own-plan">${ownPlan()}</div>` : ''}
     <p class="label-sm">Ferien</p>
     ${group(fRow('Bundesland', `<select id="state-select">${[['BW', 'Baden-Württemberg'], ['BY', 'Bayern'], ['BE', 'Berlin'], ['BB', 'Brandenburg'], ['HB', 'Bremen'], ['HH', 'Hamburg'], ['HE', 'Hessen'], ['MV', 'Mecklenburg-Vorpommern'], ['NI', 'Niedersachsen'], ['NW', 'Nordrhein-Westfalen'], ['RP', 'Rheinland-Pfalz'], ['SL', 'Saarland'], ['SN', 'Sachsen'], ['ST', 'Sachsen-Anhalt'], ['SH', 'Schleswig-Holstein'], ['TH', 'Thüringen']].map(([v, l]) => `<option value="${v}"${D.state === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`))}
@@ -2009,7 +2056,14 @@ async function openSettings() {
     </div>
     <p class="footnote" id="cron-hint" style="margin-top:8px;text-align:left"></p></div>
     <div class="list card" style="margin-top:22px"><button class="row" id="logout"><span class="btn-plain danger">Abmelden</span></button></div>
+    <p class="app-version"><button type="button" class="btn-link" id="news-open">Alltag ${esc(D.version || '')} · Neuigkeiten</button></p>
     <p class="legal-links"><a target="_blank" rel="noopener" href="/impressum.html">Impressum</a><a target="_blank" rel="noopener" href="/datenschutz.html">Datenschutz</a></p>`);
+  $('#news-open').onclick = () => openNews();
+  const um = $('#update-mail');
+  if (um) um.onchange = async () => {
+    haptic();
+    try { setData(await api('/api/account', { method: 'POST', body: { updateMail: um.checked } })); toast(um.checked ? 'Du bekommst bei jedem Update eine Mail' : 'Keine Update-Mails mehr'); } catch (x) { um.checked = !um.checked; toast(x.message); }
+  };
 
   $('#logout').onclick = logout;
   $('#lesson-push').onchange = async (e) => {
@@ -2146,6 +2200,22 @@ function familySection() { // im Profil nur die Karte, die Übersicht öffnet si
         <div class="sub">${f.owner ? 'Einladen und verwalten' : 'Mitglieder ansehen'}</div></div>${ICON.chev}</button>
     ${f.role === 'child' ? `<p class="footnote" style="margin-top:8px;text-align:left">${famText(f)}</p>` : ''}`;
 }
+function openFamilyInvite() { // eigenes Blatt: das Feld steht oben, auch mit offener Tastatur (iPad) sichtbar
+  openSheet('Einladen', `<form class="form" id="fam-invite">${group(fText('email', 'E-Mail-Adresse', '', 'type="email" autocomplete="off" required maxlength="120"'),
+      fRow('Als', '<select name="role"><option value="child">Kind</option><option value="parent">Elternteil</option></select>'))}
+      <button class="btn-primary pressable" type="submit">Einladung senden</button>
+      <p class="footnote" style="text-align:left">Die Einladung kommt per Mail und gilt 7 Tage. Als Kind sieht die Person vorher, dass Eltern Stundenplan, Hausaufgaben und Termine sehen können.</p></form>
+    <button class="btn-plain" type="button" id="fam-back">Zurück zur Familie</button>`);
+  const form = $('#fam-invite');
+  $('#fam-back').onclick = openFamily;
+  form.email.focus();
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const b = $('button[type=submit]', form);
+    b.disabled = true;
+    try { await api('/api/family/invite', { method: 'POST', body: Object.fromEntries(new FormData(form)) }); toast('Einladung ist unterwegs'); haptic(); form.reset(); await load(); openFamily(); } catch (x) { toast(x.message); b.disabled = false; }
+  };
+}
 async function openFamily() {
   const f = D.family;
   if (!f) return;
@@ -2157,32 +2227,23 @@ async function openFamily() {
     <div class="fam-name">${esc(m.name)}${m.me ? ' (du)' : ''}</div><div class="fam-role">${m.owner ? 'Verwaltet' : ROLE_NAME[m.role]}</div>
     ${f.role === 'parent' && f.active && m.role === 'child' && !m.me ? `<button class="btn-plain" type="button" data-view-kid="${esc(m.id)}">Ansehen</button>` : ''}
     ${f.owner && !m.owner ? `<button class="btn-plain danger" type="button" data-fam-del="${esc(m.id)}">Entfernen</button>` : ''}</div>`;
-  const invited = (i) => `<div class="card fam-tile"><div class="avatar big empty">${esc(i.email[0].toUpperCase())}</div>
+  const invited = (i) => `<div class="card fam-tile"><div class="avatar big slot">${esc(i.email[0].toUpperCase())}</div>
     <div class="fam-name">${esc(i.email)}</div><div class="fam-role">Eingeladen · ${ROLE_NAME[i.role]}</div>
     <button class="btn-plain danger" type="button" data-fam-inv="${esc(i.email)}">Zurückziehen</button></div>`;
-  const slot = '<button class="card fam-tile fam-free pressable" type="button" data-fam-add><div class="avatar big empty">+</div><div class="fam-name">Freier Platz</div><div class="fam-role">Einladen</div></button>';
+  const slot = `<button class="card fam-tile fam-free pressable" type="button" data-fam-add><div class="avatar big slot">${ICON.plus}</div><div class="fam-name">Freier Platz</div><div class="fam-role">Einladen</div></button>`;
   openSheet('Familie', `<div class="card pro-card fam-hero"><div class="main"><div class="pro-kicker">Alltag Familie</div>
       <div class="title">${f.members.length + invites.length} von 5 Plätzen belegt</div>
       <div class="sub">Verwaltet von ${esc(owner)}${f.active ? '' : ' · gerade nicht aktiv'}</div></div></div>
     <p class="label-sm">Mitglieder</p>
     <div class="fam-grid">${f.members.map(member).join('')}${invites.map(invited).join('')}${slot.repeat(free)}</div>
-    ${free ? `<form class="form" id="fam-invite" hidden><p class="label-sm">Einladen</p>${group(fText('email', 'E-Mail-Adresse', '', 'type="email" autocomplete="off" required maxlength="120"'),
-      fRow('Als', '<select name="role"><option value="child">Kind</option><option value="parent">Elternteil</option></select>'))}
-      <button class="btn-primary pressable" type="submit">Einladung senden</button></form>` : ''}
     ${kids.length ? `<p class="label-sm">Aus dem Eltern-Zugang der Schule</p><div class="fam-grid">${kids.map((k) => `<div class="card fam-tile">${avatar(k.name, 'pink')}
       <div class="fam-name">${esc(k.name)}</div><div class="fam-role">${esc(schoolName(k.kind))}</div><button class="btn-plain" type="button" data-view-kid="kid:${esc(k.key)}">Ansehen</button></div>`).join('')}</div>` : ''}
     <p class="footnote" style="margin-top:12px;text-align:left">${famText(f)}</p>
     ${!f.owner ? `<div class="list card" style="margin-top:12px"><button class="row" type="button" data-fam-del="${esc(f.members.find((m) => m.me)?.id || '')}"><span class="btn-plain danger">Familie verlassen</span></button></div>` : ''}
     <button class="btn-plain" type="button" id="fam-back" style="margin-top:12px">Zurück zum Profil</button>`, { wide: true });
-  const reload = async () => { haptic(); await load(); if (D.family) openFamily(); else openSettings(); }, form = $('#fam-invite');
+  const reload = async () => { haptic(); await load(); if (D.family) openFamily(); else openSettings(); };
   $('#fam-back').onclick = openSettings;
-  $$('#sheet [data-fam-add]').forEach((b) => { b.onclick = () => { form.hidden = false; form.email.focus(); form.scrollIntoView({ behavior: 'smooth', block: 'center' }); }; });
-  if (form) form.onsubmit = async (e) => {
-    e.preventDefault();
-    const b = $('button[type=submit]', form);
-    b.disabled = true;
-    try { await api('/api/family/invite', { method: 'POST', body: Object.fromEntries(new FormData(form)) }); toast('Einladung ist unterwegs'); reload(); } catch (x) { toast(x.message); b.disabled = false; }
-  };
+  $$('#sheet [data-fam-add]').forEach((b) => { b.onclick = openFamilyInvite; });
   $$('#sheet [data-fam-inv]').forEach((b) => {
     b.onclick = async () => { try { await api(`/api/family/invites/${encodeURIComponent(b.dataset.famInv)}`, { method: 'DELETE' }); reload(); } catch (x) { toast(x.message); } };
   });

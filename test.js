@@ -473,6 +473,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     if (req.url === '/api/clients') return out(200, { clients: fakeAcc.clients });
     const fm = /^\/api\/family\/([^/]+)(\/.*)?$/.exec(req.url); // Familie: nur durchreichen, Regeln prüft der Konto-Dienst (dessen Tests)
     if (fm) return out(200, { family: { owner: fm[1], path: fm[2] || '', method: req.method, body: b } });
+    if (req.url === '/api/update-mail') return out(200, { ok: true, sent: fakeAcc.list.filter((a) => a.updateMail === true).length, version: b.version, items: b.items });
     if (req.url === '/api/test-mail') return /@/.test(b.to) ? out(200, { ok: true, via: 'ordner', to: b.to }) : out(400, { error: 'Bitte eine gültige E-Mail-Adresse eingeben.' });
     if (req.url === '/api/import') { fakeAcc.imported = b; return out(200, { imported: b.accounts.length }); }
     out(404, { error: 'unbekannt' });
@@ -521,6 +522,9 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal(l1.location, '/');
     const d1 = await (await call('/api/data', {}, c1)).json();
     assert.deepEqual([d1.account.name, d1.account.admin, d1.account.email, d1.features.ha, d1.features.screen, d1.accountsUrl], ['chef', true, 'chef@example.org', false, false, ACC]);
+    const CL = require('./changelog'); // Neuigkeiten: neueste Version vorne, jede mit Datum und Punkten
+    assert.ok(CL.every((c, i) => /^\d+\.\d+$/.test(c.version) && /^\d{4}-\d{2}-\d{2}$/.test(c.date) && c.items.length && (!i || c.date <= CL[i - 1].date)));
+    assert.deepEqual([d1.version, d1.changelog.length], [CL[0].version, Math.min(4, CL.length)]);
     assert.equal((await login(ben, 'https://boese.example/x')).location, '/');
     assert.equal((await login(ben, '//boese.example')).location, '/');
     const lb = await login(ben, '/admin'), c2 = lb.cookie;
@@ -589,6 +593,11 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await (await call('/api/data', {}, c1)).json()).plans.preview, true); // Admin: Vorschau
     assert.equal((await post('/api/admin/plans', { visible: true }, c2)).status, 403);
     assert.equal((await post('/api/admin/test-mail', { to: 'chef@example.org' }, c2)).status, 403); // Testmail nur für Admins
+    assert.equal((await (await post('/api/account', { updateMail: true }, c2)).json()).account.updateMail, true); // Update-Mail: jeder für sich
+    assert.equal((await post('/api/admin/update-mail', {}, c2)).status, 403);
+    const umr = await (await post('/api/admin/update-mail', {}, c1)).json();
+    assert.deepEqual([umr.sent, umr.version], [1, require('./changelog')[0].version]);
+    assert.equal((await (await call('/api/admin', {}, c1)).json()).updateMail.sent, umr.version);
     assert.equal((await (await post('/api/admin/test-mail', { to: 'chef@example.org' }, c1)).json()).to, 'chef@example.org');
     assert.equal((await (await post('/api/admin/plans', { visible: true }, c1)).json()).plans.visible, true);
     const up = (await (await call('/api/data', {}, c2)).json()).plans;

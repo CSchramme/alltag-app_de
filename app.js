@@ -16,6 +16,7 @@ const demo = require('./demo');
 const { occursOn, birthdayOn, ageOn } = require('./public/recur');
 const Ical = require('./ical');
 const { PLANS, FEATURES, SOON } = require('./plaene');
+const CHANGELOG = require('./changelog'); // Neuigkeiten nach Updates (neuester zuerst)
 const Formulare = require('./public/formulare');
 
 // Einstellungen auch aus der Datei .env im App-Ordner (NAME=Wert je Zeile, # = Kommentar). Echte Umgebungsvariablen
@@ -230,12 +231,14 @@ const supportId = (a) => a.id.replace(/-/g, '').slice(0, 8).toUpperCase().replac
 const school = () => me()?.school || 'edupage';
 function admin() { if (!me()?.admin) throw Object.assign(new Error('Nur für Admins'), { status: 403 }); }
 const demoAccount = () => accounts().find((a) => a.demo && !a.disabled);
+const mailItems = (c) => c.items.filter((i) => typeof i === 'string' || !i.need).map((i) => (typeof i === 'string' ? i : i.text)); // für alle, ohne Punkte nur für Familien
 async function adminData(extra = {}) { // Konten aus dem Abbild, Einladungscodes direkt vom Konto-Dienst
   const seen = seenAt();
   return { me: me()?.id || null, accountsUrl: ACCOUNTS_URL, accounts: accounts().map((a) => pubAccount(a, seen)), site: process.env.PUBLIC_URL || '',
     legal: legalInfo(), // Impressum-Angaben: Formular in der Verwaltung und Flyer
     plans: { list: PLANS, features: FEATURES, soon: SOON, visible: plansVisible() }, // Abo-Pläne für die Verwaltung
-    invites: extra.invites || (await accountsApi('/api/invites')).invites, ...extra };
+    invites: extra.invites || (await accountsApi('/api/invites')).invites,
+    updateMail: { ...CHANGELOG[0], items: mailItems(CHANGELOG[0]), wanted: accounts().filter((a) => a.updateMail === true && a.emailOk && !a.disabled && !a.demo).length, sent: siteSettings().mailedVersion || null }, ...extra };
 }
 // Beta-Test: Anmeldungen, Rückmeldungen und Einstellungen der Instanz (Abschlussumfrage offen?)
 const betaList = () => atRoot(() => load('beta.json', []));
@@ -245,7 +248,7 @@ const tellAdmins = (p) => { // kurze Mitteilung an alle Admins (neue Anmeldung, 
   if (ACCOUNTS) for (const a of accounts().filter((x) => x.admin && !x.disabled)) asUser(a, () => push(p)).catch(() => {});
 };
 const pubAccount = (a, seen = seenAt()) => ({ id: a.id, support: supportId(a), name: a.name, email: a.email || '', emailOk: !!a.emailOk, school: a.school, admin: !!a.admin,
-  disabled: !!a.disabled, demo: !!a.demo, jury: !!a.jury, pro: !!a.pro, plan: planOf(a), created: a.created, lastSeen: seen[a.id] || null });
+  disabled: !!a.disabled, demo: !!a.demo, jury: !!a.jury, pro: !!a.pro, plan: planOf(a), created: a.created, lastSeen: seen[a.id] || null, updateMail: a.updateMail ?? null });
 /* ------------------------------------------------------------------ Eigene Statistik (nur mit Konten): ohne Cookies, ohne fremde Dienste */
 // Besucher = Hash aus IP, Browserkennung und einem Tages-Salz. Das Salz und die Hashes gibt es nur am selben Tag,
 // danach bleiben nur Zahlen. Aktive Konten zählen über das Laden der App-Daten (die App selbst kommt oft aus dem Cache).
@@ -849,7 +852,7 @@ const payload = () => (viewer() ? forParents(fullPayload()) : fullPayload());
 function fullPayload() {
   const st = state(), snap = snapNow(), cfg = load('config.json', {})[school()];
   return {
-    app: APP, demo: isDemo(), status: load('status.json', {}),
+    app: APP, version: CHANGELOG[0].version, changelog: CHANGELOG.slice(0, 4), demo: isDemo(), status: load('status.json', {}),
     features: { ha: PRIVATE, screen: PRIVATE, accounts: ACCOUNTS, photos: !limited() && has('photos'), calendar: !limited() && has('calendar'), wallpaper: !limited() && has('wallpaper'), calendars: calsOn(), push: !limited() }, accountsUrl: ACCOUNTS ? ACCOUNTS_URL : '',
     beta: ACCOUNTS && !limited() ? { feedback: true, umfrage: !!siteSettings().umfrage && !st.umfrage } : null,
     account: me() && pubAccount(me()), school: school(),
@@ -937,6 +940,11 @@ const routes = {
     const b = await readJson(req), a = me();
     if (!a) return send(res, 404, { error: 'unbekannt' });
     if (a.demo) throw bad('Im Demo-Konto lässt sich das nicht ändern.');
+    if (typeof b.updateMail === 'boolean') { // Mail bei jedem Update (Beta-Test), gespeichert beim Konto-Dienst
+      const { account } = await accountsApi(`/api/accounts/${a.id}`, 'PATCH', { updateMail: b.updateMail });
+      keepAccount(account);
+      return send(res, 200, asUser(account, payload));
+    }
     if (b.school !== undefined && b.school !== a.school) {
       if (!SCHOOLS.includes(b.school)) throw bad('Unbekannte Schulsoftware');
       const { account } = await accountsApi(`/api/accounts/${a.id}`, 'PATCH', { school: b.school });
@@ -1105,6 +1113,12 @@ const routes = {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(l.email)) throw bad('Bitte eine gültige E-Mail-Adresse eintragen.');
     atRoot(() => save('site.json', { ...siteSettings(), legal: l }));
     send(res, 200, await adminData());
+  },
+  'POST /api/admin/update-mail': async (req, res) => {
+    admin();
+    const c = CHANGELOG[0], r = await accountsApi('/api/update-mail', 'POST', { version: c.version, items: mailItems(c), again: (await readJson(req)).again === true });
+    atRoot(() => save('site.json', { ...siteSettings(), mailedVersion: c.version }));
+    send(res, 200, r);
   },
   'POST /api/admin/test-mail': async (req, res) => { admin(); send(res, 200, await accountsApi('/api/test-mail', 'POST', { to: String((await readJson(req)).to || '').slice(0, 120) })); },
   'POST /api/admin/plans': async (req, res) => { // Plan-Auswahl im Profil für alle zeigen (kaufen geht noch nicht)
