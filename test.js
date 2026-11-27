@@ -523,7 +523,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     const d1 = await (await call('/api/data', {}, c1)).json();
     assert.deepEqual([d1.account.name, d1.account.admin, d1.account.email, d1.features.ha, d1.features.screen, d1.accountsUrl], ['chef', true, 'chef@example.org', false, false, ACC]);
     const CL = require('./changelog'); // Neuigkeiten: neueste Version vorne, jede mit Datum und Punkten
-    assert.ok(CL.every((c, i) => /^\d+\.\d+$/.test(c.version) && /^\d{4}-\d{2}-\d{2}$/.test(c.date) && c.items.length && (!i || c.date <= CL[i - 1].date)));
+    assert.ok(CL.every((c, i) => /^\d{2}\.\d+\.\d+$/.test(c.version) && /^\d{4}-\d{2}-\d{2}$/.test(c.date) && c.items.length && (!i || c.date <= CL[i - 1].date)));
     assert.deepEqual([d1.version, d1.changelog.length], [CL[0].version, Math.min(4, CL.length)]);
     assert.equal((await login(ben, 'https://boese.example/x')).location, '/');
     assert.equal((await login(ben, '//boese.example')).location, '/');
@@ -595,6 +595,18 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     assert.equal((await post('/api/admin/test-mail', { to: 'chef@example.org' }, c2)).status, 403); // Testmail nur für Admins
     assert.equal((await (await post('/api/account', { updateMail: true }, c2)).json()).account.updateMail, true); // Update-Mail: jeder für sich
     assert.equal((await post('/api/admin/update-mail', {}, c2)).status, 403);
+    // Bestellen (Testmodus, nur Admins): Pflicht-Häkchen, Kündigung ordentlich zum nächstmöglichen Termin, außerordentlich nur mit Grund
+    assert.equal((await post('/api/abo/order', { plan: 'pro', adult: true, terms: true, start: true }, c2)).status, 403);
+    assert.match((await (await post('/api/abo/order', { plan: 'pro', terms: true, start: true }, c1)).json()).error, /Volljährige/);
+    const ord = (await (await post('/api/abo/order', { plan: 'pro', billing: 'year', adult: true, terms: true, start: true }, c1)).json()).order;
+    assert.deepEqual([ord.price, ord.status, ord.test], [19.99, 'aktiv', true]);
+    assert.equal((await (await call('/api/data', {}, c1)).json()).shop.orders[0].next.slice(0, 4), String(new Date().getFullYear() + 1));
+    assert.match((await (await post('/api/abo/cancel', { id: ord.id, kind: 'ausserordentlich' }, c1)).json()).error, /Grund/);
+    const can = (await (await post('/api/abo/cancel', { id: ord.id }, c1)).json()).order;
+    assert.deepEqual([can.status, can.cancelKind, can.endsAt.slice(0, 10)], ['gekündigt', 'ordentlich', ord.next ? '' : new Date(new Date(ord.at).setMonth(new Date(ord.at).getMonth() + 12)).toISOString().slice(0, 10)]);
+    assert.equal((await post('/api/abo/cancel', { id: ord.id }, c1)).status, 400); // schon gekündigt
+    assert.equal((await (await call('/api/data', {}, c2)).json()).shop, null);
+    assert.ok((await (await call('/agb.html')).text()).includes('Zahlungspflichtig bestellen'));
     const umr = await (await post('/api/admin/update-mail', {}, c1)).json();
     assert.deepEqual([umr.sent, umr.version], [1, require('./changelog')[0].version]);
     assert.equal((await (await call('/api/admin', {}, c1)).json()).updateMail.sent, umr.version);

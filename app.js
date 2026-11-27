@@ -226,6 +226,19 @@ async function famChange(p, method, body) { // im Namen des angemeldeten Kontos;
   await refreshAccounts().catch(() => {});
   return r;
 }
+/* Abo bestellen und kündigen (Bestell-Knopf § 312j Abs. 3 BGB, Kündigungs-Knopf § 312k BGB, Verlängerung § 309 Nr. 9 BGB) */
+// shortcut: Testmodus ohne Zahlungsanbieter und nur für Admins; echter Verkauf erst mit Anbieter, Gewerbe/Steuer und geprüften AGB
+const SHOP_TEST = true;
+const orders = () => atRoot(() => load('orders.json', []));
+const addMonths = (d, n) => { const x = new Date(d); x.setMonth(x.getMonth() + n); return x; };
+function orderEnd(o, now = new Date()) { // nächstmöglicher Termin: Monat → Ende des laufenden Monats, Jahr → Ende des ersten Jahres, danach ein Monat Frist
+  const start = new Date(o.at);
+  if (o.billing === 'year') { const first = addMonths(start, 12); return first > now ? first : addMonths(now, 1); }
+  let end = addMonths(start, 1);
+  while (end <= now) end = addMonths(end, 1);
+  return end;
+}
+const myOrders = () => orders().filter((o) => o.account === me()?.id).map((o) => ({ ...o, next: o.status === 'aktiv' ? orderEnd(o).toISOString() : null })).reverse();
 const plansVisible = () => !!siteSettings().plansVisible; // Plan-Auswahl für Nutzer: schaltet der Admin frei, sonst nur Vorschau für Admins
 const supportId = (a) => a.id.replace(/-/g, '').slice(0, 8).toUpperCase().replace(/^(.{4})/, '$1-'); // zum Nennen bei Fragen
 const school = () => me()?.school || 'edupage';
@@ -846,7 +859,7 @@ function forParents(p) {
   const kid = me(), id = kid.kidKey ? `kid:${kid.kidKey}` : kid.id, keep = { events: p.db.events, lessons: p.db.lessons, reminders: p.db.reminders.filter((r) => r.category === 'schule') };
   return { ...p, viewing: { id, name: kid.name }, account: { id, name: kid.name }, beta: null, plans: null, family: null, kids: [], timer: null,
     weather: [], place: null, stops: {}, ticket: null, ha: { connected: false }, features: { accounts: true }, link: { connected: !!p.link.connected, school: p.link.school || '' },
-    calendars: [], ical: [], snap: p.snap && { ...p.snap, messages: kid.kidKey ? p.snap.messages : [] }, db: { ...Object.fromEntries(Object.keys(p.db).map((k) => [k, []])), ...keep } };
+    shop: null, calendars: [], ical: [], snap: p.snap && { ...p.snap, messages: kid.kidKey ? p.snap.messages : [] }, db: { ...Object.fromEntries(Object.keys(p.db).map((k) => [k, []])), ...keep } };
 }
 const payload = () => (viewer() ? forParents(fullPayload()) : fullPayload());
 function fullPayload() {
@@ -872,6 +885,7 @@ function fullPayload() {
       }),
     },
     db: db(), ...calPayload(), family: famPayload(),
+    shop: ACCOUNTS && me()?.admin && !isDemo() ? { test: SHOP_TEST, orders: myOrders() } : null, // Bestellen: bisher nur Admins (Test)
     kids: ACCOUNTS && me() && !me().demo ? kidsOf().map((k) => ({ key: k.key, name: k.name, kind: k.kind, link: k.link, where: k.where, error: asKid(me(), k, kidProblem) })) : [],
     plans: ACCOUNTS && !isDemo() && (plansVisible() || me()?.admin) ? { list: PLANS, features: FEATURES, soon: SOON, current: planOf(me()), preview: !plansVisible() } : null,
   };
@@ -1113,6 +1127,29 @@ const routes = {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(l.email)) throw bad('Bitte eine gültige E-Mail-Adresse eintragen.');
     atRoot(() => save('site.json', { ...siteSettings(), legal: l }));
     send(res, 200, await adminData());
+  },
+  'POST /api/abo/order': async (req, res) => {
+    admin(); // shortcut: nur Admins, solange es ein Test ist
+    const b = await readJson(req), plan = ['pro', 'familie'].includes(b.plan) ? b.plan : null, billing = b.billing === 'year' ? 'year' : 'month';
+    if (!plan) throw bad('Bitte einen Plan wählen.');
+    if (b.adult !== true) throw bad('Bestellen können nur Volljährige. Bitte deine Eltern, für dich zu bestellen.');
+    if (b.terms !== true) throw bad('Bitte den AGB zustimmen.');
+    if (b.start !== true) throw bad('Bitte bestätigen, dass Alltag sofort starten soll.');
+    const o = { id: `A-${crypto.randomBytes(3).toString('hex').toUpperCase()}`, account: me().id, plan, billing, price: PLANS[plan][billing], at: new Date().toISOString(), status: 'aktiv', test: SHOP_TEST,
+      consents: { adult: true, terms: true, start: true, at: new Date().toISOString() } };
+    atRoot(() => save('orders.json', [...orders(), o].slice(-5000)));
+    send(res, 200, { order: o, data: payload() });
+  },
+  'POST /api/abo/cancel': async (req, res) => { // „Verträge hier kündigen“: ordentlich zum nächstmöglichen Termin oder außerordentlich mit Grund
+    admin();
+    const b = await readJson(req), list = orders(), o = list.find((x) => x.id === b.id && x.account === me().id);
+    if (!o) throw bad('Diesen Vertrag gibt es nicht.');
+    if (o.status !== 'aktiv') throw bad('Dieser Vertrag ist schon gekündigt.');
+    const extra = b.kind === 'ausserordentlich', reason = F.text(500)(b.reason);
+    if (extra && !reason) throw bad('Bitte den Grund für die außerordentliche Kündigung angeben.');
+    Object.assign(o, { status: 'gekündigt', cancelledAt: new Date().toISOString(), cancelKind: extra ? 'ausserordentlich' : 'ordentlich', reason: extra ? reason : '', endsAt: (extra ? new Date() : orderEnd(o)).toISOString() });
+    atRoot(() => save('orders.json', list));
+    send(res, 200, { order: o, data: payload() });
   },
   'POST /api/admin/update-mail': async (req, res) => {
     admin();
@@ -1639,7 +1676,7 @@ function seoFile(req, res, pathname) {
 // Die HTML-Seiten liegen in pages/, nicht in public/: Plesk liefert alles in public/ direkt über nginx aus, an der App vorbei.
 // Dann fehlten Look, Impressum-Angaben und Sicherheits-Header. Nur die App liefert sie deshalb aus.
 const PAGES = path.join(__dirname, 'pages');
-const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html', '/beta': 'beta.html', '/funktionen': 'funktionen.html',
+const PAGE_FILES = { '/': 'index.html', '/index.html': 'index.html', '/impressum.html': 'impressum.html', '/datenschutz.html': 'datenschutz.html', '/beta': 'beta.html', '/funktionen': 'funktionen.html', '/agb.html': 'agb.html', '/widerruf.html': 'widerruf.html',
   // Kurz-Links für den Beta-Test (Flyer, Gruppen-Chat): Anmeldung ohne Konto, der Rest öffnet das Formular in der App
   '/poll/anmeldung': 'beta.html', '/poll/fehler': 'index.html', '/poll/verbesserung': 'index.html', '/poll/rueckmeldung': 'index.html' };
 function serveStatic(req, res, pathname) {

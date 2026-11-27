@@ -296,6 +296,14 @@ button.row:active { background-color: var(--press); transition-duration: 0s; }
 .avatar.big { width: 64px; height: 64px; margin-bottom: 6px; font-size: 24px; }
 .avatar.slot { background: none; box-shadow: none; border: 2px dashed var(--label3); color: var(--blue); font-size: 26px; font-weight: 500; }
 .avatar.slot .plus { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+/* Bestellen und kündigen */
+.checkout-sum { padding: 18px; }
+.checkout-price { margin-top: 4px; font-size: 28px; font-weight: 800; letter-spacing: -.02em; }
+.checkout-price span { font-size: 15px; font-weight: 500; color: var(--label2); }
+.checkout-sum ul { margin: 10px 0 0; padding-left: 20px; color: var(--label); font-size: 15px; }
+.check-row { display: flex; align-items: flex-start; gap: 10px; margin: 10px 2px; font-size: 14px; line-height: 1.4; color: var(--label); }
+.check-row input { flex: none; width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--blue); }
+.check-row a { color: var(--blue); }
 /* Neuigkeiten nach einem Update */
 .news-hero { margin: 0 0 14px; padding: 22px 20px; border-radius: 22px; color: #fff; background: linear-gradient(125deg, var(--blue), color-mix(in srgb, var(--blue) 30%, var(--pink)) 55%, var(--orange));
   box-shadow: 0 10px 30px color-mix(in srgb, var(--blue) 30%, transparent); }

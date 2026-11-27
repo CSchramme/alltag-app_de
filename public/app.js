@@ -1961,6 +1961,7 @@ async function openSettings() {
     </div>
     ${D.plans ? proCard() : ''}
     ${accountSection()}
+    ${contractsSection()}
     ${familySection()}
     ${kidsSection()}
     ${D.beta ? `<p class="label-sm">Beta-Test</p>${group('<button class="row" data-feedback><div class="main"><div class="title">Fehler oder Idee melden</div><div class="sub">Geht direkt an den Entwickler, mit deiner Tester-ID</div></div></button>',
@@ -2056,9 +2057,11 @@ async function openSettings() {
     </div>
     <p class="footnote" id="cron-hint" style="margin-top:8px;text-align:left"></p></div>
     <div class="list card" style="margin-top:22px"><button class="row" id="logout"><span class="btn-plain danger">Abmelden</span></button></div>
-    <p class="app-version"><button type="button" class="btn-link" id="news-open">Alltag ${esc(D.version || '')} · Neuigkeiten</button></p>
+    <p class="app-version"><button type="button" class="btn-link" id="news-open">Alltag v${esc(D.version || "")} · Neuigkeiten</button></p>
     <p class="legal-links"><a target="_blank" rel="noopener" href="/impressum.html">Impressum</a><a target="_blank" rel="noopener" href="/datenschutz.html">Datenschutz</a></p>`);
   $('#news-open').onclick = () => openNews();
+  const co = $('#cancel-open');
+  if (co) co.onclick = openCancel;
   const um = $('#update-mail');
   if (um) um.onchange = async () => {
     haptic();
@@ -2361,11 +2364,101 @@ function openPlans() {
         <div class="plan-price">${price ? `<b>${euro(price)}</b><span>${billing === 'year' ? 'im Jahr' : 'im Monat'}</span>` : '<b>0 €</b><span>für immer</span>'}</div>
         <div class="plan-hint">${price && billing === 'year' ? `nur ${euro(x.year / 12)} im Monat` : price ? `oder ${euro(x.year)} im Jahr` : 'ohne Werbung'}</div>
         <ul>${points.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>
-        <button class="${k === 'pro' ? 'btn-primary' : 'btn-plain'}" type="button" disabled>${cur ? 'Dein aktueller Plan' : k === 'free' ? 'Immer dabei' : 'Bald verfügbar'}</button></div>`;
+        <button class="${k === 'pro' ? 'btn-primary' : 'btn-plain'}" type="button" ${D.shop && k !== 'free' ? `data-buy="${k}"` : 'disabled'}>${D.shop && k !== 'free' ? 'Bestellen (Test)' : cur ? 'Dein aktueller Plan' : k === 'free' ? 'Immer dabei' : 'Bald verfügbar'}</button></div>`;
     }).join('');
+    $$('#sheet [data-buy]').forEach((b) => { b.onclick = () => openCheckout(b.dataset.buy); });
   };
   $$('#sheet [data-bill]').forEach((b) => { b.onclick = () => { billing = b.dataset.bill; haptic(); render(); }; });
   render();
+}
+
+/* ---------------------------------------------------------------- Bestellen und kündigen (Testmodus, nur Admins): Bestell-Knopf § 312j, Kündigungs-Knopf § 312k BGB */
+const longDate = (iso) => new Intl.DateTimeFormat('de-DE', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(iso));
+const termText = (year) => (year ? '12 Monate. Danach läuft der Vertrag weiter und ist jederzeit mit einem Monat Frist kündbar.' : '1 Monat. Er verlängert sich jeweils um einen Monat und ist jederzeit zum Ende des laufenden Monats kündbar.');
+const testBanner = () => (D.shop?.test ? '<div class="card banner info"><div><b>Testmodus</b>Nur Admins sehen das. Es wird nichts berechnet, die Bestellung wird nur gespeichert.</div></div>' : '');
+function openCheckout(plan) {
+  const p = D.plans, x = p.list[plan], year = billing === 'year', price = year ? x.year : x.month;
+  const points = plan === 'familie' ? ['Alles aus Pro', `Bis zu ${x.accounts} Konten in einer Familie`] : x.features.filter((f) => !p.soon.includes(f)).map((f) => p.features[f]);
+  const link = (href, t) => `<a href="${href}" target="_blank" rel="noopener">${t}</a>`;
+  openSheet('Bestellen', `${testBanner()}
+    <div class="card checkout-sum"><div class="pro-kicker">Alltag ${esc(x.name)}</div><div class="checkout-price">${euro(price)} <span>${year ? 'pro Jahr' : 'pro Monat'}</span></div>
+      <ul>${points.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>
+    <div class="list card" style="margin-top:12px">
+      <div class="row"><div class="main"><div class="title">Gesamtpreis</div><div class="sub">${euro(price)} ${year ? 'für die ersten 12 Monate' : 'pro Monat'}, Endpreis</div></div></div>
+      <div class="row"><div class="main"><div class="title">Laufzeit</div><div class="sub">${termText(year)}</div></div></div>
+      <div class="row"><div class="main"><div class="title">Bezahlen</div><div class="sub">${D.shop.test ? 'Im Testmodus ohne Zahlung.' : 'Im Voraus für die Laufzeit.'}</div></div></div>
+    </div>
+    <form class="form" id="checkout" style="margin-top:14px">
+      <label class="check-row"><input type="checkbox" name="adult"><span>Ich bin volljährig. Bist du jünger, bitte deine Eltern, für dich zu bestellen.</span></label>
+      <label class="check-row"><input type="checkbox" name="terms"><span>Ich stimme den ${link('/agb.html', 'AGB')} zu und habe die ${link('/widerruf.html', 'Widerrufsbelehrung')} und die ${link('/datenschutz.html', 'Datenschutzerklärung')} gelesen.</span></label>
+      <label class="check-row"><input type="checkbox" name="start"><span>Alltag ${esc(x.name)} soll sofort starten. Mir ist klar: Widerrufe ich innerhalb von 14 Tagen, zahle ich den Anteil bis zum Widerruf.</span></label>
+      <p class="form-error" role="alert"></p>
+      <button class="btn-primary pressable" type="submit">Zahlungspflichtig bestellen</button>
+    </form>
+    <button class="btn-plain" type="button" id="checkout-back">Zurück zu den Plänen</button>`);
+  $('#checkout-back').onclick = openPlans;
+  const f = $('#checkout');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const b = $('button[type=submit]', f), err = $('.form-error', f);
+    b.disabled = true; err.textContent = '';
+    try {
+      const r = await api('/api/abo/order', { method: 'POST', body: { plan, billing, adult: f.adult.checked, terms: f.terms.checked, start: f.start.checked } });
+      setData(r.data); haptic(); openOrderDone(r.order);
+    } catch (x2) { err.textContent = x2.message; b.disabled = false; }
+  };
+}
+function openOrderDone(o) {
+  const x = D.plans.list[o.plan];
+  openSheet('Bestellt', `${testBanner()}<div class="news-hero"><div class="news-k">Danke für deine Bestellung</div><div class="news-v">Alltag ${esc(x.name)}</div><div class="news-d">Bestellnummer ${esc(o.id)}${o.test ? ' (Test)' : ''}</div></div>
+    <div class="list card">
+      <div class="row"><div class="main"><div class="title">${euro(o.price)} ${o.billing === 'year' ? 'pro Jahr' : 'pro Monat'}</div><div class="sub">Laufzeit: ${termText(o.billing === 'year')}</div></div></div>
+      <div class="row"><div class="main"><div class="title">Bestellt am</div><div class="sub">${esc(new Date(o.at).toLocaleString('de-DE'))}</div></div></div>
+    </div>
+    <p class="footnote" style="text-align:left">${o.test ? 'Im echten Betrieb kommt diese Bestätigung zusätzlich per Mail, mit AGB und Widerrufsbelehrung.' : 'Die Bestätigung mit AGB und Widerrufsbelehrung kommt per Mail.'} Kündigen kannst du jederzeit im Profil unter „Verträge hier kündigen“.</p>
+    <button class="btn-primary pressable" type="button" id="done-ok">Fertig</button>`);
+  $('#done-ok').onclick = () => closeSheet();
+}
+function contractsSection() { // im Profil: laufende Verträge und der Kündigungs-Knopf, immer sichtbar
+  if (!D.shop) return '';
+  const list = D.shop.orders || [];
+  return `<p class="label-sm">Verträge${D.shop.test ? ' (Test)' : ''}</p>
+    ${list.length ? `<div class="list card">${list.slice(0, 6).map((o) => `<div class="row"><div class="main"><div class="title">Alltag ${esc(D.plans?.list[o.plan]?.name || o.plan)} · ${o.billing === 'year' ? 'jährlich' : 'monatlich'}</div>
+      <div class="sub">${esc(o.id)} · seit ${esc(longDate(o.at))} · ${o.status === 'aktiv' ? `läuft, kündbar zum ${esc(longDate(o.next))}` : `gekündigt, endet am ${esc(longDate(o.endsAt))}`}</div></div></div>`).join('')}</div>` : ''}
+    <div class="list card"${list.length ? ' style="margin-top:8px"' : ''}><button class="row" type="button" id="cancel-open"><span class="btn-plain">Verträge hier kündigen</span></button></div>`;
+}
+function openCancel() {
+  const open = (D.shop?.orders || []).filter((o) => o.status === 'aktiv');
+  openSheet('Verträge hier kündigen', `${testBanner()}${open.length ? `<form class="form" id="cancel-form">
+      ${group(fRow('Vertrag', `<select name="id">${open.map((o) => `<option value="${esc(o.id)}">Alltag ${esc(D.plans?.list[o.plan]?.name || o.plan)} · ${esc(o.id)}</option>`).join('')}</select>`))}
+      <p class="label-sm">Art der Kündigung</p>
+      <label class="check-row"><input type="radio" name="kind" value="ordentlich" checked><span>Ordentlich zum nächstmöglichen Termin (<span id="cancel-when"></span>)</span></label>
+      <label class="check-row"><input type="radio" name="kind" value="ausserordentlich"><span>Außerordentlich, sofort, aus wichtigem Grund</span></label>
+      <div id="cancel-reason" hidden>${group(`<textarea name="reason" rows="3" maxlength="500" placeholder="Grund für die außerordentliche Kündigung"></textarea>`)}</div>
+      <p class="footnote" style="text-align:left">Kündigung für ${esc(D.account?.name || '')}${D.account?.email ? ` (${esc(D.account.email)})` : ''}. Die Bestätigung siehst du gleich hier${D.shop.test ? '' : ' und bekommst sie per Mail'}.</p>
+      <p class="form-error" role="alert"></p>
+      <button class="btn-primary pressable" type="submit">Jetzt kündigen</button></form>` : '<div class="card" style="padding:16px"><div class="sub">Gerade läuft kein Vertrag, den du kündigen kannst.</div></div>'}
+    <button class="btn-plain" type="button" id="cancel-back" style="margin-top:12px">Zurück zum Profil</button>`);
+  $('#cancel-back').onclick = openSettings;
+  const f = $('#cancel-form');
+  if (!f) return;
+  const when = () => { const o = open.find((x) => x.id === f.id.value); $('#cancel-when').textContent = o ? longDate(o.next) : ''; };
+  when();
+  f.id.onchange = when;
+  $$('input[name=kind]', f).forEach((r) => { r.onchange = () => { $('#cancel-reason').hidden = f.kind.value !== 'ausserordentlich'; }; });
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const b = $('button[type=submit]', f), err = $('.form-error', f);
+    b.disabled = true; err.textContent = '';
+    try {
+      const r = await api('/api/abo/cancel', { method: 'POST', body: { id: f.id.value, kind: f.kind.value, reason: f.reason.value } });
+      setData(r.data); haptic();
+      openSheet('Gekündigt', `${testBanner()}<div class="card" style="padding:16px"><div class="title" style="font-weight:700">Deine Kündigung ist angekommen.</div>
+        <div class="sub" style="margin-top:6px">Vertrag ${esc(r.order.id)}, gekündigt am ${esc(new Date(r.order.cancelledAt).toLocaleString('de-DE'))}. Er endet am ${esc(longDate(r.order.endsAt))}.</div></div>
+        <button class="btn-primary pressable" type="button" id="cancel-done" style="margin-top:16px">Fertig</button>`);
+      $('#cancel-done').onclick = () => closeSheet();
+    } catch (x) { err.textContent = x.message; b.disabled = false; }
+  };
 }
 
 /* ---------------------------------------------------------------- Beta-Test: Rückmeldung und Abschlussumfrage (statt Google Forms) */
