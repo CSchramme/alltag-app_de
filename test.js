@@ -210,6 +210,8 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   pe.data = { userid: 'Rodic-9', dbi: { students: { 41: { firstname: 'Lena', lastname: 'M' }, 42: { firstname: 'Tim', lastname: 'M' } } } };
   pe.req = async (p) => { switched.push(p); return { text: p.includes('studentid=42') ? 'OK' : 'Error' }; };
   assert.deepEqual([pe.isParent(), pe.children().map((k) => [k.id, k.name])], [true, [['41', 'Lena M'], ['42', 'Tim M']]]);
+  pe.raw = '<a href="/login/switchchild?studentid=42">x</a><a href="/login/switchchild?studentid=55">'; // Umschalt-Links gehen vor dbi.students
+  assert.deepEqual([pe.children(), pe.parentInfo().switchLinks, pe.parentInfo().type], [[{ id: '42', name: 'Tim M' }, { id: '55', name: 'Kind 2' }], 2, 'Rodic']);
   await pe.useChild('42');
   assert.deepEqual([pe.data.userid, switched[0]], ['Student-42', '/login/switchchild?studentid=42']);
   await pe.useChild('42'); // steht schon auf dem Kind: kein zweites Umschalten
@@ -629,7 +631,7 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
     fs.writeFileSync(benCfg, JSON.stringify({ ...(fs.existsSync(benCfg) ? JSON.parse(fs.readFileSync(benCfg, 'utf8')) : {}), kids: [{ key: kidKey, name: 'Kim', kind: 'untis', link: 'ab12cd34', where: 'Testschule', schoolKey: 'untis:x/y' }] }));
     assert.deepEqual((await (await call('/api/data', {}, c2)).json()).kids.map((k) => [k.name, k.where, k.error]), [['Kim', 'Testschule', null]]);
     const kv2 = await (await call(`/api/data?as=kid%3A${kidKey}`, {}, c2)).json();
-    assert.deepEqual([kv2.viewing, kv2.snap.tasks.map((t) => t.title), kv2.snap.messages, kv2.kids], [{ id: `kid:${kidKey}`, name: 'Kim' }, ['Vokabeln'], [], []]);
+    assert.deepEqual([kv2.viewing, kv2.snap.tasks.map((t) => t.title), kv2.snap.messages.map((m) => m.text), kv2.kids], [{ id: `kid:${kidKey}`, name: 'Kim' }, ['Vokabeln'], ['geheim'], []]); // Nachrichten des Eltern-Zugangs sind die eigenen
     assert.equal((await call(`/api/data?as=kid%3A${kidKey}`, {}, c1)).status, 403); // Kind eines anderen Kontos
     assert.equal((await call('/api/data?as=kid%3A..%2F..', {}, c2)).status, 403);
     await call('/api/kids/ab12cd34', { method: 'DELETE' }, c2);

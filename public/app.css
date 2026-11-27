@@ -281,6 +281,20 @@ button.row:active { background-color: var(--press); transition-duration: 0s; }
 .pro-card { display: flex; align-items: center; gap: 12px; width: 100%; margin: 12px 0 0; padding: 18px; text-align: left; font: inherit; color: var(--label); border: 0; cursor: pointer;
   background: linear-gradient(125deg, color-mix(in srgb, var(--blue) 20%, var(--card)), color-mix(in srgb, var(--pink) 16%, var(--card)) 70%, color-mix(in srgb, var(--orange) 14%, var(--card))); }
 .pro-card .main { flex: 1; min-width: 0; }
+/* Familie: Übersicht wie bei Spotify, eine Kachel je Platz */
+.fam-entry { margin-top: 0; }
+.fam-stack { display: flex; flex: none; }
+.fam-stack .avatar { margin-left: -10px; outline: 2px solid var(--sheet-bg); }
+.fam-stack .avatar:first-child { margin-left: 0; }
+.fam-hero { cursor: default; margin: 0 0 4px; }
+.fam-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
+.fam-tile { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; padding: 16px 8px 10px; border: 0; border-radius: 18px; font: inherit; color: var(--label); text-align: center; }
+.fam-tile .btn-plain { width: auto; padding: 4px 0; font-size: 14px; }
+.fam-free { cursor: pointer; }
+.fam-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; }
+.fam-role { font-size: 12px; color: var(--label2); }
+.avatar.big { width: 64px; height: 64px; margin-bottom: 6px; font-size: 24px; }
+.avatar.empty { background: none; box-shadow: none; border: 2px dashed var(--label3); color: var(--blue); font-size: 26px; font-weight: 500; }
 .pro-kicker { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--blue); }
 .pro-card .title { margin-top: 2px; font-size: 17px; font-weight: 700; }
 .pro-card .sub { margin-top: 2px; font-size: 14px; color: var(--label2); }

@@ -204,7 +204,7 @@ function famPayload() { // wer zur Familie gehört, wen ich ansehen darf, wer mi
   if (!ACCOUNTS || !a || a.demo) return null;
   if (!f) return a.plan === 'familie' ? { owner: true, active: true, role: 'parent', members: [{ id: a.id, name: a.name, role: 'parent', owner: true, me: true }] } : null;
   return { owner: f.owner === a.id, active: !!f.active, role: f.role,
-    members: accounts().filter((x) => x.family?.owner === f.owner && !x.disabled)
+    members: accounts().filter((x) => x.family?.owner === f.owner && !x.disabled).sort((x, y) => (y.id === f.owner) - (x.id === f.owner) || (x.family.role === 'child') - (y.family.role === 'child')) // Verwalter zuerst, dann Eltern, dann Kinder
       .map((x) => ({ id: x.id, name: x.name, role: x.id === f.owner ? 'parent' : x.family.role, owner: x.id === f.owner, me: x.id === a.id })) };
 }
 // Eltern-Zugang der Schule: einer pro Schule, daraus alle Kinder. Jedes Kind hat einen eigenen Datenordner unter users/<id>/kinder/<key>
@@ -213,6 +213,11 @@ const KID_MAX = 6, KID_LINKS = 3;
 const kidsOf = () => load('config.json', {}).kids || [];
 const kidDir = (parentId, key) => path.join(userDir(parentId), 'kinder', key);
 const asKid = (parent, k, fn, viewer) => ctx.run({ dir: kidDir(parent.id, k.key), account: { ...parent, name: k.name, school: k.kind, kidKey: k.key }, ...(viewer ? { viewer } : {}) }, fn);
+// was beim letzten Abgleich eines Kindes schiefging: ganz (status) oder nur teilweise (z. B. Mitteilungen)
+const kidProblem = () => {
+  const parts = [...new Set((load('snapshot.json', null)?.errors || []).map((e) => `${e.split(':')[0]}${/HTTP \d+/.exec(e) ? ` (${/HTTP \d+/.exec(e)[0]})` : ''}`))];
+  return load('status.json', {}).error || (parts.length ? `Nicht geladen: ${parts.join(', ')}` : null);
+};
 const ownKid = (user, key) => (user?.id ? asUser(user, kidsOf).find((k) => k.key === key) : null);
 function famMe() { const a = me(); if (!ACCOUNTS || !a || a.demo) throw bad('Familien gibt es nur mit eigenem Konto.'); return a; }
 async function famChange(p, method, body) { // im Namen des angemeldeten Kontos; der Konto-Dienst prüft, wer was darf
@@ -833,11 +838,12 @@ function settings() {
     ha: c.ha ? { connected: true, url: c.ha.url, todo: c.ha.todo || '', pc: c.ha.pc || [] } : { connected: false } }; // Token bleibt auf dem Server
 }
 // Eltern beim Kind: nur Stundenplan, Hausaufgaben, Prüfungen und Termine. Notizen, Noten, Nachrichten, Schulweg und Kalender bleiben privat.
+// Ausnahme Eltern-Zugang der Schule (kidKey): dessen Nachrichten sind die eigenen Elternnachrichten, die bleiben sichtbar.
 function forParents(p) {
   const kid = me(), id = kid.kidKey ? `kid:${kid.kidKey}` : kid.id, keep = { events: p.db.events, lessons: p.db.lessons, reminders: p.db.reminders.filter((r) => r.category === 'schule') };
   return { ...p, viewing: { id, name: kid.name }, account: { id, name: kid.name }, beta: null, plans: null, family: null, kids: [], timer: null,
     weather: [], place: null, stops: {}, ticket: null, ha: { connected: false }, features: { accounts: true }, link: { connected: !!p.link.connected, school: p.link.school || '' },
-    calendars: [], ical: [], snap: p.snap && { ...p.snap, messages: [] }, db: { ...Object.fromEntries(Object.keys(p.db).map((k) => [k, []])), ...keep } };
+    calendars: [], ical: [], snap: p.snap && { ...p.snap, messages: kid.kidKey ? p.snap.messages : [] }, db: { ...Object.fromEntries(Object.keys(p.db).map((k) => [k, []])), ...keep } };
 }
 const payload = () => (viewer() ? forParents(fullPayload()) : fullPayload());
 function fullPayload() {
@@ -863,7 +869,7 @@ function fullPayload() {
       }),
     },
     db: db(), ...calPayload(), family: famPayload(),
-    kids: ACCOUNTS && me() && !me().demo ? kidsOf().map((k) => ({ key: k.key, name: k.name, kind: k.kind, link: k.link, where: k.where, error: asKid(me(), k, () => load('status.json', {})).error || null })) : [],
+    kids: ACCOUNTS && me() && !me().demo ? kidsOf().map((k) => ({ key: k.key, name: k.name, kind: k.kind, link: k.link, where: k.where, error: asKid(me(), k, kidProblem) })) : [],
     plans: ACCOUNTS && !isDemo() && (plansVisible() || me()?.admin) ? { list: PLANS, features: FEATURES, soon: SOON, current: planOf(me()), preview: !plansVisible() } : null,
   };
 }
@@ -1138,9 +1144,16 @@ const routes = {
     if (new Set(kids.map((k) => k.link)).size >= KID_LINKS) throw bad(`Es gehen höchstens ${KID_LINKS} Eltern-Zugänge.`);
     let found;
     try {
-      if (kind === 'edupage') { const ep = new Edupage(cfg.school); await ep.login(cfg.user, cfg.pass); found = ep.isParent() ? ep.children() : []; } else found = await new LINKS[kind](cfg).children();
-    } catch (e) { return send(res, 400, { error: e.code ? e.message : `${SCHOOL_NAMES[kind]} nicht erreichbar (${e.message})` }); }
-    if (!found.length) throw bad('In diesem Zugang sind keine Kinder hinterlegt. Bitte den Eltern-Zugang der Schule nehmen.');
+      if (kind === 'edupage') {
+        const ep = new Edupage(cfg.school);
+        try { await ep.login(cfg.user, cfg.pass); } catch (e) { console.warn('Eltern-Zugang EduPage, Anmeldung:', e.code || e.message, ep.landed || ''); throw e; }
+        found = ep.isParent() ? ep.children() : [];
+        if (!found.length) console.warn('Eltern-Zugang EduPage ohne Kinder:', JSON.stringify(ep.parentInfo())); // Aufbau ohne Namen, zur Fehlersuche
+        const type = ep.parentInfo().type;
+        if (!ep.isParent()) throw bad(`Angemeldet, aber ${{ Student: 'als Schüler', Ucitel: 'als Lehrkraft' }[type] || `als „${type || 'unbekannt'}“`}. Bitte den Eltern-Zugang der Schule nehmen.`);
+      } else found = await new LINKS[kind](cfg).children();
+    } catch (e) { return send(res, 400, { error: e.status || e.code ? e.message : `${SCHOOL_NAMES[kind]} nicht erreichbar (${e.message})` }); }
+    if (!found.length) throw bad('Angemeldet, aber in diesem Zugang sind keine Kinder zu finden. Schick uns bitte über „Fehler melden“ Bescheid.');
     if (found.length > KID_MAX) throw bad(`Dieser Zugang zeigt mehr als ${KID_MAX} Schüler. Bitte den Eltern-Zugang nehmen, keinen Lehrer-Zugang.`);
     if (kids.length + found.length > KID_MAX) throw bad(`Es gehen höchstens ${KID_MAX} Kinder.`);
     const link = crypto.randomBytes(4).toString('hex'), where = kind === 'edupage' ? `${cfg.school}.edupage.org` : kind === 'untis' ? cfg.name : 'Schulmanager', st = load('config.json', {}).state;

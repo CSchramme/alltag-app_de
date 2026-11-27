@@ -2023,7 +2023,6 @@ async function openSettings() {
   };
   if (D.features?.ha !== false) wireHa();
   wireAccount();
-  if (D.family) wireFamily();
   wireKids();
   const rot = $('#widget-rotate');
   if (rot) rot.onclick = async () => { // falls der Lese-Schlüssel in falsche Hände geraten ist
@@ -2135,41 +2134,58 @@ const WEEKDAYS = [[1, 'Montag'], [2, 'Dienstag'], [3, 'Mittwoch'], [4, 'Donnerst
 
 /* ---------------------------------------------------------------- Familie (Plan „familie“): Mitglieder, Einladen per Mail, Kinder ansehen */
 const ROLE_NAME = { parent: 'Elternteil', child: 'Kind' };
-function familySection() {
+const famText = (f) => (f.role === 'child' ? `${(() => { const p = f.members.filter((m) => m.role === 'parent').map((m) => m.name); return p.length ? `${esc(p.join(' und '))} ${p.length > 1 ? 'können' : 'kann'}` : 'Eltern in der Familie können'; })()} deinen Stundenplan, deine Hausaufgaben und deine Termine sehen, aber nichts ändern. Notizen, Noten und Nachrichten bleiben privat.`
+  : `Alle in der Familie haben die Pro-Funktionen. Eltern sehen Stundenplan, Hausaufgaben und Termine der Kinder, nur ansehen.${f.owner ? ' Einladungen kommen per Mail und gelten 7 Tage.' : ''}`);
+function familySection() { // im Profil nur die Karte, die Übersicht öffnet sich darüber (wie bei Spotify)
   const f = D.family;
   if (!f) return '';
-  const parents = f.members.filter((m) => m.role === 'parent' && !m.me).map((m) => m.name);
-  const rows = f.members.map((m) => `<div class="row"><div class="avatar small" style="--c:var(--${m.role === 'child' ? 'pink' : 'blue'})">${esc(initials(m.name))}</div>
-    <div class="main"><div class="title">${esc(m.name)}${m.me ? ' (du)' : ''}</div><div class="sub">${m.owner ? 'Elternteil · hat den Familien-Plan' : ROLE_NAME[m.role]}</div>
-    ${(f.role === 'parent' && m.role === 'child' && f.active) || (f.owner && !m.owner) ? `<div class="code-actions">${f.role === 'parent' && m.role === 'child' && f.active ? `<button class="btn-plain" type="button" data-view-kid="${esc(m.id)}">Ansehen</button>` : ''}${f.owner && !m.owner ? `<button class="btn-plain danger" type="button" data-fam-del="${esc(m.id)}">Entfernen</button>` : ''}</div>` : ''}</div></div>`);
   return `<p class="label-sm">Familie</p>
-    <div class="list card">${rows.join('')}<div id="fam-invites"></div>
-      ${!f.owner ? `<button class="row" type="button" data-fam-del="${esc(f.members.find((m) => m.me)?.id || '')}"><span class="btn-plain danger">Familie verlassen</span></button>` : ''}</div>
-    ${f.owner ? `<form class="form" id="fam-invite">${group(fText('email', 'E-Mail-Adresse', '', 'type="email" autocomplete="off" required maxlength="120"'),
-      fRow('Als', `<select name="role"><option value="child">Kind</option><option value="parent">Elternteil</option></select>`))}
-      <button class="btn-plain" type="submit">Einladen</button></form>` : ''}
-    <p class="footnote" style="margin-top:8px;text-align:left">${!f.active ? 'Der Familien-Plan ist gerade nicht aktiv. Pro-Funktionen und das Ansehen gehen erst wieder, wenn er läuft. '
-      : ''}${f.role === 'child' ? `${parents.length ? `${esc(parents.join(' und '))} ${parents.length > 1 ? 'können' : 'kann'}` : 'Eltern in der Familie können'} deinen Stundenplan, deine Hausaufgaben und deine Termine sehen, aber nichts ändern. Notizen, Noten und Nachrichten bleiben privat.`
-      : `Bis zu 5 Konten. Alle bekommen die Pro-Funktionen. Eltern sehen Stundenplan, Hausaufgaben und Termine der Kinder (nur ansehen).${f.owner ? ' Die Einladung kommt per Mail und gilt 7 Tage.' : ''}`}</p>`;
+    <button class="card pro-card pressable fam-entry" type="button" data-family>
+      <div class="fam-stack">${f.members.slice(0, 5).map((m) => `<span class="avatar small" style="--c:var(--${m.role === 'child' ? 'pink' : 'blue'})">${esc(initials(m.name))}</span>`).join('')}</div>
+      <div class="main"><div class="pro-kicker">Alltag Familie</div><div class="title">${f.members.length} von 5 Plätzen</div>
+        <div class="sub">${f.owner ? 'Einladen und verwalten' : 'Mitglieder ansehen'}</div></div>${ICON.chev}</button>
+    ${f.role === 'child' ? `<p class="footnote" style="margin-top:8px;text-align:left">${famText(f)}</p>` : ''}`;
 }
-function wireFamily() {
-  const f = D.family, form = $('#fam-invite'), reload = async () => { haptic(); await load(); openSettings(); };
-  const wireInvites = () => $$('#sheet [data-fam-inv]').forEach((b) => {
-    b.onclick = async () => { try { await api(`/api/family/invites/${encodeURIComponent(b.dataset.famInv)}`, { method: 'DELETE' }); reload(); } catch (x) { toast(x.message); } };
-  });
-  if (f.owner) api('/api/family').then(({ family }) => { // offene Einladungen sieht nur, wer den Plan hat
-    const box = $('#fam-invites');
-    if (!box || !family?.invites?.length) return;
-    box.innerHTML = family.invites.map((i) => `<div class="row"><div class="main"><div class="title">${esc(i.email)}</div><div class="sub">eingeladen als ${ROLE_NAME[i.role]} · gilt bis ${esc(F.short.format(new Date(i.expires)))}</div>
-      <div class="code-actions"><button class="btn-plain danger" type="button" data-fam-inv="${esc(i.email)}">Zurückziehen</button></div></div></div>`).join('');
-    wireInvites();
-  }).catch(() => {});
+async function openFamily() {
+  const f = D.family;
+  if (!f) return;
+  const invites = f.owner ? (await api('/api/family').catch(() => ({}))).family?.invites || [] : []; // offene Einladungen sieht nur, wer den Plan hat
+  const free = f.owner ? Math.max(0, 5 - f.members.length - invites.length) : 0, owner = f.members.find((m) => m.owner)?.name || '';
+  const kids = f.role === 'parent' ? D.kids || [] : [];
+  const avatar = (name, c) => `<div class="avatar big" style="--c:var(--${c})">${esc(initials(name))}</div>`;
+  const member = (m) => `<div class="card fam-tile">${avatar(m.name, m.role === 'child' ? 'pink' : 'blue')}
+    <div class="fam-name">${esc(m.name)}${m.me ? ' (du)' : ''}</div><div class="fam-role">${m.owner ? 'Verwaltet' : ROLE_NAME[m.role]}</div>
+    ${f.role === 'parent' && f.active && m.role === 'child' && !m.me ? `<button class="btn-plain" type="button" data-view-kid="${esc(m.id)}">Ansehen</button>` : ''}
+    ${f.owner && !m.owner ? `<button class="btn-plain danger" type="button" data-fam-del="${esc(m.id)}">Entfernen</button>` : ''}</div>`;
+  const invited = (i) => `<div class="card fam-tile"><div class="avatar big empty">${esc(i.email[0].toUpperCase())}</div>
+    <div class="fam-name">${esc(i.email)}</div><div class="fam-role">Eingeladen · ${ROLE_NAME[i.role]}</div>
+    <button class="btn-plain danger" type="button" data-fam-inv="${esc(i.email)}">Zurückziehen</button></div>`;
+  const slot = '<button class="card fam-tile fam-free pressable" type="button" data-fam-add><div class="avatar big empty">+</div><div class="fam-name">Freier Platz</div><div class="fam-role">Einladen</div></button>';
+  openSheet('Familie', `<div class="card pro-card fam-hero"><div class="main"><div class="pro-kicker">Alltag Familie</div>
+      <div class="title">${f.members.length + invites.length} von 5 Plätzen belegt</div>
+      <div class="sub">Verwaltet von ${esc(owner)}${f.active ? '' : ' · gerade nicht aktiv'}</div></div></div>
+    <p class="label-sm">Mitglieder</p>
+    <div class="fam-grid">${f.members.map(member).join('')}${invites.map(invited).join('')}${slot.repeat(free)}</div>
+    ${free ? `<form class="form" id="fam-invite" hidden><p class="label-sm">Einladen</p>${group(fText('email', 'E-Mail-Adresse', '', 'type="email" autocomplete="off" required maxlength="120"'),
+      fRow('Als', '<select name="role"><option value="child">Kind</option><option value="parent">Elternteil</option></select>'))}
+      <button class="btn-primary pressable" type="submit">Einladung senden</button></form>` : ''}
+    ${kids.length ? `<p class="label-sm">Aus dem Eltern-Zugang der Schule</p><div class="fam-grid">${kids.map((k) => `<div class="card fam-tile">${avatar(k.name, 'pink')}
+      <div class="fam-name">${esc(k.name)}</div><div class="fam-role">${esc(schoolName(k.kind))}</div><button class="btn-plain" type="button" data-view-kid="kid:${esc(k.key)}">Ansehen</button></div>`).join('')}</div>` : ''}
+    <p class="footnote" style="margin-top:12px;text-align:left">${famText(f)}</p>
+    ${!f.owner ? `<div class="list card" style="margin-top:12px"><button class="row" type="button" data-fam-del="${esc(f.members.find((m) => m.me)?.id || '')}"><span class="btn-plain danger">Familie verlassen</span></button></div>` : ''}
+    <button class="btn-plain" type="button" id="fam-back" style="margin-top:12px">Zurück zum Profil</button>`, { wide: true });
+  const reload = async () => { haptic(); await load(); if (D.family) openFamily(); else openSettings(); }, form = $('#fam-invite');
+  $('#fam-back').onclick = openSettings;
+  $$('#sheet [data-fam-add]').forEach((b) => { b.onclick = () => { form.hidden = false; form.email.focus(); form.scrollIntoView({ behavior: 'smooth', block: 'center' }); }; });
   if (form) form.onsubmit = async (e) => {
     e.preventDefault();
     const b = $('button[type=submit]', form);
     b.disabled = true;
     try { await api('/api/family/invite', { method: 'POST', body: Object.fromEntries(new FormData(form)) }); toast('Einladung ist unterwegs'); reload(); } catch (x) { toast(x.message); b.disabled = false; }
   };
+  $$('#sheet [data-fam-inv]').forEach((b) => {
+    b.onclick = async () => { try { await api(`/api/family/invites/${encodeURIComponent(b.dataset.famInv)}`, { method: 'DELETE' }); reload(); } catch (x) { toast(x.message); } };
+  });
   $$('#sheet [data-fam-del]').forEach((b) => {
     b.onclick = async () => {
       if (!b.dataset.sure) { b.dataset.sure = '1'; (b.querySelector('span') || b).textContent = 'Sicher?'; return; }
@@ -2666,7 +2682,7 @@ $$('.view').forEach((v) => v.addEventListener('scroll', () => { if (v.id === `vi
 
 /* ---------------------------------------------------------------- Klicks (delegiert) */
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('#me,#add,#search,[data-week],[data-calmode],[data-month],[data-month-day],[data-print],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-vote],[data-ical],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-plans],[data-umfrage],[data-view-kid],[data-view-back]');
+  const el = e.target.closest('#me,#add,#search,[data-week],[data-calmode],[data-month],[data-month-day],[data-print],[data-bells],[data-screen],[data-bday],[data-bdays],[data-photo],[data-new-photo],[data-timer],[data-pc],[data-shop],[data-shop-clear],[data-like],[data-vote],[data-ical],[data-confirm],[data-star],[data-teacher],[data-pick],[data-unpick],[data-goto],[data-i],[data-msg],[data-open-key],.check,[data-toggle-key],[data-subject],[data-grade],[data-new-grade],[data-plan-day],[data-refresh],[data-toggle-done],[data-event],[data-new-event],[data-edu-task],[data-note],[data-new],[data-settings],[data-edit-edu],[data-disconnect],[data-feedback],[data-plans],[data-umfrage],[data-view-kid],[data-view-back],[data-family]');
   if (!el || !D) return;
   const ds = el.dataset;
   if (ds.viewKid) return viewKid(ds.viewKid);
@@ -2675,6 +2691,7 @@ document.addEventListener('click', async (e) => {
   if ('feedback' in ds) return openFeedback();
   if ('plans' in ds) return openPlans();
   if ('umfrage' in ds) return openUmfrage();
+  if ('family' in ds) return openFamily();
   if (el.id === 'add') return ADD[tab]();
   if (el.id === 'search') return openSearch();
   if (ds.week !== undefined) return shiftWeek(Number(ds.week));

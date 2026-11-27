@@ -74,7 +74,7 @@ class Edupage {
     throw new Error('Zu viele Weiterleitungen');
   }
 
-  home(html) { ({ data: this.data, gsh: this.gsh } = parseHome(html)); }
+  home(html) { ({ data: this.data, gsh: this.gsh } = parseHome(html)); this.raw = html; }
 
   async login(user, pass) {
     let res = await this.loginRpc(user, pass);
@@ -87,6 +87,7 @@ class Edupage {
       if (res.url.includes('bad=1')) throw new EduError('credentials', 'Benutzername oder Passwort ist falsch.');
     }
     if (res.url.includes('twofactor')) throw new EduError('twofactor', 'Zwei-Faktor-Anmeldung wird nicht unterstützt.');
+    this.landed = new URL(res.url).pathname; // nur für die Fehlersuche (ohne Parameter)
     try { this.home(res.text); } catch { throw new EduError('credentials', 'Anmeldung fehlgeschlagen – Zugangsdaten prüfen.'); }
   }
 
@@ -259,9 +260,16 @@ class Edupage {
 
   // Elternkonto (userid „Rodic…“): Kinder stehen in dbi.students, umschalten wie im Webclient (/login/switchchild, edupage-api parent.py)
   isParent() { return /^Rodic/i.test(String(this.data?.userid || '')); }
-  children() {
-    return Object.entries(this.data?.dbi?.students || {}).map(([id, p]) => ({ id: String(id), name: `${p.firstname || ''} ${p.lastname || ''}`.trim() }))
-      .filter((k) => /^\d+$/.test(k.id) && k.name);
+  children() { // zuerst die Umschalt-Links der Kopfleiste (genau die eigenen Kinder), sonst dbi.students
+    const name = (id) => { const p = this.dbi('students', id); return p ? `${p.firstname || ''} ${p.lastname || ''}`.trim() : ''; };
+    const ids = [...new Set([...String(this.raw || '').matchAll(/switchchild\?studentid=(\d+)/gi)].map((m) => m[1]))];
+    if (ids.length) return ids.map((id, i) => ({ id, name: name(id) || `Kind ${i + 1}` }));
+    return Object.keys(this.data?.dbi?.students || {}).filter((id) => /^\d+$/.test(id)).map((id) => ({ id, name: name(id) })).filter((k) => k.name);
+  }
+  parentInfo() { // Aufbau ohne persönliche Daten: hilft, wenn ein Eltern-Zugang keine Kinder liefert
+    const d = this.data || {};
+    return { type: String(d.userid || '').replace(/[\d-]/g, ''), landed: this.landed || '', dataKeys: Object.keys(d).slice(0, 40), dbiKeys: Object.keys(d.dbi || {}),
+      dbiStudents: Object.keys(d.dbi?.students || {}).length, switchLinks: (String(this.raw || '').match(/switchchild/gi) || []).length };
   }
   async useChild(id) {
     const uid = String(this.data?.userid || '');
