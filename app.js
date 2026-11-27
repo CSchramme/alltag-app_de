@@ -1374,6 +1374,7 @@ const routes = {
     try {
       const ep = new Edupage(cfg.school);
       await ep.login(cfg.user, cfg.pass);
+      if (ep.isParent()) return send(res, 400, { error: 'Das ist ein Eltern-Zugang. Den trägst du unter Profil → Kinder ein, dann siehst du dort alle deine Kinder.' });
       saveSession(Object.fromEntries(ep.cookies));
     } catch (e) {
       return send(res, 400, { error: e instanceof EduError ? e.message : `EduPage nicht erreichbar (${e.message})` });

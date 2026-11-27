@@ -9,6 +9,7 @@ module.exports = [
     { text: 'Auf Wunsch bekommst du bei jedem Update eine kurze Mail (Profil → Beta-Test).', kind: 'neu' },
     { text: 'Eltern-Zugang: Deine Elternnachrichten sind sichtbar, und Probleme beim Abgleich stehen direkt beim Kind.', kind: 'besser' },
     { text: 'Familie: neue Übersicht mit einem Platz je Mitglied. Ein freier Platz öffnet das Einladen.', kind: 'familie', need: 'family' },
+    { text: 'Eltern-Zugang mit EduPage: Alltag findet die Kinder jetzt auch bei Eltern-Konten, bei denen das vorher nicht klappte.', kind: 'fix' },
     { text: 'Eingaben in Fenstern gehen nicht mehr verloren: Solange du tippst, schließt sich ein Fenster beim Scrollen nicht mehr.', kind: 'fix' },
   ] },
   { version: '26.5.0', date: '2026-11-26', items: [

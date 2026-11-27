@@ -113,6 +113,7 @@ class Edupage {
   person(group, id) { const p = this.dbi(group, id); return p ? `${p.firstname} ${p.lastname}`.trim() : null; }
 
   async plan(date) {
+    if (this.childId) return (await this.currentTT('students', this.childId, date)).ttitems || []; // Elternkonto: Plan des Kindes (wie get_my_timetable() in Python)
     const eb = (await this.req('/dashboard/eb.php?mode=ttday')).text;
     const gpid = eb.split('gpid=')[1]?.split('&')[0], gsh = eb.split('gsh=')[1]?.split('"')[0];
     if (!gpid || !gsh) throw new Error('Stundenplan-Schlüssel fehlt');
@@ -232,13 +233,17 @@ class Edupage {
 
   // Stundenplan einer Lehrkraft (wie get_timetable() der Python-Bibliothek)
   async teacherPlan(id, date) {
+    const j = await this.currentTT('teachers', id, date).catch((e) => { throw new Error(/insuf/i.test(e.message) ? 'Deine Schule erlaubt keinen Einblick in Lehrer-Stundenpläne.' : e.message); });
+    return this.lessons(j.ttitems || []);
+  }
+  async currentTT(table, id, date) { // aktueller Plan mit Vertretungen für eine Lehrkraft oder einen Schüler
     const r = await this.req('/timetable/server/currenttt.js?__func=curentttGetData', {
       method: 'POST',
-      json: { __args: [null, { year: this.data?.dp?.year, datefrom: date, dateto: date, table: 'teachers', id: String(id), showColors: true, showIgroupsInClasses: true, showOrig: true, log_module: 'CurrentTTView' }], __gsh: this.gsh },
+      json: { __args: [null, { year: this.data?.dp?.year, datefrom: date, dateto: date, table, id: String(id), showColors: true, showIgroupsInClasses: true, showOrig: true, log_module: 'CurrentTTView' }], __gsh: this.gsh },
     });
     const j = JSON.parse(r.text).r || {};
-    if (j.error) throw new Error(/insuf/i.test(j.error) ? 'Deine Schule erlaubt keinen Einblick in Lehrer-Stundenpläne.' : String(j.error));
-    return this.lessons(j.ttitems || []);
+    if (j.error) throw new Error(String(j.error));
+    return j;
   }
   // Regulärer Gesamtstundenplan, wie ihn der EduPage-Stundenplan-Viewer zeigt (ohne Vertretungen) –
   // Rückfall, wenn Schülerkonten den Lehrer-Stundenplan nicht sehen dürfen
@@ -260,24 +265,28 @@ class Edupage {
 
   // Elternkonto (userid „Rodic…“): Kinder stehen in dbi.students, umschalten wie im Webclient (/login/switchchild, edupage-api parent.py)
   isParent() { return /^Rodic/i.test(String(this.data?.userid || '')); }
-  children() { // zuerst die Umschalt-Links der Kopfleiste (genau die eigenen Kinder), sonst dbi.students
-    const name = (id) => { const p = this.dbi('students', id); return p ? `${p.firstname || ''} ${p.lastname || ''}`.trim() : ''; };
-    const ids = [...new Set([...String(this.raw || '').matchAll(/switchchild\?studentid=(\d+)/gi)].map((m) => m[1]))];
-    if (ids.length) return ids.map((id, i) => ({ id, name: name(id) || `Kind ${i + 1}` }));
-    return Object.keys(this.data?.dbi?.students || {}).filter((id) => /^\d+$/.test(id)).map((id) => ({ id, name: name(id) })).filter((k) => k.name);
+  children() { // die eigenen Kinder: parentStudentids (echtes Elternkonto, 11/2026), sonst Umschalt-Links der Kopfleiste
+    const name = (id) => { const p = this.dbi('students', id); return p ? (`${p.firstname || ''} ${p.lastname || ''}`.trim() || String(p.name || p.short || '')) : ''; };
+    const v = this.data?.parentStudentids, list = Array.isArray(v) ? v : typeof v === 'string' ? v.split(/[\s,;]+/) : v && typeof v === 'object' ? Object.keys(v) : [];
+    let ids = [...new Set(list.map((x) => String(x).replace(/\D/g, '')).filter(Boolean))];
+    if (!ids.length) ids = [...new Set([...String(this.raw || '').matchAll(/switchchild\?studentid=(\d+)/gi)].map((m) => m[1]))];
+    return ids.map((id, i) => ({ id, name: name(id) || `Kind ${i + 1}` }));
   }
   parentInfo() { // Aufbau ohne persönliche Daten: hilft, wenn ein Eltern-Zugang keine Kinder liefert
     const d = this.data || {};
+    const kind = (x) => (Array.isArray(x) ? `array(${x.length})` : x && typeof x === 'object' ? `object(${Object.keys(x).length})` : typeof x);
     return { type: String(d.userid || '').replace(/[\d-]/g, ''), landed: this.landed || '', dataKeys: Object.keys(d).slice(0, 40), dbiKeys: Object.keys(d.dbi || {}),
-      dbiStudents: Object.keys(d.dbi?.students || {}).length, switchLinks: (String(this.raw || '').match(/switchchild/gi) || []).length };
+      dbiStudents: Object.keys(d.dbi?.students || {}).length, studentFields: Object.keys(Object.values(d.dbi?.students || {})[0] || {}), // nur Feldnamen, keine Werte
+      parentStudentids: kind(d.parentStudentids), parentChild: kind(d.parentChild), switchLinks: (String(this.raw || '').match(/switchchild/gi) || []).length };
   }
   async useChild(id) {
     const uid = String(this.data?.userid || '');
-    if (!/^Rodic/i.test(uid) && uid.replace(/\D/g, '') === String(id)) return; // Sitzung steht schon auf dem Kind
+    if (!/^Rodic/i.test(uid) && uid.replace(/\D/g, '') === String(id)) { this.childId = String(id); return; } // Sitzung steht schon auf dem Kind
     if (!/^Rodic/i.test(uid)) throw new EduError('credentials', 'Das ist kein Eltern-Zugang von EduPage.');
     const r = await this.req(`/login/switchchild?studentid=${encodeURIComponent(id)}`);
     if (r.text.trim() !== 'OK') throw new EduError('credentials', 'Dieses Kind ist im EduPage-Zugang nicht (mehr) hinterlegt.');
-    this.data.userid = uid.replace(/^Rodic/i, 'Student').replace(/\d+$/, String(id)); // ab jetzt der persönliche Tagesplan des Kindes
+    this.childId = String(id); // Plan über currenttt (Tabelle students), Name und Klasse aus dbi
+    this.data.userid = uid.replace(/^Rodic/i, 'Student').replace(/\d+$/, String(id));
   }
 
   whoami() {

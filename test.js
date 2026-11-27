@@ -209,11 +209,19 @@ const { Edupage, snapshot, encodeRequestBody, decodeResponse, parseHome, isoDay 
   const pe = new Edupage('schule'), switched = [];
   pe.data = { userid: 'Rodic-9', dbi: { students: { 41: { firstname: 'Lena', lastname: 'M' }, 42: { firstname: 'Tim', lastname: 'M' } } } };
   pe.req = async (p) => { switched.push(p); return { text: p.includes('studentid=42') ? 'OK' : 'Error' }; };
-  assert.deepEqual([pe.isParent(), pe.children().map((k) => [k.id, k.name])], [true, [['41', 'Lena M'], ['42', 'Tim M']]]);
-  pe.raw = '<a href="/login/switchchild?studentid=42">x</a><a href="/login/switchchild?studentid=55">'; // Umschalt-Links gehen vor dbi.students
+  assert.deepEqual([pe.isParent(), pe.children()], [true, []]); // dbi.students allein reicht nicht: bei echten Elternkonten ist das die ganze Klasse
+  pe.raw = '<a href="/login/switchchild?studentid=42">x</a><a href="/login/switchchild?studentid=55">'; // ohne parentStudentids: Umschalt-Links
   assert.deepEqual([pe.children(), pe.parentInfo().switchLinks, pe.parentInfo().type], [[{ id: '42', name: 'Tim M' }, { id: '55', name: 'Kind 2' }], 2, 'Rodic']);
+  pe.data.parentStudentids = ['41', 77]; // echtes Elternkonto (11/2026): Kinder stehen in parentStudentids, dbi.students ist die ganze Klasse
+  assert.deepEqual([pe.children(), pe.parentInfo().parentStudentids], [[{ id: '41', name: 'Lena M' }, { id: '77', name: 'Kind 2' }], 'array(2)']);
+  pe.data.parentStudentids = '41,77';
+  assert.deepEqual(pe.children().map((k) => k.id), ['41', '77']);
   await pe.useChild('42');
-  assert.deepEqual([pe.data.userid, switched[0]], ['Student-42', '/login/switchchild?studentid=42']);
+  assert.deepEqual([pe.data.userid, switched[0], pe.childId], ['Student-42', '/login/switchchild?studentid=42', '42']);
+  pe.req = async (p, o) => { switched.push(p); return { text: JSON.stringify({ r: { ttitems: [{ table: o.json.__args[1].table, id: o.json.__args[1].id }] } }) }; };
+  assert.deepEqual(await pe.plan('2026-11-30'), [{ table: 'students', id: '42' }]); // Plan des Kindes über currenttt
+  switched.length = 1;
+  pe.req = async (p) => { switched.push(p); return { text: p.includes('studentid=42') ? 'OK' : 'Error' }; };
   await pe.useChild('42'); // steht schon auf dem Kind: kein zweites Umschalten
   assert.equal(switched.length, 1);
   pe.data.userid = 'Rodic-9';
